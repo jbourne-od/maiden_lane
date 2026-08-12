@@ -237,7 +237,7 @@ func parseEndpoint(field, raw, signalPath string, global bool) (*url.URL, error)
 		return nil, invalidField(field, "an absolute http or https URL")
 	}
 	endpoint, err := url.Parse(raw)
-	if err != nil || !endpoint.IsAbs() || endpoint.Host == "" || endpoint.User != nil ||
+	if err != nil || !endpoint.IsAbs() || endpoint.Host == "" || endpoint.Hostname() == "" || endpoint.User != nil ||
 		(endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" {
 		return nil, invalidField(field, "an absolute http or https URL without credentials, query, or fragment")
 	}
@@ -262,8 +262,8 @@ func parseHeaders(field, raw string) (map[string]string, error) {
 			return nil, invalidField(field, "comma-separated header=value pairs")
 		}
 		decoded, err := url.PathUnescape(value)
-		if err != nil || strings.ContainsAny(decoded, "\r\n") {
-			return nil, invalidField(field, "percent-encoded header values without CR or LF")
+		if err != nil || !validHeaderValue(decoded) {
+			return nil, invalidField(field, "percent-encoded header values without HTTP-disallowed control bytes")
 		}
 		canonicalName := http.CanonicalHeaderKey(name)
 		if _, exists := headers[canonicalName]; exists {
@@ -281,6 +281,15 @@ func validHeaderName(name string) bool {
 	for i := 0; i < len(name); i++ {
 		c := name[i]
 		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(c))) {
+			return false
+		}
+	}
+	return true
+}
+
+func validHeaderValue(value string) bool {
+	for _, b := range []byte(value) {
+		if (b < 0x20 && b != '\t') || b == 0x7f {
 			return false
 		}
 	}

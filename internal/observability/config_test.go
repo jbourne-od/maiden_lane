@@ -135,6 +135,35 @@ func TestLoadConfigResolvesEnabledOTLPHTTP(t *testing.T) {
 	}
 }
 
+func TestLoadConfigPrefersSignalSpecificOTLPSettings(t *testing.T) {
+	certificate, key := testCertificate(t)
+	files := map[string][]byte{
+		"/trace-ca.pem":     certificate,
+		"/trace-client.pem": certificate,
+		"/trace-client.key": key,
+	}
+	cfg, err := LoadConfig(mapLookup(map[string]string{
+		"OTEL_TRACES_EXPORTER":                         "otlp",
+		"OTEL_EXPORTER_OTLP_PROTOCOL":                  "grpc",
+		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL":           "http/protobuf",
+		"OTEL_EXPORTER_OTLP_ENDPOINT":                  "http://collector.example",
+		"OTEL_EXPORTER_OTLP_INSECURE":                  "false",
+		"OTEL_EXPORTER_OTLP_TRACES_INSECURE":           "true",
+		"OTEL_EXPORTER_OTLP_CERTIFICATE":               "/global-ca.pem",
+		"OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE":        "/trace-ca.pem",
+		"OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE":        "/global-client.pem",
+		"OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE": "/trace-client.pem",
+		"OTEL_EXPORTER_OTLP_CLIENT_KEY":                "/global-client.key",
+		"OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY":         "/trace-client.key",
+	}), fileLookup(files), "v1.2.3")
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.traces.tlsConfig == nil || cfg.traces.tlsConfig.RootCAs == nil || len(cfg.traces.tlsConfig.Certificates) != 1 {
+		t.Fatalf("TLS config = %#v", cfg.traces.tlsConfig)
+	}
+}
+
 func TestLoadConfigUsesOTLPHTTPDefaultsAndSecureSchemes(t *testing.T) {
 	for _, test := range []struct {
 		name        string
@@ -196,6 +225,7 @@ func TestLoadConfigRejectsMalformedOTLPHTTP(t *testing.T) {
 		{"grpc protocol", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_PROTOCOL": "grpc"}, "OTEL_EXPORTER_OTLP_PROTOCOL", []string{"grpc"}},
 		{"unknown protocol", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_PROTOCOL": "unknown"}, "OTEL_EXPORTER_OTLP_PROTOCOL", []string{"unknown"}},
 		{"relative endpoint", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_ENDPOINT": "/collector"}, "OTEL_EXPORTER_OTLP_ENDPOINT", []string{"/collector"}},
+		{"hostless endpoint", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_ENDPOINT": "https://:4318"}, "OTEL_EXPORTER_OTLP_ENDPOINT", []string{"https://:4318"}},
 		{"credential endpoint", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_ENDPOINT": "https://user:pass@collector.example"}, "OTEL_EXPORTER_OTLP_ENDPOINT", []string{"user:pass"}},
 		{"query endpoint", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector.example?" + secret}, "OTEL_EXPORTER_OTLP_ENDPOINT", []string{secret}},
 		{"fragment endpoint", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_ENDPOINT": "https://collector.example/#" + secret}, "OTEL_EXPORTER_OTLP_ENDPOINT", []string{secret}},
@@ -208,6 +238,7 @@ func TestLoadConfigRejectsMalformedOTLPHTTP(t *testing.T) {
 		{"malformed header", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_HEADERS": "not-a-header"}, "OTEL_EXPORTER_OTLP_HEADERS", []string{"not-a-header"}},
 		{"duplicate header", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_HEADERS": "x-safe=one,X-SAFE=two"}, "OTEL_EXPORTER_OTLP_HEADERS", []string{"x-safe=one", "X-SAFE=two"}},
 		{"control header", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_HEADERS": "authorization=" + secret + "%0Aunsafe"}, "OTEL_EXPORTER_OTLP_HEADERS", []string{secret}},
+		{"null header", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_HEADERS": "x-safe=%00"}, "OTEL_EXPORTER_OTLP_HEADERS", []string{"x-safe=%00"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -247,10 +278,12 @@ func TestLoadConfigRejectsMalformedTLSMaterial(t *testing.T) {
 		field string
 	}{
 		{"unreadable CA", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_CERTIFICATE": path}, nil, "OTEL_EXPORTER_OTLP_CERTIFICATE"},
+		{"unreadable signal CA", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE": path}, nil, "OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE"},
 		{"invalid CA", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_CERTIFICATE": path}, map[string][]byte{path: []byte("not pem")}, "OTEL_EXPORTER_OTLP_CERTIFICATE"},
 		{"unpaired client certificate", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE": path}, nil, "OTEL_EXPORTER_OTLP_CLIENT_KEY"},
 		{"unpaired client key", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_CLIENT_KEY": path}, nil, "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE"},
 		{"unreadable client pair", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE": path, "OTEL_EXPORTER_OTLP_CLIENT_KEY": path + ".key"}, nil, "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE"},
+		{"unreadable signal client pair", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE": path, "OTEL_EXPORTER_OTLP_TRACES_CLIENT_KEY": path + ".key"}, nil, "OTEL_EXPORTER_OTLP_TRACES_CLIENT_CERTIFICATE"},
 		{"invalid client pair", map[string]string{"OTEL_TRACES_EXPORTER": "otlp", "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE": path, "OTEL_EXPORTER_OTLP_CLIENT_KEY": path + ".key"}, map[string][]byte{path: []byte("not pem"), path + ".key": []byte("not key")}, "OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE"},
 	}
 	for _, test := range tests {
