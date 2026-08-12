@@ -42,7 +42,8 @@ The scaffold proves that the repository can:
 This scaffold does not implement or commit to:
 
 - the rule language, compiler, semantic model, executor, invariant engine,
-  provenance journal, comparison engine, promotion gate, or publication path;
+  checkpoint sealing, completeness profiles, readiness assessments, provenance
+  journal, comparison engine, promotion gate, or publication path;
 - the future `worker --execution-id` command;
 - PostgreSQL, S3, AWS Batch, ECS, or stochflow adapters;
 - typed Maiden Lane error contracts;
@@ -318,8 +319,8 @@ The scaffold is accepted only when:
 - the implementation guide describes the repository as it actually exists;
 - the implementation guide contains no historical or speculative repository
   tree presented as current state;
-- the final diff contains no speculative semantic packages or AWS deployment
-  resources.
+- the final diff contains no speculative semantic, checkpoint, completeness,
+  readiness, or AWS deployment resources.
 
 ## 15. Failure behavior
 

@@ -10,13 +10,14 @@
 
 ## Global Constraints
 
+- The ratified Inviolates are the highest repository authority; the HLD is normative subject to them.
 - Work in an isolated `codex/` worktree created with `superpowers:using-git-worktrees` before implementation.
 - Module path: `github.com/optimaldynamics/maiden-lane`.
 - Language floor: `go 1.26.0`; initial selected toolchain: `go1.26.5`.
 - Staticcheck must remain pinned to release `2026.2rc1`, represented by module version `v0.8.0-rc.1`.
 - govulncheck must remain pinned to `v1.6.0`.
 - Do not use `@latest` in repository or CI tool installation.
-- Do not add semantic model, compiler, executor, invariant, provenance, promotion, persistence, AWS adapter, or stochflow packages.
+- Do not add semantic model, compiler, executor, invariant, provenance, checkpoint, completeness-profile, readiness, promotion, persistence, AWS adapter, or stochflow packages.
 - Do not implement the future worker command.
 - Do not add stable typed-error entries to `ERRORS.md` or exported metrics to `METRICS.md`.
 - Use RED → GREEN → REFACTOR for HTTP and command behavior.
@@ -977,8 +978,9 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
 - Tracked Staticcheck and govulncheck tools.
 - Local verification and a non-root container build.
 
-There is no transformation model, compiler, executor, worker, persistence
-adapter, promotion gate, exported metric, or stable typed application error.
+There is no transformation model, compiler, executor, sealed-checkpoint model,
+completeness profile, readiness assessment, worker, persistence adapter,
+promotion gate, exported metric, or stable typed application error.
 
 ## Current repository map
 
@@ -1067,7 +1069,7 @@ contracts, or authoritative tests, and they should not narrate obvious syntax.
 Run:
 
 ```bash
-rg -n 'internal/(model|rules|compile|execute|invariant|provenance|promotion|ports|adapters)' docs/implementation/implementation-guide.md
+rg -n 'internal/(model|rules|compile|execute|invariant|provenance|readiness|promotion|ports|adapters)' docs/implementation/implementation-guide.md
 test "$(rg -c '^\| Error type \|' ERRORS.md)" -eq 1
 test "$(rg -c '^\| Name \|' METRICS.md)" -eq 1
 test "$(rg -c '^\|[^-].*\|$' ERRORS.md)" -eq 1
@@ -1481,7 +1483,7 @@ Run:
 
 ```bash
 find internal -mindepth 1 -maxdepth 1 -type d -print | sort
-rg -n 'internal/(model|rules|compile|execute|invariant|provenance|promotion|ports|adapters)' docs/implementation/implementation-guide.md
+rg -n 'internal/(model|rules|compile|execute|invariant|provenance|readiness|promotion|ports|adapters)' docs/implementation/implementation-guide.md
 test "$(rg -c '^\| Error type \|' ERRORS.md)" -eq 1
 test "$(rg -c '^\| Name \|' METRICS.md)" -eq 1
 test "$(rg -c '^\|[^-].*\|$' ERRORS.md)" -eq 1
@@ -1503,6 +1505,7 @@ Expected:
 Confirm explicitly:
 
 - no business meaning entered HTTP, command, container, or CI layers;
+- no checkpoint, completeness-profile, or readiness semantics were scaffolded;
 - no ambient configuration can affect semantic results;
 - no execution path publishes Maiden Lane data;
 - no infrastructure adapter or stochflow dependency exists;
