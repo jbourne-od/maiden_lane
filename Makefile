@@ -79,7 +79,7 @@ container-smoke:
 	status=""; \
 	attempt=0; \
 	while [ "$$attempt" -lt 40 ]; do \
-		status="$$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$$port/healthz" || true)"; \
+		status="$$(curl --silent --connect-timeout 0.25 --max-time 0.5 --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:$$port/healthz" || true)"; \
 		[ "$$status" = "204" ] && break; \
 		attempt=$$((attempt + 1)); \
 		sleep 0.25; \
