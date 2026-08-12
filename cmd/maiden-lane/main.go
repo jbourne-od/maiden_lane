@@ -123,11 +123,25 @@ func serveListener(ctx context.Context, listener net.Listener, logger *slog.Logg
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("shut down HTTP server: %w", err)
+	shutdownErr := server.Shutdown(shutdownCtx)
+	var closeErr error
+	if shutdownErr != nil {
+		closeErr = server.Close()
 	}
-	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve HTTP while shutting down: %w", err)
+	terminalErr := <-serveErr
+
+	var lifecycleErrs []error
+	if shutdownErr != nil {
+		lifecycleErrs = append(lifecycleErrs, fmt.Errorf("shut down HTTP server: %w", shutdownErr))
+	}
+	if closeErr != nil {
+		lifecycleErrs = append(lifecycleErrs, fmt.Errorf("force close HTTP server: %w", closeErr))
+	}
+	if terminalErr != nil && !errors.Is(terminalErr, http.ErrServerClosed) {
+		lifecycleErrs = append(lifecycleErrs, fmt.Errorf("serve HTTP while shutting down: %w", terminalErr))
+	}
+	if err := errors.Join(lifecycleErrs...); err != nil {
+		return err
 	}
 
 	logger.Info("HTTP server stopped")

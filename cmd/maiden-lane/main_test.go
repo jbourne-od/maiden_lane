@@ -99,6 +99,36 @@ func TestServeListenerStopsAfterCancellation(t *testing.T) {
 	}
 }
 
+func TestServeListenerJoinsServeAfterShutdownFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	shutdownErr := errors.New("close listener during shutdown")
+	acceptErr := &coordinatedAcceptError{
+		cancel:  cancel,
+		release: make(chan struct{}),
+	}
+	listener := &shutdownAndServeErrorListener{
+		shutdownErr: shutdownErr,
+		acceptErr:   acceptErr,
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- serveListener(ctx, listener, testLogger())
+	}()
+
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, shutdownErr) {
+			t.Fatalf("serve after shutdown failure = %v, want shutdown cause", err)
+		}
+		if !errors.Is(err, acceptErr) {
+			t.Fatalf("serve after shutdown failure = %v, want serving goroutine cause", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop after shutdown failure")
+	}
+}
+
 func TestServePreservesListenFailure(t *testing.T) {
 	t.Parallel()
 
@@ -133,4 +163,41 @@ func waitForStatus(t *testing.T, url string, want int) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("%s did not return status %d before deadline", url, want)
+}
+
+type shutdownAndServeErrorListener struct {
+	shutdownErr error
+	acceptErr   *coordinatedAcceptError
+}
+
+func (listener *shutdownAndServeErrorListener) Accept() (net.Conn, error) {
+	return nil, listener.acceptErr
+}
+
+func (listener *shutdownAndServeErrorListener) Close() error {
+	close(listener.acceptErr.release)
+	return listener.shutdownErr
+}
+
+func (listener *shutdownAndServeErrorListener) Addr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)}
+}
+
+type coordinatedAcceptError struct {
+	cancel  context.CancelFunc
+	release chan struct{}
+}
+
+func (err *coordinatedAcceptError) Error() string {
+	return "serve listener failed"
+}
+
+func (err *coordinatedAcceptError) Temporary() bool {
+	err.cancel()
+	<-err.release
+	return false
+}
+
+func (*coordinatedAcceptError) Timeout() bool {
+	return false
 }
