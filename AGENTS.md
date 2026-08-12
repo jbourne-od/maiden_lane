@@ -727,7 +727,12 @@ Temporary semantics are not.
 
 # 22. Working With Multiple Agents
 
-When multi-agent support is available and authorized for the task, use multiple agents only when work can genuinely be divided without conflicting ownership.
+Default to subagent execution whenever multi-agent support is available and
+authorized. Work inline only when a concrete reason makes delegation unsafe,
+impossible, or materially less effective; state that reason before proceeding.
+
+Use multiple agents only when work can genuinely be divided without conflicting
+ownership.
 
 Good uses include:
 
