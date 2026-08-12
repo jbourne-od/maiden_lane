@@ -26,7 +26,7 @@ Before making a nontrivial change:
 1. Read this `AGENTS.md`.
 2. Read the ratified [**Maiden Lane Inviolates**](Inviolates.md).
 3. Read the [**Maiden Lane High-Level Design**](docs/superpowers/specs/2026-08-11-maiden-lane-high-level-design.md).
-4. Read the current **Implementation Guide** if one exists. Until then, read the [**Provisional Go Implementation Sketch**](docs/implementation/2026-08-11-provisional-go-implementation-sketch.md) only as exploratory context.
+4. Read the current [**Implementation Guide**](docs/implementation/implementation-guide.md).
 5. Inspect the relevant packages, tests, schemas, and interfaces.
 6. Inspect `git status` and preserve unrelated work.
 7. Look for more specific `AGENTS.md` files in the package subtree.
@@ -82,9 +82,7 @@ Changes to the HLD should be comparatively rare and should describe durable arch
 
 ## 2.2 Implementation Guide
 
-The repository does not yet have a living **Implementation Guide**. The [**Provisional Go Implementation Sketch**](docs/implementation/2026-08-11-provisional-go-implementation-sketch.md) is exploratory context only; it is not a description of the current implementation, a sequencing plan, or authorization to scaffold its candidate files.
-
-Once created, the **Implementation Guide is deliberately non-normative**.
+The current **Implementation Guide is deliberately non-normative**. The [**Provisional Go Implementation Sketch**](docs/implementation/2026-08-11-provisional-go-implementation-sketch.md) remains exploratory context only; it is not a description of the current implementation, a sequencing plan, or authorization to scaffold its candidate files.
 
 Treat it as a living description of:
 
@@ -459,6 +457,22 @@ Comment **why**, especially:
 * canonicalization rules;
 * ordering decisions;
 * non-obvious tradeoffs.
+
+Assume many Maiden Lane contributors and reviewers are more familiar with
+Python than Go. Use slightly more implementation documentation than a typical
+Go repository when it materially reduces that gap:
+
+* give every nontrivial package a package-level explanation of its ownership
+  and dependency boundary;
+* document exported declarations normally;
+* explain non-obvious determinism, ordering, canonicalization, lifecycle,
+  concurrency, retry, and fail-closed decisions near the code that implements
+  them;
+* explain Go idioms whose safety consequence may not be apparent to a
+  Python-oriented reader.
+
+Comments explain implementation. They do not override the Inviolates, HLD,
+contracts, or authoritative tests, and they should not narrate obvious syntax.
 
 Do not narrate obvious Go syntax.
 
