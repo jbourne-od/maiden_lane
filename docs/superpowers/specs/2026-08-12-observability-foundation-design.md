@@ -241,6 +241,11 @@ instrumentation version later begins producing additional attributes. Tests
 inspect exported spans as well as metrics; library defaults are not assumed to
 remain safe across upgrades.
 
+Metric exemplars are disabled in this foundation. OTel view filters apply to
+metric point attributes but may leave the original attributes attached to an
+exemplar; disabling exemplars prevents that side channel until Maiden Lane has
+an explicit exemplar privacy contract.
+
 The permitted HTTP `error.type` values are exactly:
 
 - `http.client_error` for 400-499;
@@ -404,6 +409,8 @@ The implementation must establish at least these properties:
 18. The process-global OTel error handler emits only `otel_async_error`, does
     not expose the supplied error text, and is restored by tests that replace
     it.
+19. Metric exemplars remain absent even when a measurement is recorded from a
+    sampled trace carrying hostile attributes.
 
 Verification broadens through the repository's authoritative `make verify`
 and `make container-check` commands. The container smoke check continues to
@@ -432,6 +439,7 @@ This foundation does not implement:
 
 - OTel logs or a `slog`-to-OTel bridge;
 - W3C baggage propagation without an approved closed privacy contract;
+- metric exemplars without an approved privacy and cardinality contract;
 - a custom application logging interface;
 - trace-log correlation without a real request log;
 - semantic compiler, executor, checkpoint, readiness, comparison, promotion,
