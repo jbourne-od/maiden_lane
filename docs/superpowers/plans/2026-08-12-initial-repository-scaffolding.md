@@ -967,7 +967,7 @@ Create `docs/implementation/implementation-guide.md`:
 
 This guide describes only what exists at this revision. Rewrite it when the
 implementation changes; do not retain historical package layouts here. Git is
-the history. The HLD and any ratified Inviolates outrank this guide.
+the history. The ratified Inviolates and then the HLD outrank this guide.
 
 ## Current capabilities
 
@@ -1039,7 +1039,7 @@ here only after the corresponding code exists.
 In `AGENTS.md` section 1, replace the conditional implementation-guide entry with:
 
 ```markdown
-3. Read the current [**Implementation Guide**](docs/implementation/implementation-guide.md).
+4. Read the current [**Implementation Guide**](docs/implementation/implementation-guide.md).
 ```
 
 In section 10 after the existing “Comment why” guidance, add:

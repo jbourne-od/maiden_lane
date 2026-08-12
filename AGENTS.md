@@ -24,11 +24,12 @@ Do not trade a higher-ranked property for a lower-ranked one without an explicit
 Before making a nontrivial change:
 
 1. Read this `AGENTS.md`.
-2. Read the [**Maiden Lane High-Level Design**](docs/superpowers/specs/2026-08-11-maiden-lane-high-level-design.md).
-3. Read the current **Implementation Guide** if one exists. Until then, read the [**Provisional Go Implementation Sketch**](docs/implementation/2026-08-11-provisional-go-implementation-sketch.md) only as exploratory context.
-4. Inspect the relevant packages, tests, schemas, and interfaces.
-5. Inspect `git status` and preserve unrelated work.
-6. Look for more specific `AGENTS.md` files in the package subtree.
+2. Read the ratified [**Maiden Lane Inviolates**](Inviolates.md).
+3. Read the [**Maiden Lane High-Level Design**](docs/superpowers/specs/2026-08-11-maiden-lane-high-level-design.md).
+4. Read the current **Implementation Guide** if one exists. Until then, read the [**Provisional Go Implementation Sketch**](docs/implementation/2026-08-11-provisional-go-implementation-sketch.md) only as exploratory context.
+5. Inspect the relevant packages, tests, schemas, and interfaces.
+6. Inspect `git status` and preserve unrelated work.
+7. Look for more specific `AGENTS.md` files in the package subtree.
 
 Do not infer architecture from filenames or current implementation alone. The codebase may intentionally be incomplete relative to the design.
 
@@ -40,11 +41,15 @@ For architectural work, understand the intended semantic boundary before writing
 
 # 2. Authority and Decision Hierarchy
 
-This hierarchy governs normal implementation work. If a task explicitly authorizes changing the HLD or an API, schema, format, or behavioral contract, that artifact is in scope for intentional revision and is not authority against its own change. All unaffected protected invariants, contracts, and tests retain their normal priority.
+This hierarchy governs normal implementation work. If a task explicitly authorizes changing the HLD or an API, schema, format, or behavioral contract, that artifact is in scope for intentional revision and is not authority against its own change. All unaffected Inviolates, protected invariants, contracts, and tests retain their normal priority.
+
+An ordinary task does not authorize changing an Inviolate. That requires an
+explicitly approved amendment following `Inviolates.md`, with affected
+authorities, designs, contracts, and tests updated deliberately.
 
 When sources disagree, use this order:
 
-1. **Protected system invariants**
+1. **[Ratified Maiden Lane Inviolates](Inviolates.md)**
 2. **Maiden Lane High-Level Design**
 3. **Explicit API/schema/format contracts and authoritative behavioral tests**
 4. **Current task requirements**
@@ -60,15 +65,15 @@ Existing code is evidence of current state, not necessarily desired architecture
 
 ## 2.1 High-Level Design
 
-The **High-Level Design is normative**.
+The **High-Level Design is normative subject to the ratified Inviolates**.
 
-Follow it unless doing so would violate a stronger invariant or reveal a genuine contradiction in the design.
+Follow it unless doing so would violate an Inviolate or reveal a genuine contradiction in the design.
 
 Do not casually reinterpret, route around, or weaken the HLD to make implementation easier.
 
 If implementation exposes a flaw in the HLD:
 
-* identify the conflicting invariant or assumption explicitly;
+* identify the conflicting Inviolate, contract, or assumption explicitly;
 * do not silently implement a different architecture;
 * make the architectural change intentional and reviewable;
 * update the HLD when the architecture itself changes.
@@ -99,7 +104,7 @@ Once the guide exists, update it in the same change whenever implementation mate
 
 Do not preserve stale implementation-guide text for historical value. **Git is the history.**
 
-Do not use the Implementation Guide to override an invariant or the HLD.
+Do not use the Implementation Guide to override an Inviolate, invariant, or the HLD.
 
 Do not turn temporary implementation choices into permanent architecture merely because they were written in the guide.
 
@@ -739,7 +744,7 @@ Do not "vibe" through a failing system by repeatedly adding branches until tests
 Before editing:
 
 * understand the semantic contract;
-* identify the relevant invariant;
+* identify the relevant Inviolates and invariants;
 * locate the authoritative design;
 * inspect existing tests;
 * understand why the current behavior exists.
@@ -824,7 +829,7 @@ A change is not done merely because the requested code exists.
 
 Before completion, confirm:
 
-* the relevant invariant is preserved;
+* the relevant Inviolates and invariants are preserved;
 * the HLD is still satisfied;
 * semantic behavior is tested;
 * deterministic behavior remains deterministic;

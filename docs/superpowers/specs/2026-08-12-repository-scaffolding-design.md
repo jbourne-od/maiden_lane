@@ -6,7 +6,7 @@
 
 **Normative architecture:** [Maiden Lane High-Level Design](2026-08-11-maiden-lane-high-level-design.md)
 
-**Draft project laws:** [Maiden Lane Inviolates](../../../Inviolates.md)
+**Highest repository authority:** [Ratified Maiden Lane Inviolates](../../../Inviolates.md)
 
 ## 1. Purpose
 

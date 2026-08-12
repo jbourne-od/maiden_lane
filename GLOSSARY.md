@@ -5,9 +5,8 @@
 This glossary provides shared language for the [Maiden Lane High-Level
 Design](docs/superpowers/specs/2026-08-11-maiden-lane-high-level-design.md)
 and [Maiden Lane Inviolates](Inviolates.md). It does not create requirements or
-override either source. The HLD is normative for the current design phase;
-`Inviolates.md` becomes the highest repository-level architectural authority
-only after it is explicitly ratified.
+override either source. The ratified Inviolates are the highest repository-level
+architectural authority. The HLD is normative subject to them.
 
 Terms are alphabetical. A definition describes Maiden Lane usage, which may be
 narrower than the same word's general software-engineering meaning.

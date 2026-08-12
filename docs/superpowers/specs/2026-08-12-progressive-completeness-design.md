@@ -1,12 +1,12 @@
 # Progressive Completeness and Consumer-Scoped Publication Design
 
-**Status:** Approved concept; pending written-spec review
+**Status:** Approved design amendment
 
 **Date:** 2026-08-12
 
 **Normative architecture:** [Maiden Lane High-Level Design](2026-08-11-maiden-lane-high-level-design.md)
 
-**Draft project laws:** [Maiden Lane Inviolates](../../../Inviolates.md)
+**Highest repository authority:** [Ratified Maiden Lane Inviolates](../../../Inviolates.md)
 
 ## 1. Purpose
 

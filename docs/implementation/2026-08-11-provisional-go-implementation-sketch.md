@@ -13,12 +13,12 @@ the approved boundaries can be expressed coherently in Go. It is not an
 implementation plan, production milestone, infrastructure commitment, final
 package layout, or authorization to scaffold these files.
 
-When this sketch and the high-level design disagree, the high-level design
-wins. Types and package names below are deliberately easy to replace. The
-important claims are the dependency direction, the separation of semantic and
-execution identity, deterministic entity construction, immutable patches,
-fail-closed validation, sealed checkpoints, consumer-relative readiness, and
-guarded target-scoped publication.
+The ratified Inviolates and then the high-level design outrank this sketch.
+Types and package names below are deliberately easy to replace. The important
+claims are the dependency direction, the separation of semantic and execution
+identity, deterministic entity construction, immutable patches, fail-closed
+validation, sealed checkpoints, consumer-relative readiness, and guarded
+target-scoped publication.
 
 The examples intentionally stop before deciding:
 

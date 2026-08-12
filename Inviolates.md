@@ -1,6 +1,8 @@
 # Maiden Lane Inviolates
 
-**Status:** Draft and non-normative until explicitly ratified
+**Status:** Ratified; highest repository-level architectural authority
+
+**Ratified:** 2026-08-12
 
 ## Purpose
 
@@ -12,16 +14,17 @@ a formal property checked by the compiler, executor, promotion gate, or another
 mechanism. Invariants may enforce Inviolates, but the terms are not
 interchangeable.
 
-While this document remains a draft, entries may be rewritten, reordered,
-added, or removed. Once ratified:
+This document is the highest repository-level architectural authority. Its
+ratification establishes the following amendment discipline:
 
-- This document becomes the highest repository-level architectural authority.
 - Inviolate numbers never move and are never reused.
 - A retired Inviolate remains as a numbered tombstone that identifies its
   replacement or explains why it no longer applies.
 - Changing the meaning of an Inviolate requires explicit approval and a
-  deliberate amendment. Affected designs, contracts, and tests change with it;
-  implementation cannot silently reinterpret it.
+  deliberate amendment. Affected designs, contracts, tests, and authority
+  references change with it; implementation cannot silently reinterpret it.
+- Operational difficulty is evidence for a proposed amendment, not permission
+  to route around an Inviolate.
 - A demonstrated Inviolate violation blocks approval regardless of passing
   tests or apparent operational success.
 

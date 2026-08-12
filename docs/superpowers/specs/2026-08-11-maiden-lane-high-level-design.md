@@ -6,6 +6,8 @@
 
 **Audience:** Data engineering, platform engineering, application engineering, and technical leadership
 
+**Highest repository authority:** [Ratified Maiden Lane Inviolates](../../../Inviolates.md)
+
 **Progressive-completeness amendment:** [Consumer-scoped checkpoints and publication](2026-08-12-progressive-completeness-design.md)
 
 ## 1. Executive summary
