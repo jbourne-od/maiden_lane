@@ -1,0 +1,319 @@
+name: pipeline
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+concurrency:
+  group: pipeline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify Go application
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify application
+        run: make verify
+
+  container:
+    name: Verify pull-request image
+    if: github.event_name == 'pull_request'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build and smoke-test image
+        run: make container-check IMAGE=maiden-lane:ci-${{ github.sha }}
+
+  publish:
+    name: Publish tested image to ECR
+    if: github.event_name == 'push'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: ecr-${{ github.sha }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      LOCAL_IMAGE: maiden-lane:ci-${{ github.sha }}
+      SHA_TAG: sha-${{ github.sha }}
+      ECR_IMAGE_RESPONSE_FILTER: >-
+        if type != "object"
+        or ((.images | type) != "array")
+        or ((.failures | type) != "array")
+        then error("malformed ECR batch-get-image response")
+        elif (.images | length) == 1
+        and (.failures | length) == 0
+        and .images[0].repositoryName == $repository
+        and .images[0].imageId.imageTag == $tag
+        and ((.images[0].imageId.imageDigest | type) == "string")
+        and (.images[0].imageId.imageDigest | test("^sha256:[0-9a-f]{64}$"))
+        and ((.images[0].imageManifest | type) == "string")
+        and ((.images[0].imageManifest | length) > 0)
+        then {
+          state: "present",
+          digest: .images[0].imageId.imageDigest,
+          manifest: .images[0].imageManifest
+        }
+        elif (.images | length) == 0
+        and (.failures | length) == 1
+        and .failures[0].imageId.imageTag == $tag
+        and .failures[0].failureCode == "ImageNotFound"
+        then {state: "missing"}
+        else error("unexpected ECR batch-get-image response")
+        end
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate release configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variable in AWS_REGION AWS_ROLE_ARN ECR_REPOSITORY; do
+            if [[ -z "${!variable}" ]]; then
+              echo "missing required repository variable: ${variable}" >&2
+              exit 1
+            fi
+          done
+          command -v jq >/dev/null || {
+            echo "jq is required to validate Amazon ECR responses" >&2
+            exit 1
+          }
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2.1.6
+
+      - name: Verify immutable ECR repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          response="$(
+            aws ecr describe-repositories \
+              --repository-names "$ECR_REPOSITORY" \
+              --output json
+          )" || {
+            echo "failed to read ECR repository configuration" >&2
+            exit 1
+          }
+          mutability="$(
+            jq -er --arg repository "$ECR_REPOSITORY" '
+              if type == "object"
+                and ((.repositories | type) == "array")
+                and (.repositories | length) == 1
+                and .repositories[0].repositoryName == $repository
+                and ((.repositories[0].imageTagMutability | type) == "string")
+              then .repositories[0].imageTagMutability
+              else error("unexpected ECR describe-repositories response")
+              end
+            ' <<<"$response"
+          )"
+          if [[ "$mutability" != "IMMUTABLE" ]]; then
+            echo "ECR repository must enforce immutable tags; got $mutability" >&2
+            exit 1
+          fi
+
+      - name: Locate immutable commit image
+        id: existing
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          lookup_image() {
+            local tag="$1"
+            local response
+            response="$(
+              aws ecr batch-get-image \
+                --repository-name "$ECR_REPOSITORY" \
+                --image-ids imageTag="$tag" \
+                --output json
+            )" || {
+              echo "failed to look up ECR image tag $tag" >&2
+              return 1
+            }
+            jq -ce \
+              --arg repository "$ECR_REPOSITORY" \
+              --arg tag "$tag" \
+              "$ECR_IMAGE_RESPONSE_FILTER" <<<"$response"
+          }
+
+          metadata="$(lookup_image "$SHA_TAG")"
+          state="$(jq -er '.state' <<<"$metadata")"
+          case "$state" in
+            present)
+              echo "exists=true" >> "$GITHUB_OUTPUT"
+              docker pull "$ECR_REGISTRY/$ECR_REPOSITORY:$SHA_TAG"
+              docker tag "$ECR_REGISTRY/$ECR_REPOSITORY:$SHA_TAG" "$LOCAL_IMAGE"
+              ;;
+            missing)
+              echo "exists=false" >> "$GITHUB_OUTPUT"
+              make container-build IMAGE="$LOCAL_IMAGE"
+              ;;
+            *)
+              echo "unexpected ECR image state: $state" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Smoke-test exact release image
+        run: make container-smoke IMAGE="$LOCAL_IMAGE"
+
+      - name: Publish immutable commit tag
+        if: steps.existing.outputs.exists != 'true'
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          remote="$ECR_REGISTRY/$ECR_REPOSITORY:$SHA_TAG"
+          docker tag "$LOCAL_IMAGE" "$remote"
+          docker push "$remote"
+
+      - name: Apply immutable version tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          VERSION_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          lookup_image() {
+            local tag="$1"
+            local response
+            response="$(
+              aws ecr batch-get-image \
+                --repository-name "$ECR_REPOSITORY" \
+                --image-ids imageTag="$tag" \
+                --output json
+            )" || {
+              echo "failed to look up ECR image tag $tag" >&2
+              return 1
+            }
+            jq -ce \
+              --arg repository "$ECR_REPOSITORY" \
+              --arg tag "$tag" \
+              "$ECR_IMAGE_RESPONSE_FILTER" <<<"$response"
+          }
+
+          sha_metadata="$(lookup_image "$SHA_TAG")"
+          sha_state="$(jq -er '.state' <<<"$sha_metadata")"
+          if [[ "$sha_state" != "present" ]]; then
+            echo "commit image tag $SHA_TAG is unexpectedly missing" >&2
+            exit 1
+          fi
+          sha_digest="$(jq -er '.digest' <<<"$sha_metadata")"
+
+          version_metadata="$(lookup_image "$VERSION_TAG")"
+          version_state="$(jq -er '.state' <<<"$version_metadata")"
+          if [[ "$version_state" == "present" ]]; then
+            version_digest="$(jq -er '.digest' <<<"$version_metadata")"
+            if [[ "$version_digest" != "$sha_digest" ]]; then
+              echo "version tag $VERSION_TAG already points at a different digest" >&2
+              exit 1
+            fi
+            exit 0
+          fi
+          if [[ "$version_state" != "missing" ]]; then
+            echo "unexpected ECR image state: $version_state" >&2
+            exit 1
+          fi
+
+          manifest="$(jq -er '.manifest' <<<"$sha_metadata")"
+          put_response="$(
+            aws ecr put-image \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-tag "$VERSION_TAG" \
+              --image-manifest "$manifest" \
+              --output json
+          )" || {
+            echo "failed to apply ECR version tag $VERSION_TAG" >&2
+            exit 1
+          }
+          put_digest="$(
+            jq -er \
+              --arg repository "$ECR_REPOSITORY" \
+              --arg tag "$VERSION_TAG" '
+                if type == "object"
+                  and .image.repositoryName == $repository
+                  and .image.imageId.imageTag == $tag
+                  and ((.image.imageId.imageDigest | type) == "string")
+                  and (.image.imageId.imageDigest | test("^sha256:[0-9a-f]{64}$"))
+                then .image.imageId.imageDigest
+                else error("unexpected ECR put-image response")
+                end
+              ' <<<"$put_response"
+          )"
+          if [[ "$put_digest" != "$sha_digest" ]]; then
+            echo "version tag $VERSION_TAG resolved to an unexpected digest" >&2
+            exit 1
+          fi
+
+      - name: Report image digest
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          response="$(
+            aws ecr batch-get-image \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids imageTag="$SHA_TAG" \
+              --output json
+          )" || {
+            echo "failed to read published ECR image tag $SHA_TAG" >&2
+            exit 1
+          }
+          metadata="$(
+            jq -ce \
+              --arg repository "$ECR_REPOSITORY" \
+              --arg tag "$SHA_TAG" \
+              "$ECR_IMAGE_RESPONSE_FILTER" <<<"$response"
+          )"
+          state="$(jq -er '.state' <<<"$metadata")"
+          if [[ "$state" != "present" ]]; then
+            echo "published ECR image tag $SHA_TAG is unexpectedly missing" >&2
+            exit 1
+          fi
+          digest="$(jq -er '.digest' <<<"$metadata")"
+          {
+            echo "### Published image"
+            echo
+            echo "\`$ECR_REGISTRY/$ECR_REPOSITORY@$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"

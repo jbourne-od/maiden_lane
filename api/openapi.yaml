@@ -1,0 +1,20 @@
+openapi: 3.1.0
+info:
+  title: Maiden Lane API
+  version: 0.0.0
+  description: The HTTP surface currently implemented by Maiden Lane.
+paths:
+  /healthz:
+    get:
+      operationId: getHealth
+      summary: Report process liveness
+      responses:
+        "204":
+          description: The Maiden Lane process is alive.
+  /readyz:
+    get:
+      operationId: getReadiness
+      summary: Report process readiness
+      responses:
+        "204":
+          description: The Maiden Lane process can accept requests.

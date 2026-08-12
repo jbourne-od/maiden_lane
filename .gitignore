@@ -1,1 +1,14 @@
 .worktrees/
+
+# Local build and test artifacts.
+/bin/
+/coverage.out
+
+# Local configuration may contain credentials and never belongs in Git.
+.env
+.env.*
+
+# Workstation metadata.
+.DS_Store
+.idea/
+.vscode/
