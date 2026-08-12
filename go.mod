@@ -9,6 +9,8 @@ tool (
 	honnef.co/go/tools/cmd/staticcheck
 )
 
+require github.com/go-chi/chi/v5 v5.3.1
+
 require (
 	github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c // indirect
 	golang.org/x/exp/typeparams v0.0.0-20231108232855-2478ac86f678 // indirect
