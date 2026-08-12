@@ -91,6 +91,14 @@ stable typed application error or exported metric.
 Composition remains in `cmd/maiden-lane`. HTTP translation remains in
 `internal/httpapi`. No business meaning belongs in either package.
 
+The living implementation guide is a current-state inventory, not a record of
+earlier intentions. It documents only packages, commands, dependencies, and
+boundaries that exist in the repository at that revision. Future packages may
+appear only as clearly labeled known gaps, never in a repository tree that
+implies they have been implemented. When a package is added, removed, renamed,
+split, or collapsed, the same change rewrites the guide to reflect the new
+current state. Git retains the historical shapes.
+
 ## 5. Go and tool version contracts
 
 The module uses:
@@ -181,6 +189,9 @@ The following documentation standard applies:
   test name and assertions.
 - The implementation guide includes a compact code tour and explains Go
   conventions that are likely to surprise Python-oriented contributors.
+- The guide describes the repository that exists now; it does not preserve
+  obsolete package maps or promote speculative package boundaries into current
+  architecture.
 - Comments do not narrate syntax or duplicate obvious control flow.
 - Comments are not a second source of semantic authority. Inviolates, the HLD,
   explicit contracts, and authoritative tests remain controlling.
@@ -305,6 +316,8 @@ The scaffold is accepted only when:
 - the OpenAPI document matches the implemented health surface;
 - `ERRORS.md` and `METRICS.md` contain no invented entries;
 - the implementation guide describes the repository as it actually exists;
+- the implementation guide contains no historical or speculative repository
+  tree presented as current state;
 - the final diff contains no speculative semantic packages or AWS deployment
   resources.
 
