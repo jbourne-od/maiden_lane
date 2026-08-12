@@ -90,9 +90,11 @@ Treat it as a living description of:
 * what has been implemented;
 * current package and component boundaries;
 * temporary implementation choices;
-* known gaps;
-* current sequencing;
-* the immediate implementation direction.
+* known gaps.
+
+Implementation plans own future sequencing and intended implementation
+direction. Do not put planned package layouts or future capabilities in the
+Implementation Guide before the corresponding implementation exists.
 
 It is a guide, not a contract.
 

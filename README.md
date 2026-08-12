@@ -36,18 +36,13 @@ make verify
 make container-check
 ```
 
-The complete verification sequence is:
+`make verify` is the authoritative complete local verification command. Its
+`Makefile` recipe enforces formatting and module tidiness, verifies the pinned
+analysis-tool versions, runs vet, static analysis, unit tests, race tests, and
+the vulnerability scan, then builds `bin/maiden-lane`.
 
-```bash
-gofmt -l .
-go mod tidy -diff
-go vet ./...
-go tool staticcheck ./...
-go test ./...
-go test -race ./...
-go tool govulncheck ./...
-go build -trimpath ./cmd/maiden-lane
-```
+Use the individual Make targets when diagnosing a particular stage; the
+`Makefile` is authoritative for their exact commands and failure semantics.
 
 ## CI/CD
 
