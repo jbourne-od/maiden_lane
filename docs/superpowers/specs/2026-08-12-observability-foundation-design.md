@@ -109,8 +109,9 @@ internal logger emits only `otel_internal_message` or `otel_internal_error`.
 Neither forwards supplied error text, messages, names, or key-value fields.
 This prevents OTel's environment parsing and SDK diagnostics from echoing
 endpoints, headers, certificate paths, or other ambient values. Providers and
-propagators remain explicit. Tests that replace either global restore it and
-cannot run concurrently with other global-state tests.
+propagators remain explicit. The sanitizers are unit-tested as ordinary values;
+installation is integration-tested in a subprocess because OTel exposes no
+getter with which to restore its internal process-global logger safely.
 
 ## 4. Logging
 
@@ -411,8 +412,8 @@ The implementation must establish at least these properties:
 17. Handler panics expose neither their values, request-derived strings, peer
     addresses, nor standard-library stack payloads in telemetry or logs.
 18. The process-global OTel error handler and internal logger emit only their
-    registered stable codes, expose none of their supplied text or fields, and
-    are restored by tests that replace them.
+    registered stable codes and expose none of their supplied text or fields;
+    global installation is verified in an isolated subprocess.
 19. Metric exemplars remain absent even when a measurement is recorded from a
     sampled trace carrying hostile attributes.
 
