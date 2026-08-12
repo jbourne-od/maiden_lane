@@ -68,21 +68,26 @@ Three approaches were considered:
 |---|---|
 | Separate application with selective stochflow reuse | Chosen. It preserves Maiden Lane's domain while reusing suitable infrastructure. |
 | Compile transformations directly into the current stochflow statechart | Rejected. Its contracts, execution vocabulary, economic state, and journal are agent-specific. |
-| Implement every primitive independently | Rejected for now. It would duplicate stable canonical encoding and comparison work. |
+| Implement every primitive independently | Rejected for now. It would duplicate stable byte-level hashing and comparison work. |
 
 Maiden Lane defines its own ports:
 
 ```go
 type ContentHasher interface {
-	Hash(value any) (Digest, error)
+	HashCanonical(data []byte) Digest
 }
 
 type CandidateComparator interface {
-	Compare(ctx context.Context, baseline, candidate RunRef) (Comparison, error)
+	Compare(ctx context.Context, baseline, candidate ExecutionRef) (Comparison, error)
 }
 ```
 
-Only `internal/adapters/stochflow` may import stochflow. Initial reuse may include canonical encoding and hashing from `journal` and the generic paired comparison behavior in `compare`. The adapter can be replaced without changing any semantic package.
+Only `internal/adapters/stochflow` may import stochflow. Maiden Lane owns its canonical byte formats in `internal/canonical`; hashing adapters receive only bytes that Maiden Lane has already canonicalized. Initial stochflow reuse may include its byte-level digest helper from `journal` and the generic paired comparison behavior in `compare`. The adapter can be replaced without changing any semantic package or reinterpreting a Maiden Lane value.
+
+Canonicalization and hashing are separate contracts: Maiden Lane decides what
+the bytes mean, while `ContentHasher` applies the configured digest algorithm
+to those bytes. A canonical format or digest algorithm change requires an
+explicit version migration rather than an invisible adapter change.
 
 The dependency is pinned to a tag or exact pseudo-version. A local `replace github.com/optimaldynamics/stochflow => ../stochflow` directive is acceptable for workstation development but is not a deployment strategy.
 
@@ -108,7 +113,7 @@ States, plans, rule sets, worlds, journals, and outputs are immutable semantic v
 
 ## 6. Identity model
 
-Every semantic run binds three identities:
+Identity is layered so semantic intent is independent of physical execution:
 
 \[
 InputID = H(S_0, C)
@@ -119,7 +124,11 @@ PlanID = H(P)
 \]
 
 \[
-RunID = H(InputID, PlanID, ExecutorVersion, ProvenancePolicy)
+SemanticRunID = H(InputID, PlanID)
+\]
+
+\[
+ExecutionID = H(SemanticRunID, ExecutorIdentity, ProvenancePolicy)
 \]
 
 Where:
@@ -127,12 +136,25 @@ Where:
 - `S0` is the canonical input state.
 - `C` is the pinned execution world.
 - `P` is the canonical semantic plan.
-- `ExecutorVersion` identifies executable semantics.
-- `ProvenancePolicy` affects the required output artifacts and therefore participates in run identity.
+- `SemanticRunID` identifies the requested computation independently of how it is executed.
+- `ExecutorIdentity` includes the backend and its version, such as `go@<digest>` or `sql-snowflake@<digest>`.
+- `ProvenancePolicy` affects required execution artifacts but not the requested computation.
 
-An operational retry has a separate `AttemptID`. Attempts may change timing and infrastructure placement but cannot change the semantic inputs of the run.
+An operational retry has a separate `AttemptID`. Attempts may change timing and infrastructure placement but cannot change the semantic inputs or executor identity of an execution.
 
-Repeating the same `RunID` must return existing artifacts or reproduce byte-identical artifacts. Any divergence is a hard integrity failure.
+Repeating the same `ExecutionID` must return existing artifacts or reproduce byte-identical artifacts. Any divergence is a hard integrity failure. Two certified executors for one `SemanticRunID` must produce identical final state, semantic journal, and invariant-result digests at the required provenance level. Operational metadata such as timestamps, Batch job IDs, and attempt counts is excluded from those semantic artifacts.
+
+Publication points to an immutable artifact produced by a certified
+`ExecutionID`, while retaining both `SemanticRunID` and `ExecutionID` in its
+audit record. This permits backend certification to state, without collapsing
+the executions into one identity:
+
+```text
+SemanticRunID X
+
+Go ExecutionID  → state digest A, journal digest B
+SQL ExecutionID → state digest A, journal digest B
+```
 
 ## 7. Semantic state and pinned world
 
@@ -152,6 +174,39 @@ State
 
 Entity identities are stable within an input lineage. Relations are explicit values rather than incidental foreign-key joins. Field values carry schema-defined types; semantic code does not depend on untyped maps.
 
+#### 7.1.1 Source and synthetic entity identity
+
+Source entity IDs are deterministically namespaced from the input lineage,
+entity kind, and canonical source key. Every operator that creates an entity
+must also provide a typed, deterministic output-key expression in the semantic
+plan. The expression may read only declared fields and pinned world values.
+
+The reference construction for a synthetic identity is:
+
+\[
+EntityID = H_c(
+  "maiden-lane.synthetic-entity.v1",
+  InputLineageID,
+  EntityKind,
+  RuleID,
+  CanonicalProgenitors,
+  SemanticOutputKey
+)
+\]
+
+`Hc` means hashing Maiden Lane's canonical encoding of the tuple.
+`CanonicalProgenitors` is a canonical sequence of input identities. For an
+unordered operation it is sorted by `EntityID`; when roles are semantically
+meaningful it is a sequence of `(role, EntityID)` sorted by role and then ID.
+`SemanticOutputKey` distinguishes multiple outputs of the same kind, including
+the outputs of a split.
+
+The compiler rejects a creating operator without a valid output-key expression.
+The executor rejects an identity collision. Wall-clock values, random UUIDs,
+backend row order, attempt identity, and execution identity are forbidden from
+entity-ID construction. Consequently, certified backends create the same
+entity IDs for the same `SemanticRunID`.
+
 ### 7.2 World
 
 The execution world contains every external value a rule may observe, referenced by immutable digest or version:
@@ -166,7 +221,7 @@ World
 └── policy/configuration snapshots
 ```
 
-Semantic execution performs no unjournaled external reads. A transform that needs reference data reads it from the pinned world supplied to the run.
+Semantic execution performs no unjournaled external reads. A transform that needs reference data reads it from the pinned world supplied to the execution.
 
 ## 8. Closed rule language
 
@@ -207,7 +262,7 @@ Plan
 ├── derived read/write sets
 ├── dependency edges and stable execution levels
 ├── preconditions and postconditions
-├── run-level invariants
+├── execution-level invariants
 ├── backend requirements
 └── plan digest
 ```
@@ -324,7 +379,7 @@ A valid plan does not imply a valid execution. Dynamic validation operates at th
 - A split or merge produces the required number and type of entities.
 - Derived values satisfy customer-specific semantic constraints.
 
-### Run invariants
+### Execution invariants
 
 - Referential integrity holds across the complete candidate graph.
 - Required engine entities and fields exist.
@@ -335,13 +390,13 @@ Protected invariants are unwaivable in the normal publication path. Soft quality
 
 ## 13. Semantic provenance
 
-Provenance is a requested run policy:
+Provenance is a requested execution policy:
 
 | Mode | Records | Use |
 |---|---|---|
 | `summary` | Rules fired, affected entity references, counts, and state digests | High-volume observation; insufficient for publication |
 | `changes` | Structural operations, before/after values or image references, evidence digests, and invariant results | Minimum publishable mode |
-| `full` | `changes` plus every intermediate state manifest and evaluation detail | Shadow runs, UAT, incidents, and backend certification |
+| `full` | `changes` plus every intermediate state manifest and evaluation detail | Shadow executions, UAT, incidents, and backend certification |
 
 The journal describes what occurred semantically:
 
@@ -351,9 +406,9 @@ Merge(driver:A, driver:B → team:AB)
 
 It does not describe backend mechanics such as a SQL statement number or warehouse row range.
 
-Fusion is allowed only when the backend can still emit the required semantic provenance. A backend that produces the final relation but cannot produce the required journal is not certified for that run.
+Fusion is allowed only when the backend can still emit the required semantic provenance. A backend that produces the final relation but cannot produce the required journal is not certified for that execution policy.
 
-## 14. Run lifecycle and promotion
+## 14. Semantic-run, execution, and promotion lifecycle
 
 ```mermaid
 flowchart TD
@@ -361,14 +416,16 @@ flowchart TD
     C -->|"invalid"| CR["Reject; no PlanID"]
     C -->|"valid"| P["Immutable PlanID"]
     P --> I["Pin input and world; create InputID"]
-    I --> E["Execute candidate"]
-    E -->|"execution failure"| EF["Non-publishable run"]
+    I --> SR["Create SemanticRunID"]
+    SR --> X["Select executor and provenance; create ExecutionID"]
+    X --> E["Execute candidate"]
+    E -->|"execution failure"| EF["Non-publishable execution"]
     E --> S["Candidate state + semantic journal"]
     S --> V["Dynamic invariants"]
-    V -->|"fail"| VF["Non-publishable run"]
+    V -->|"fail"| VF["Non-publishable execution"]
     V -->|"pass"| B["Paired baseline/candidate replay"]
     B --> G["Promotion gate"]
-    G -->|"fail"| GF["Non-publishable run"]
+    G -->|"fail"| GF["Non-publishable execution"]
     G -->|"pass"| A["Publishable immutable artifact"]
     A --> PUB["Explicit atomic publication"]
 ```
@@ -390,8 +447,8 @@ The gate requires:
 - Successful static plan validation.
 - Successful execution with at least `changes` provenance.
 - All protected dynamic invariants passed.
-- Pinned input, world, schema, ruleset, compiler, and executor identities.
-- Baseline and candidate runs over the same replay corpus.
+- Pinned input, world, schema, ruleset, compiler, semantic-run, and execution identities.
+- Baseline and candidate executions over the same replay corpus.
 - No protected metric regression.
 - Internally consistent output and journal digests.
 - A backend certified against the reference executor.
@@ -406,7 +463,7 @@ Dependencies point inward toward deterministic domain packages:
 cmd/maiden-lane
         │
         ▼
-internal/run
+internal/app
         │
         ├── compile ── rules
         ├── execute ── model ── invariant
@@ -425,20 +482,21 @@ Proposed responsibilities:
 ```text
 cmd/maiden-lane/          serve and worker entry points
 internal/model/           State, Entity, Relation, Patch, Operation, Digest
+internal/canonical/       versioned canonical byte encodings owned by Maiden Lane
 internal/rules/           closed rule-language AST and parser
 internal/compile/         static validation and canonical Plan construction
 internal/execute/         deterministic Go executor and patch application
-internal/invariant/       operation, rule, and run validators
+internal/invariant/       operation, rule, and execution validators
 internal/provenance/      semantic journal and evidence records
 internal/promotion/       comparisons, gate policy, publication decisions
-internal/run/             application use cases and run lifecycle
+internal/app/             application use cases and execution lifecycle
 internal/ports/           storage, hashing, comparison, and dispatch interfaces
 internal/httpapi/         chi routes, handlers, middleware, and wire DTOs
 internal/adapters/
     postgres/             metadata, leases, outbox, and publication pointer
     s3/                   immutable artifact storage
     batch/                AWS Batch submission
-    stochflow/            canonical hashing and comparison implementations
+    stochflow/            byte-level hashing and comparison implementations
 api/openapi.yaml          authoritative HTTP contract
 ```
 
@@ -452,10 +510,12 @@ The API uses chi and begins with a deliberately small surface:
 POST /v1/plans
 GET  /v1/plans/{planID}
 
-POST /v1/runs
-GET  /v1/runs/{runID}
-GET  /v1/runs/{runID}/journal
-GET  /v1/runs/{runID}/violations
+GET  /v1/semantic-runs/{semanticRunID}
+
+POST /v1/executions
+GET  /v1/executions/{executionID}
+GET  /v1/executions/{executionID}/journal
+GET  /v1/executions/{executionID}/violations
 
 POST /v1/comparisons
 GET  /v1/comparisons/{comparisonID}
@@ -470,10 +530,10 @@ GET  /readyz
 Behavioral rules:
 
 - Plan creation compiles referenced schema and ruleset artifacts. Invalid input returns a validation problem without a `PlanID`.
-- Run creation accepts `PlanID`, pinned input/world references, and provenance policy, then returns `202 Accepted`.
-- Repeated semantic submission returns the same `RunID`.
+- Execution creation accepts `PlanID`, pinned input/world references, executor identity, and provenance policy, then returns `202 Accepted` with both `SemanticRunID` and `ExecutionID`.
+- Repeating the same semantic request with the same executor and provenance policy returns the same `ExecutionID`; changing only the executor or provenance policy preserves `SemanticRunID` and creates a different `ExecutionID`.
 - Journal reads use cursor pagination.
-- Publication accepts only a gate-passing run and requires the expected current publication version.
+- Publication accepts only a gate-passing execution and requires the expected current publication version.
 - All errors use RFC 9457 `application/problem+json`.
 - Every operation is tenant/customer scoped; possession of an identifier does not authorize access.
 
@@ -506,18 +566,18 @@ The API and worker are two modes of one image:
 
 ```text
 maiden-lane serve
-maiden-lane worker --run-id <RunID>
+maiden-lane worker --execution-id <ExecutionID>
 ```
 
 The API performs cheap compilation and read operations synchronously. Execution and comparison are asynchronous Batch jobs.
 
 ### 17.1 Reliable dispatch
 
-The API commits a run record and dispatch request in one PostgreSQL transaction. An idempotent dispatcher submits the outbox entry to AWS Batch. A worker receives only `RunID`, obtains an attempt lease, and loads pinned artifacts from PostgreSQL and S3. Duplicate jobs may consume infrastructure but cannot execute the same attempt concurrently or publish conflicting results.
+The API commits an execution record and dispatch request in one PostgreSQL transaction. An idempotent dispatcher submits the outbox entry to AWS Batch. A worker receives only `ExecutionID`, obtains an execution lease, records its `AttemptID`, and loads pinned artifacts from PostgreSQL and S3. Duplicate jobs may consume infrastructure but cannot execute the same `ExecutionID` concurrently or publish conflicting results. A retry receives a new `AttemptID` only after the prior lease has ended or expired.
 
 Application failures such as invalid plans and invariant violations are permanent. Only classified infrastructure failures receive bounded retries.
 
-Batch status is operational evidence, not the durable system of record. EventBridge state-change handling is duplicate-safe and monotonic. PostgreSQL and S3 retain the authoritative run history and artifacts.
+Batch status is operational evidence, not the durable system of record. EventBridge state-change handling is duplicate-safe and monotonic. PostgreSQL and S3 retain the authoritative semantic-run, execution, and artifact history.
 
 ### 17.2 Service choices
 
@@ -537,8 +597,9 @@ phase to one table per item or to a final physical schema:
 schema_versions
 rulesets
 plans
-runs
-run_attempts
+semantic_runs
+executions
+execution_attempts
 invariant_results
 comparisons
 publication_pointers
@@ -551,14 +612,14 @@ S3 stores content-addressed data-plane artifacts:
 inputs/sha256/<digest>
 worlds/sha256/<digest>
 plans/sha256/<digest>
-journals/<run-id>/<segment-digest>
+journals/<execution-id>/<segment-digest>
 outputs/sha256/<digest>
 comparisons/sha256/<digest>
 ```
 
 PostgreSQL contains artifact digests and locations rather than duplicate payload bodies. S3 artifacts are immutable. Existing bytes under a digest must exactly match newly supplied bytes; any mismatch is a fatal integrity error.
 
-Run transitions use optimistic concurrency and an explicit legal state machine. Journal segments are append-only. A final journal manifest becomes visible only after all referenced segments exist. Publication changes a versioned PostgreSQL pointer in one transaction, so readers cannot observe partially written candidate data.
+Execution transitions use optimistic concurrency and an explicit legal state machine. Journal segments are append-only. A final journal manifest becomes visible only after all referenced segments exist. Publication changes a versioned PostgreSQL pointer in one transaction, so readers cannot observe partially written candidate data.
 
 ## 19. Failure model
 
@@ -574,7 +635,7 @@ Failures are classified by whether retry can change the outcome:
 | Replay or backend divergence | No; operator alert | Impossible |
 | Worker timeout or cancellation | Explicit new attempt | Impossible |
 
-Retries always use the original semantic identities. API problems expose stable codes and bounded safe metadata, never entity values, customer payloads, generated SQL, or journal bodies.
+Retries always use the original `SemanticRunID`, `ExecutionID`, executor identity, and provenance policy. API problems expose stable codes and bounded safe metadata, never entity values, customer payloads, generated SQL, or journal bodies.
 
 ## 20. Security and privacy
 
@@ -582,7 +643,7 @@ Retries always use the original semantic identities. API problems expose stable 
 - Workers run in private subnets with narrowly scoped task roles.
 - S3 and database storage use KMS-backed encryption.
 - Secrets are obtained from Secrets Manager, not embedded in images or job arguments.
-- API identities can submit and inspect runs but cannot overwrite artifacts directly.
+- API identities can submit and inspect executions but cannot overwrite artifacts directly.
 - Only the publication use case can update the publication pointer.
 - Full provenance access requires separate authorization and emits an audit event.
 - Logs, ordinary audit events, traces, and metrics contain metadata only.
@@ -590,7 +651,7 @@ Retries always use the original semantic identities. API problems expose stable 
 
 ## 21. Observability
 
-OpenTelemetry signals are exported to the shop's AWS observability stack. Traces may use `RunID`, `PlanID`, and `AttemptID` for diagnosis. Metrics use bounded labels and never use customer IDs, entity IDs, or run IDs as dimensions.
+OpenTelemetry signals are exported to the shop's AWS observability stack. Traces may use `SemanticRunID`, `ExecutionID`, `PlanID`, and `AttemptID` for diagnosis. Metrics use bounded labels and never use customer IDs, entity IDs, semantic-run IDs, or execution IDs as dimensions.
 
 Primary signals are:
 
