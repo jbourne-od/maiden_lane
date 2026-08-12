@@ -39,8 +39,20 @@ execution contract.
 **Baseline** — The accepted or otherwise designated plan and executions against
 which a candidate is evaluated over the same replay corpus and pinned world.
 
-**Candidate** — A proposed plan, execution, state, or artifact under evaluation.
-A candidate is not authoritative merely because execution succeeded.
+**Candidate** — A proposed plan, execution, checkpoint, state, or artifact under
+evaluation. A candidate is not authoritative merely because execution reached
+or produced it.
+
+**Checkpoint / `CheckpointID`** — A named boundary after a complete prefix of a
+canonical semantic plan. It identifies where a state and semantic-journal
+prefix may be sealed; it is not a separate transformation plan or a consumer
+route.
+
+**Checkpoint artifact / `CheckpointArtifactID`** — The immutable realization of
+a plan checkpoint for one semantic run. Its canonical identity binds the
+checkpoint declaration, state digest, journal-prefix digest, applicable
+invariant-result digest, and provenance policy. Producing-executor identity is
+recorded separately and does not change canonical checkpoint identity.
 
 **Canonical semantic representation** — Maiden Lane-owned, versioned bytes that
 define semantic equality and content identity. Compression, archive metadata,
@@ -53,7 +65,20 @@ Experimental or unsafe tooling exists outside this path.
 
 **Comparison** — Paired evaluation of a baseline and candidate using the same
 pinned input, historical world, replay corpus, and applicable comparison
-policy. Its result is evidence for the promotion gate.
+policy. For checkpoint promotion it also uses the same completeness profile and
+explicitly corresponding checkpoint semantics. Its result is evidence for the
+promotion gate.
+
+**Completeness** — Sufficiency of a valid checkpoint for a named consumer
+contract. It is evaluated relative to a profile and is not an intrinsic
+property of state.
+
+**Completeness profile / `ProfileID`** — A closed, typed, immutable consumer
+contract describing the information required for a particular use. A profile
+declares assessment scope and aggregation, and assesses a checkpoint without
+transforming state, waiving invariants, silently dropping non-ready entities,
+or selecting a different pipeline. Its canonical content identity is
+`ProfileID`.
 
 **Comparison metric** — A domain measurement used to compare baseline and
 candidate behavior and evaluate regression policy. It is part of semantic gate
@@ -99,9 +124,9 @@ new `ExecutionID` for the same `SemanticRunID`.
 `SemanticRunID`. Operational retries preserve it and receive distinct
 `AttemptID` values.
 
-**Execution invariant** — A dynamic property required across the complete
-candidate graph or execution result, after individual operations and rules have
-been evaluated.
+**Execution invariant** — A dynamic property required across a declared
+checkpoint prefix or the complete execution result, after individual
+operations and rules have been evaluated.
 
 **Executor** — A backend component that consumes the canonical semantic plan and
 pinned inputs, proposes and applies validated structural patches, and emits the
@@ -137,6 +162,11 @@ change after identification. Implementations may use copy-on-write structures,
 transactions, chunking, or deduplication while preserving immutable external
 semantics.
 
+**`needs_input`** — A successful readiness-assessment verdict meaning a valid
+checkpoint does not yet satisfy one completeness profile. It is not an
+invariant violation, execution failure, or instruction to retry unchanged
+semantic inputs.
+
 **Operation invariant** — A dynamic property required for one structural
 operation, such as the existence of referenced entities, matching
 before-images, valid cardinality, and non-colliding identities.
@@ -155,13 +185,15 @@ content.
 
 **Plan / semantic plan** — The deterministic, immutable, inspectable,
 backend-independent execution contract produced by compiling typed rules and a
-schema. Executors consume this plan rather than reinterpreting authored rules.
+schema. It contains named checkpoint boundaries as well as transformations.
+Executors consume this plan rather than reinterpreting authored rules.
 
 **`PlanID`** — The content identity of a canonical semantic plan.
 
-**Promotion** — Evaluation of whether a candidate has the complete evidence,
-protected invariant results, comparison result, and backend certification
-required to become publishable.
+**Promotion** — Evaluation of whether a selected sealed checkpoint has the
+passing readiness assessment, complete evidence, protected invariant results,
+comparison result, and backend certification required for one publication
+target.
 
 **Promotion gate** — The fail-closed application boundary that produces a gate
 verdict. It does not publish or rerun transformation logic.
@@ -169,6 +201,10 @@ verdict. It does not publish or rerun transformation logic.
 **Protected invariant** — An invariant whose failure makes publication
 impossible through the certified path. It cannot be waived as a soft quality
 decision.
+
+**Profile ordering** — A compiler-proven implication between completeness
+profiles. `A <= B` means every state ready under `B` must also be ready under
+`A`. Profiles form a partial order rather than a required global numeric scale.
 
 **Provenance** — The semantic evidence describing what changed, which rule
 caused it, why the decision was made, and which invariants were evaluated. It
@@ -180,7 +216,28 @@ publishable policy, while `summary` alone is not publishable.
 
 **Publication** — The authorized compare-and-swap update of a versioned pointer
 to an already validated immutable artifact. Publication is separate from
-execution and promotion and never reruns transformations.
+execution and promotion and never reruns transformations or readiness
+assessment.
+
+**Publication target / `TargetID`** — A tenant- and customer-scoped consumption
+purpose, such as CM upload or optimizer input, with its own versioned
+publication pointer and an explicit immutable, versioned policy binding its required
+profile. A publication record pins the target-policy version, profile,
+assessment, and checkpoint that authorized the pointer update.
+
+**Quarantine** — An append-only control-plane decision recording that a
+previously sealed checkpoint has an integrity defect or violated a protected
+property applicable to that checkpoint. Quarantine blocks new certified
+publication without mutating or deleting the checkpoint artifact.
+
+**Readiness assessment / `AssessmentID`** — Deterministic evaluation of one
+sealed checkpoint under one pinned completeness profile. Its result is
+`ready` or `needs_input` plus safe evidence and stable requirement codes.
+
+**Record lineage** — The explicit genealogy of a logical source record across
+semantic runs. New evidence may create a descendant run linked to a parent
+checkpoint while preserving earlier immutable states and their historical
+meaning.
 
 **Reference executor** — The trusted executable specification used to certify
 other backends. The Go executor holds this role unless an architectural
@@ -212,9 +269,15 @@ compiled together into a semantic plan.
 inputs, interpretation, output, provenance, gate verdict, or publishability. It
 is explicit and pinned rather than discovered from ambient process state.
 
+**Sealed checkpoint** — A checkpoint artifact whose immutable state, required
+journal prefix, applicable protected-invariant results, and canonical digests
+are complete and internally consistent. Sealing establishes validity and
+replayability, not consumer readiness or publication eligibility.
+
 **Semantic artifact** — An immutable, canonical value that influences or
 records semantic computation, including inputs, worlds, rule sets, plans,
-states, journals, and outputs.
+states, checkpoints, completeness profiles, readiness assessments, journals,
+and outputs.
 
 **Semantic identity** — An identity determined only by declared semantic
 content and canonicalization rules. Clocks, randomness, attempt metadata,
@@ -226,7 +289,9 @@ numbers, warehouse row ranges, or job mechanics.
 
 **Semantic run / `SemanticRunID`** — The requested computation identified by
 `InputID` and `PlanID`, independent of executor choice and provenance policy.
-One semantic run may have multiple executions.
+One semantic run may have multiple executions. New human or reference evidence
+creates a descendant semantic run rather than altering an existing run's pinned
+inputs.
 
 **Soft quality policy** — A non-protected gate criterion that may permit a
 separately authorized and journaled decision. It cannot waive a protected
@@ -248,6 +313,12 @@ identities, and declared semantic output key.
 pinned world, then proposes a structural patch. It does not mutate shared or
 published state directly.
 
+**Validity** — The property that a state or checkpoint satisfies every
+protected semantic invariant applicable to it. Validity is consumer-independent
+and distinct from completeness: a valid checkpoint may be insufficient for a
+particular profile.
+
 **World** — The immutable, content-identified execution context containing
 reference datasets, schemas, catalogs, policies, and other external facts that
-can affect semantic results.
+can affect semantic results. Additional evidence changes the world or input and
+therefore cannot be introduced into an already identified semantic run.

@@ -48,27 +48,33 @@ changing either creates a new `ExecutionID` without changing the
 `SemanticRunID`. `AttemptID` identifies an operational attempt only. Clocks,
 UUIDs, randomness, backend serialization, generated SQL, row order, and attempt
 details cannot affect semantic identity. Synthetic entity identities must be
-derived deterministically from declared semantic inputs and keys.
+derived deterministically from declared semantic inputs and keys. Checkpoint,
+completeness-profile, and readiness-assessment identities are likewise derived
+only from their declared canonical semantic inputs.
 
 ## 3. Semantic artifacts are immutable, canonical, and content-addressed
 
-Inputs, worlds, rule sets, plans, states, journals, and outputs cannot mutate
-beneath an execution, comparison, publication, or replay. Maiden Lane owns
-their canonical representation; storage and hashing adapters do not decide
-what the bytes mean.
+Inputs, worlds, rule sets, plans, states, checkpoints, completeness profiles,
+readiness assessments, journals, and outputs cannot mutate beneath an
+execution, comparison, publication, or replay. Maiden Lane owns their canonical
+representation; storage and hashing adapters do not decide what the bytes
+mean.
 
 ## 4. Validation fails closed
 
 Static plan validation and dynamic operation, rule, and execution invariants
 are distinct gates. Statically invalid programs produce no plan. Failed
 protected invariants produce no publishable artifact. Invalid semantics are
-never accepted on a best-effort basis.
+never accepted on a best-effort basis. A consumer-specific `needs_input`
+verdict is not an invariant failure and cannot be used to declare a lawful
+checkpoint invalid.
 
 ## 5. Execution never publishes directly
 
-Executors evaluate a semantic plan and produce candidate artifacts. Publication
-is a separate, authorized, validated, atomic pointer update to an already
-immutable artifact; it never reruns transformation logic.
+Executors evaluate a semantic plan and produce candidate artifacts, including
+sealed checkpoints. Publication is a separate, authorized, validated, atomic
+pointer update to an already immutable artifact; it never reruns transformation
+or completeness-assessment logic.
 
 ## 6. State transitions are structural, attributable, and atomic
 
@@ -81,7 +87,9 @@ authoritative state.
 
 Accepted journal entries describe only transitions that became authoritative.
 Rejected proposals, invariant violations, and incomplete attempts belong in
-separate immutable failure or operational records.
+separate immutable failure or operational records. A sealed checkpoint remains
+immutable if downstream work fails; a later integrity discovery produces an
+append-only quarantine record rather than rewritten history.
 
 ## 8. Replay is exact, not approximate
 
@@ -91,20 +99,25 @@ schemas, rules, policies, catalogs, and reference data—is pinned. Repeating an
 canonical semantic representation. Compression, container formats, archive
 metadata, storage envelopes, and other physical encodings do not define
 semantic equality. Divergence in the canonical semantic representation is an
-integrity failure.
+integrity failure. New human or reference evidence creates a descendant
+semantic run rather than silently changing the pinned world of an existing
+execution.
 
 ## 9. Comparisons share the same world
 
 Baseline and candidate executions must use the same pinned input, historical
-world, replay corpus, and applicable comparison policy. Results produced from
-materially different worlds cannot support a promotion claim.
+world, replay corpus, completeness profile, corresponding checkpoint semantics,
+and applicable comparison policy. Results produced from materially different
+worlds or readiness contracts cannot support a promotion claim.
 
 ## 10. Promotion requires complete evidence
 
-A candidate cannot be promoted until execution and comparison complete
-successfully, required provenance exists, every protected gate passes, and the
-executor is certified for the requested policy. There is no `force` path around
-these requirements.
+A candidate checkpoint cannot be promoted until that checkpoint is sealed, its
+pinned completeness assessment is `ready`, comparison completes successfully,
+required provenance exists, every protected gate passes, and the executor is
+certified for the requested policy. Downstream execution may still be running
+or may later fail after the selected checkpoint; that does not retroactively
+block the sealed prefix. There is no `force` path around these requirements.
 
 ## 11. Backend choice and optimization cannot change meaning
 
@@ -169,4 +182,18 @@ divergence are not retried in the hope of a different answer. Retries are
 reserved for classified transient infrastructure failures and may create a new
 `AttemptID`, but cannot alter the semantic inputs or any part of the
 `ExecutionID`'s fixed execution contract, including executor identity or
-provenance policy.
+provenance policy. `needs_input` is not a retryable failure; new evidence
+creates a new assessment or descendant semantic run with new semantic inputs.
+
+## 19. Completeness is consumer-relative and never forks semantics
+
+Maiden Lane has one canonical transformation spine with explicit immutable
+checkpoints. Completeness is evaluated by a closed, typed, pinned profile over
+a checkpoint; it is not an intrinsic property of state. A lawful checkpoint
+may be ready for one consumer and `needs_input` for another. Profiles assess
+state but cannot transform it, waive protected invariants, or select alternate
+consumer pipelines. Assessment scope and aggregation are explicit; a profile
+cannot silently drop a non-ready in-scope entity. Publication is
+consumer-target scoped; the target's immutable, versioned policy explicitly binds the
+required profile, and every published pointer records that policy version,
+checkpoint, profile, and readiness assessment.

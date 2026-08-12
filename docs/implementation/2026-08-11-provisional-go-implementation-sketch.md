@@ -17,7 +17,8 @@ When this sketch and the high-level design disagree, the high-level design
 wins. Types and package names below are deliberately easy to replace. The
 important claims are the dependency direction, the separation of semantic and
 execution identity, deterministic entity construction, immutable patches,
-fail-closed validation, and guarded publication.
+fail-closed validation, sealed checkpoints, consumer-relative readiness, and
+guarded target-scoped publication.
 
 The examples intentionally stop before deciding:
 
@@ -27,6 +28,27 @@ The examples intentionally stop before deciding:
 - Authentication provider and customer authorization vocabulary.
 - The first customer transformation or deployment milestone.
 - The shape of a future SQL compiler.
+- The authored syntax and first concrete requirements for completeness profiles.
+
+### 1.1 Required progressive-completeness correction
+
+The HLD now defines one progressive transformation spine with named sealed
+checkpoints and separately compiled consumer-completeness profiles. Any example
+below that appears to gate only the final execution state or publish by
+`ExecutionID` alone is incomplete unless it is read as shorthand for:
+
+```text
+sealed checkpoint
+  + pinned completeness profile
+  + ready assessment
+  + target-specific gates
+  -> publication target
+```
+
+New human or reference evidence creates a descendant semantic run linked to a
+parent checkpoint; it never mutates the pinned world of the original run. The
+sample packages and types in this sketch remain deliberately provisional and
+must not be scaffolded merely to represent this correction.
 
 ## 2. Candidate repository shape
 
@@ -57,8 +79,10 @@ internal/invariant/
     invariant.go            # operation, rule, and execution checks
 internal/provenance/
     journal.go              # semantic journal artifacts
+internal/readiness/
+    profile.go              # completeness profiles and assessments
 internal/promotion/
-    gate.go                 # publication eligibility
+    gate.go                 # target and checkpoint publication eligibility
 internal/ports/
     ports.go                # infrastructure interfaces owned by Maiden Lane
 internal/app/
@@ -109,6 +133,11 @@ type PlanID string
 type SemanticRunID string
 type ExecutionID string
 type AttemptID string
+type CheckpointID string
+type CheckpointArtifactID string
+type ProfileID string
+type AssessmentID string
+type PublicationTargetID string
 
 type ExecutorIdentity string
 type RuleID string
@@ -148,6 +177,14 @@ const (
 	GateNotEvaluated GateVerdict = "not_evaluated"
 	GatePass         GateVerdict = "pass"
 	GateFail         GateVerdict = "fail"
+)
+
+type ReadinessVerdict string
+
+const (
+	ReadinessNotEvaluated ReadinessVerdict = "not_evaluated"
+	ReadinessReady        ReadinessVerdict = "ready"
+	ReadinessNeedsInput   ReadinessVerdict = "needs_input"
 )
 
 type PublicationStatus string
@@ -641,12 +678,19 @@ type PlannedTransform struct {
 	PayloadDigest Digest
 }
 
+type PlannedCheckpoint struct {
+	ID                   CheckpointID
+	AfterRuleID          RuleID
+	ApplicableInvariants []string
+}
+
 type Plan struct {
 	FormatVersion       string
 	CompilerVersion     string
 	SchemaDigest        Digest
 	RuleSetDigest       Digest
 	Levels              [][]PlannedTransform
+	Checkpoints         []PlannedCheckpoint
 	ExecutionInvariants []string
 	Requirements        []BackendRequirement
 	ID                  PlanID
@@ -854,6 +898,47 @@ summary artifact. At `changes` and `full`, it preserves structural operations
 and before-images or their immutable references. The semantic digest contract
 must define the representation for each level before backend certification.
 
+### 11.1 Sealed checkpoints and readiness artifacts
+
+These shapes illustrate the new identity and responsibility boundaries. They
+do not choose the eventual profile AST or persistence representation.
+
+```go
+// internal/readiness/profile.go
+package readiness
+
+import "github.com/optimaldynamics/maiden-lane/internal/model"
+
+type Profile struct {
+	ID           model.ProfileID
+	SchemaDigest model.Digest
+	Contract     []byte
+}
+
+type CheckpointArtifact struct {
+	ID                    model.CheckpointArtifactID
+	CheckpointID          model.CheckpointID
+	SemanticRunID         model.SemanticRunID
+	StateDigest           model.Digest
+	JournalPrefixDigest   model.Digest
+	InvariantResultDigest model.Digest
+	Provenance            model.ProvenancePolicy
+}
+
+type Assessment struct {
+	ID                   model.AssessmentID
+	CheckpointArtifactID model.CheckpointArtifactID
+	ProfileID            model.ProfileID
+	Verdict              model.ReadinessVerdict
+	RequirementCodes     []string
+}
+```
+
+An `Assessment` never changes state or creates an accepted journal entry.
+`ReadinessNeedsInput` is a successful semantic result. A checkpoint artifact is
+created only after the prefix is sealed; an unvalidated intermediate state must
+not use this type.
+
 ## 12. Deterministic reference executor
 
 The executor returns a candidate and evidence. It does not publish anything.
@@ -1034,26 +1119,26 @@ type ArtifactStore interface {
 	Get(ctx context.Context, scope model.Scope, ref ArtifactRef) ([]byte, error)
 }
 
-type JournalCheckpoint struct {
+type JournalAppend struct {
 	Sequence uint64
 	Entry    provenance.Entry
 	State    ArtifactRef
 }
 
 type JournalStore interface {
-	AppendCheckpoint(
+	Append(
 		ctx context.Context,
 		scope model.Scope,
 		execution model.ExecutionID,
 		attempt model.AttemptID,
 		expectedSequence uint64,
-		checkpoint JournalCheckpoint,
+		entry JournalAppend,
 	) error
 	ReadPrefix(
 		ctx context.Context,
 		scope model.Scope,
 		execution model.ExecutionID,
-	) ([]JournalCheckpoint, error)
+	) ([]JournalAppend, error)
 	Finalize(
 		ctx context.Context,
 		scope model.Scope,
@@ -1122,11 +1207,14 @@ type ExecutionCompletion struct {
 }
 
 type GateRecord struct {
-	Scope           model.Scope
-	ExecutionID     model.ExecutionID
-	ExpectedVersion uint64
-	Verdict         model.GateVerdict
-	Evidence        ArtifactRef
+	Scope               model.Scope
+	TargetID            model.PublicationTargetID
+	TargetPolicyVersion uint64
+	CheckpointID        model.CheckpointArtifactID
+	AssessmentID        model.AssessmentID
+	ExpectedVersion     uint64
+	Verdict             model.GateVerdict
+	Evidence            ArtifactRef
 }
 
 type Dispatcher interface {
@@ -1134,13 +1222,16 @@ type Dispatcher interface {
 }
 
 type ComparisonPair struct {
-	InputID   model.InputID
-	Baseline  model.ExecutionID
-	Candidate model.ExecutionID
+	InputID             model.InputID
+	BaselineCheckpoint  model.CheckpointArtifactID
+	CandidateCheckpoint model.CheckpointArtifactID
 }
 
 type ComparisonRequest struct {
-	Pairs []ComparisonPair
+	ProfileID    model.ProfileID
+	WorldDigest  model.Digest
+	CorpusDigest model.Digest
+	Pairs        []ComparisonPair
 }
 
 type Comparison struct {
@@ -1153,16 +1244,22 @@ type CandidateComparator interface {
 }
 
 type Publication struct {
-	Scope       model.Scope
-	ExecutionID model.ExecutionID
-	Version     uint64
+	Scope               model.Scope
+	TargetID            model.PublicationTargetID
+	TargetPolicyVersion uint64
+	ExecutionID         model.ExecutionID
+	CheckpointID        model.CheckpointArtifactID
+	ProfileID           model.ProfileID
+	AssessmentID        model.AssessmentID
+	Version             uint64
 }
 
 type PublicationStore interface {
-	Get(ctx context.Context, scope model.Scope) (Publication, error)
+	Get(ctx context.Context, scope model.Scope, target model.PublicationTargetID) (Publication, error)
 	CompareAndSwap(
 		ctx context.Context,
 		scope model.Scope,
+		target model.PublicationTargetID,
 		expectedVersion uint64,
 		next Publication,
 	) (Publication, error)
@@ -1170,11 +1267,12 @@ type PublicationStore interface {
 ```
 
 A comparator must reject an empty or partial pair set. For every pair it loads
-both execution records in the supplied scope and verifies that each underlying
-semantic run references the declared `InputID`. This keeps baseline and
+both checkpoint records in the supplied scope and verifies that each underlying
+semantic run references the declared `InputID`, corresponding checkpoint
+semantics, and the common profile, world, and corpus. This keeps baseline and
 candidate evaluation paired even when a corpus contains many inputs.
 
-`JournalStore.AppendCheckpoint` is the crash boundary: the next state artifact
+`JournalStore.Append` is the crash boundary: the next state artifact
 must already exist immutably, and the store atomically advances exactly one
 expected semantic sequence. Resume loads the ordered prefix, rejects gaps or
 digest mismatches, verifies the original plan/input/executor identities, and
@@ -1290,8 +1388,12 @@ before the input manifest is designed.
 
 ## 15. Promotion gate
 
-Promotion is a pure decision over recorded facts. Publication is a separate
-effect performed only after the decision passes.
+Promotion is a pure decision over recorded facts for one publication target,
+sealed checkpoint, and pinned readiness assessment. Publication is a separate
+effect performed only after the decision passes. Successful completion of
+downstream execution is deliberately absent: only the selected checkpoint
+prefix must have sealed successfully. This does not make the sample execution
+request a partial-run or early-stop contract.
 
 ```go
 // internal/promotion/gate.go
@@ -1300,13 +1402,17 @@ package promotion
 import "github.com/optimaldynamics/maiden-lane/internal/model"
 
 type Facts struct {
-	ExecutionStatus    model.ExecutionStatus
-	Provenance         model.ProvenancePolicy
-	ProtectedFailures  int
-	ComparisonComplete bool
-	MetricRegressions  int
-	DigestsConsistent  bool
-	BackendCertified   bool
+	CheckpointSealed      bool
+	CheckpointQuarantined bool
+	Provenance            model.ProvenancePolicy
+	Readiness             model.ReadinessVerdict
+	AssessmentMatches     bool
+	TargetProfileMatches  bool
+	ProtectedFailures     int
+	ComparisonComplete    bool
+	MetricRegressions     int
+	DigestsConsistent     bool
+	BackendCertified      bool
 }
 
 type Decision struct {
@@ -1316,11 +1422,23 @@ type Decision struct {
 
 func Evaluate(f Facts) Decision {
 	codes := make([]string, 0)
-	if f.ExecutionStatus != model.ExecutionSucceeded {
-		codes = append(codes, "execution_not_succeeded")
+	if !f.CheckpointSealed {
+		codes = append(codes, "checkpoint_not_sealed")
+	}
+	if f.CheckpointQuarantined {
+		codes = append(codes, "checkpoint_quarantined")
 	}
 	if !f.Provenance.Publishable() {
 		codes = append(codes, "provenance_not_publishable")
+	}
+	if f.Readiness != model.ReadinessReady {
+		codes = append(codes, "checkpoint_not_ready")
+	}
+	if !f.AssessmentMatches {
+		codes = append(codes, "assessment_mismatch")
+	}
+	if !f.TargetProfileMatches {
+		codes = append(codes, "target_profile_mismatch")
 	}
 	if f.ProtectedFailures > 0 {
 		codes = append(codes, "protected_invariant_failed")
@@ -1374,7 +1492,7 @@ type Application interface {
 	SubmitExecution(context.Context, app.SubmitExecution) (app.SubmitResult, error)
 	GetSemanticRun(context.Context, model.Scope, model.SemanticRunID) (ports.SemanticRunRecord, error)
 	GetExecution(context.Context, model.Scope, model.ExecutionID) (ports.ExecutionRecord, error)
-	Publish(context.Context, model.Scope, model.ExecutionID, uint64) (ports.Publication, error)
+	Publish(context.Context, model.Scope, model.PublicationTargetID, model.CheckpointArtifactID, model.AssessmentID, uint64) (ports.Publication, error)
 	Ready(context.Context) error
 }
 
@@ -1629,8 +1747,10 @@ import (
 )
 
 type publishRequest struct {
-	ExecutionID     model.ExecutionID `json:"execution_id"`
-	ExpectedVersion uint64            `json:"expected_version"`
+	TargetID             model.PublicationTargetID  `json:"target_id"`
+	CheckpointArtifactID model.CheckpointArtifactID `json:"checkpoint_artifact_id"`
+	AssessmentID         model.AssessmentID         `json:"assessment_id"`
+	ExpectedVersion      uint64                     `json:"expected_version"`
 }
 
 func (h Handler) publish(w http.ResponseWriter, r *http.Request) {
@@ -1645,13 +1765,14 @@ func (h Handler) publish(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusBadRequest, "invalid_request", "request body is invalid")
 		return
 	}
-	if body.ExecutionID == "" {
-		writeProblem(w, http.StatusBadRequest, "invalid_request", "execution_id is required")
+	if body.TargetID == "" || body.CheckpointArtifactID == "" || body.AssessmentID == "" {
+		writeProblem(w, http.StatusBadRequest, "invalid_request", "target_id, checkpoint_artifact_id, and assessment_id are required")
 		return
 	}
 
 	publication, err := h.App.Publish(
-		r.Context(), scope, body.ExecutionID, body.ExpectedVersion,
+		r.Context(), scope, body.TargetID, body.CheckpointArtifactID,
+		body.AssessmentID, body.ExpectedVersion,
 	)
 	if err != nil {
 		writeApplicationError(w, err)
@@ -1661,9 +1782,11 @@ func (h Handler) publish(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-The application implementation of `Publish` must reload the execution inside
-the same authorization scope, require `ExecutionSucceeded` and `GatePass`,
-verify immutable artifact references, then call `CompareAndSwap`.
+The application implementation of `Publish` must reload the target, sealed
+checkpoint, assessment, and gate evidence inside the same authorization scope;
+require a matching `ReadinessReady` assessment and `GatePass`; verify immutable
+artifact references; then call `CompareAndSwap`. It does not require downstream
+execution to have completed after the checkpoint.
 
 ## 17. Illustrative HTTP exchange
 
@@ -1705,13 +1828,17 @@ Authorization: Bearer <credential>
 Content-Type: application/json
 
 {
-  "execution_id": "sha256:execution...",
+  "target_id": "optimizer",
+  "checkpoint_artifact_id": "sha256:checkpoint...",
+  "assessment_id": "sha256:assessment...",
   "expected_version": 17
 }
 ```
 
-A protected invariant failure returns a non-publishable execution record. It
-does not turn `POST /v1/publications` into an override endpoint.
+A protected invariant failure prevents the affected checkpoint from sealing. A
+`needs_input` assessment prevents publication only to the target using that
+profile. Neither condition turns `POST /v1/publications` into an override
+endpoint.
 
 ## 18. AWS Batch adapter seam
 
@@ -1905,12 +2032,15 @@ func TestSyntheticEntityIDUsesCanonicalProgenitors(t *testing.T) {
 ```go
 func TestGateRejectsProtectedInvariantFailure(t *testing.T) {
 	decision := promotion.Evaluate(promotion.Facts{
-		ExecutionStatus:    model.ExecutionSucceeded,
-		Provenance:         model.ProvenanceChanges,
-		ProtectedFailures:  1,
-		ComparisonComplete: true,
-		DigestsConsistent:  true,
-		BackendCertified:   true,
+		CheckpointSealed:     true,
+		Provenance:           model.ProvenanceChanges,
+		Readiness:            model.ReadinessReady,
+		AssessmentMatches:    true,
+		TargetProfileMatches: true,
+		ProtectedFailures:    1,
+		ComparisonComplete:   true,
+		DigestsConsistent:    true,
+		BackendCertified:     true,
 	})
 	if decision.Verdict != model.GateFail {
 		t.Fatalf("verdict = %q, want fail", decision.Verdict)
@@ -1969,8 +2099,9 @@ move as mapper code and real extracts are studied:
 | Planning | One canonical semantic plan | Current plan fields and package split |
 | Patch storage | Structural before-images remain authoritative | Embedded entities versus digest references |
 | Provenance | Required executor capability | Segment size and physical manifest format |
+| Completeness | Consumer-relative assessment over sealed checkpoints | Profile AST, checkpoint declarations, and assessment storage |
 | Comparison | Same pinned corpus and protected regression policy | Exact metric schema and stochflow adapter |
-| API | Async execution, scoped reads, guarded publication | DTO details and route additions |
+| API | Async execution, scoped reads, readiness assessment, guarded target publication | DTO details and route additions |
 | Persistence | Atomic outbox, leases, immutable artifacts, CAS publication | PostgreSQL schema and S3 key layout |
 | AWS | ECS/Fargate API plus Batch/Fargate workers | Initial resource sizing and later EC2 capacity |
 
@@ -1988,6 +2119,7 @@ available. It must select one independently testable slice and then specify:
 
 - The exact Go module and dependency versions.
 - The first supported entity schema and rule operators.
+- The first named checkpoints and completeness profiles.
 - The canonical format test vectors.
 - The first immutable input/world manifest.
 - The storage adapters required for that slice.
