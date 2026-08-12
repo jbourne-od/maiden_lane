@@ -22,10 +22,16 @@ help:
 	@echo "container-check  build and smoke-test $(IMAGE)"
 
 fmt:
-	$(GO) fmt ./...
+	@gofmt="$$( $(GO) env GOROOT)/bin/gofmt"; \
+	find . \
+		-type d \( -name .git -o -name .worktrees -o -name .superpowers \) -prune \
+		-o -type f -name '*.go' -exec "$$gofmt" -w {} +
 
 fmt-check:
-	@files="$$(gofmt -l .)"; \
+	@gofmt="$$( $(GO) env GOROOT)/bin/gofmt"; \
+	files="$$(find . \
+		-type d \( -name .git -o -name .worktrees -o -name .superpowers \) -prune \
+		-o -type f -name '*.go' -exec "$$gofmt" -l {} +)"; \
 	if [ -n "$$files" ]; then \
 		echo "Go files need formatting:"; \
 		echo "$$files"; \

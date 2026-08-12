@@ -65,7 +65,50 @@ make verify
 make container-check
 ```
 
-Run individual commands from `Makefile` directly when diagnosing a failure.
+`make verify` is authoritative. For make-independent diagnosis, this is its
+current stage sequence with the same tool arguments and build output path:
+
+```sh
+set -eu
+
+# make fmt-check
+gofmt_binary="$(go env GOROOT)/bin/gofmt"
+unformatted="$(find . \
+  -type d \( -name .git -o -name .worktrees -o -name .superpowers \) -prune \
+  -o -type f -name '*.go' -exec "$gofmt_binary" -l {} +)"
+if [ -n "$unformatted" ]; then
+  echo "Go files need formatting:"
+  echo "$unformatted"
+  exit 1
+fi
+
+# make mod-check
+go mod tidy -diff
+
+# make tool-versions
+staticcheck_version="$(go tool staticcheck -version)"
+if [ "$staticcheck_version" != "staticcheck 2026.2rc1 (0.8.0-rc.1)" ]; then
+  echo "unexpected Staticcheck version: $staticcheck_version"
+  exit 1
+fi
+go tool govulncheck -version | grep -F "Scanner: govulncheck@v1.6.0" >/dev/null || {
+  echo "govulncheck is not pinned to v1.6.0"
+  exit 1
+}
+
+go vet ./...                       # make vet
+go tool staticcheck ./...          # make staticcheck
+go test ./...                      # make test
+go test -race ./...                # make test-race
+go tool govulncheck ./...          # make vulncheck
+mkdir -p bin                       # make build
+go build -trimpath -o bin/maiden-lane ./cmd/maiden-lane
+```
+
+Make additionally owns the exact stage ordering and the human-readable failure
+messages around formatting and tool-version assertions. The current recipes
+require POSIX `/bin/sh`, `find`, `grep`, `sed`, `mkdir`, `sleep`, and `curl`,
+plus Docker for the container targets.
 
 ## Known gaps
 
