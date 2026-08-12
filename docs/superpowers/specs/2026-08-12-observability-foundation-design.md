@@ -101,12 +101,16 @@ instrumentation. If a future third-party instrumentation library requires an
 OTel global, the composition root may register one as operational process
 state; semantic packages still cannot observe it.
 
-The composition root does own one process-global OTel facility in this slice:
-an error handler for asynchronous SDK and exporter failures. It is installed
-once for the process lifetime and emits only a stable `otel_async_error` code
-through `slog`; it does not log the supplied error text. Providers and
-propagators remain explicit. Tests that replace the error handler restore it
-and cannot run concurrently with other global-state tests.
+The composition root does own two process-global OTel facilities in this
+slice: an error handler for asynchronous SDK and exporter failures, and an
+internal OTel logger. They are installed once for the process lifetime. The
+error handler emits only a stable `otel_async_error` code through `slog`; the
+internal logger emits only `otel_internal_message` or `otel_internal_error`.
+Neither forwards supplied error text, messages, names, or key-value fields.
+This prevents OTel's environment parsing and SDK diagnostics from echoing
+endpoints, headers, certificate paths, or other ambient values. Providers and
+propagators remain explicit. Tests that replace either global restore it and
+cannot run concurrently with other global-state tests.
 
 ## 4. Logging
 
@@ -406,9 +410,9 @@ The implementation must establish at least these properties:
     span, metric, log, or outbound propagation data.
 17. Handler panics expose neither their values, request-derived strings, peer
     addresses, nor standard-library stack payloads in telemetry or logs.
-18. The process-global OTel error handler emits only `otel_async_error`, does
-    not expose the supplied error text, and is restored by tests that replace
-    it.
+18. The process-global OTel error handler and internal logger emit only their
+    registered stable codes, expose none of their supplied text or fields, and
+    are restored by tests that replace them.
 19. Metric exemplars remain absent even when a measurement is recorded from a
     sampled trace carrying hostile attributes.
 
