@@ -13,6 +13,7 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
 - A chi router exposing `/healthz` and `/readyz`.
 - Tracked Staticcheck and govulncheck tools.
 - Local verification and a non-root container build.
+- GitHub Actions verification and ECR image publication.
 
 There is no transformation model, compiler, executor, sealed-checkpoint model,
 completeness profile, readiness assessment, worker, persistence adapter,
@@ -26,6 +27,7 @@ cmd/maiden-lane/main.go          CLI, process composition, server lifecycle
 internal/httpapi/router.go       HTTP transport routes and handlers
 Dockerfile                       non-root application image
 Makefile                         explicit local verification commands
+.github/workflows/pipeline.yml   CI and ECR publication
 ```
 
 Only implemented packages appear in this map.

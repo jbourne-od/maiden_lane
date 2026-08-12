@@ -1,0 +1,201 @@
+name: pipeline
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+concurrency:
+  group: pipeline-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify Go application
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify application
+        run: make verify
+
+  container:
+    name: Verify pull-request image
+    if: github.event_name == 'pull_request'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build and smoke-test image
+        run: make container-check IMAGE=maiden-lane:ci-${{ github.sha }}
+
+  publish:
+    name: Publish tested image to ECR
+    if: github.event_name == 'push'
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: ecr-${{ github.sha }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      LOCAL_IMAGE: maiden-lane:ci-${{ github.sha }}
+      SHA_TAG: sha-${{ github.sha }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Validate release configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variable in AWS_REGION AWS_ROLE_ARN ECR_REPOSITORY; do
+            if [[ -z "${!variable}" ]]; then
+              echo "missing required repository variable: ${variable}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@d539f0932e70871a027e9d5a9d8fc38589180a64 # v2.1.6
+
+      - name: Verify immutable ECR repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          mutability="$(
+            aws ecr describe-repositories \
+              --repository-names "$ECR_REPOSITORY" \
+              --query 'repositories[0].imageTagMutability' \
+              --output text
+          )"
+          if [[ "$mutability" != "IMMUTABLE" ]]; then
+            echo "ECR repository must enforce immutable tags; got $mutability" >&2
+            exit 1
+          fi
+
+      - name: Locate immutable commit image
+        id: existing
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          if aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$SHA_TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            docker pull "$ECR_REGISTRY/$ECR_REPOSITORY:$SHA_TAG"
+            docker tag "$ECR_REGISTRY/$ECR_REPOSITORY:$SHA_TAG" "$LOCAL_IMAGE"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            make container-build IMAGE="$LOCAL_IMAGE"
+          fi
+
+      - name: Smoke-test exact release image
+        run: make container-smoke IMAGE="$LOCAL_IMAGE"
+
+      - name: Publish immutable commit tag
+        if: steps.existing.outputs.exists != 'true'
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          remote="$ECR_REGISTRY/$ECR_REPOSITORY:$SHA_TAG"
+          docker tag "$LOCAL_IMAGE" "$remote"
+          docker push "$remote"
+
+      - name: Apply immutable version tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          VERSION_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          sha_digest="$(
+            aws ecr describe-images \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids imageTag="$SHA_TAG" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text
+          )"
+
+          version_digest="$(
+            aws ecr describe-images \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids imageTag="$VERSION_TAG" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text 2>/dev/null || true
+          )"
+          if [[ -n "$version_digest" && "$version_digest" != "None" ]]; then
+            if [[ "$version_digest" != "$sha_digest" ]]; then
+              echo "version tag $VERSION_TAG already points at a different digest" >&2
+              exit 1
+            fi
+            exit 0
+          fi
+
+          manifest="$(
+            aws ecr batch-get-image \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids imageTag="$SHA_TAG" \
+              --query 'images[0].imageManifest' \
+              --output text
+          )"
+          aws ecr put-image \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-tag "$VERSION_TAG" \
+            --image-manifest "$manifest" >/dev/null
+
+      - name: Report image digest
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+          digest="$(
+            aws ecr describe-images \
+              --repository-name "$ECR_REPOSITORY" \
+              --image-ids imageTag="$SHA_TAG" \
+              --query 'imageDetails[0].imageDigest' \
+              --output text
+          )"
+          {
+            echo "### Published image"
+            echo
+            echo "\`$ECR_REGISTRY/$ECR_REPOSITORY@$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"

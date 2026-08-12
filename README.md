@@ -46,8 +46,13 @@ Use the individual Make targets when diagnosing a particular stage; the
 
 ## CI/CD
 
-No remote pipeline exists at this revision. `make verify` and
-`make container-check` are the local release prerequisites.
+Pull requests run the complete Go verification sequence and a container health
+smoke test. Pushes to `main` and `v*` tags publish the tested image to Amazon
+ECR using GitHub OIDC. Publication requires the repository variables
+`AWS_REGION`, `AWS_ROLE_ARN`, and `ECR_REPOSITORY`.
+
+CD currently stops at immutable ECR publication. It does not deploy ECS or AWS
+Batch resources.
 
 ## Design references
 
