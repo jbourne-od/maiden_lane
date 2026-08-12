@@ -1,5 +1,7 @@
 # Maiden Lane
 
+![Maiden Lane deterministic transformation engine](docs/images/cover_image.png)
+
 Maiden Lane is a deterministic transformation system for compiling, executing,
 explaining, comparing, and gating mapper transformations. The repository
 currently contains the runnable HTTP application shell plus local build and
