@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"reflect"
 	"strings"
 	"testing"
@@ -417,6 +419,108 @@ func TestInstrumentHTTPRoutePanicAfterCommit(t *testing.T) {
 	assertAbsentFromSpan(t, ended[0], "hostile-panic-after-commit")
 }
 
+func TestInstrumentHTTPRouteLegacyPanicNil(t *testing.T) {
+	const childEnv = "MAIDEN_LANE_HTTP_PANIC_NIL_CHILD"
+	if os.Getenv(childEnv) == "1" {
+		_, router, spans, reader := newHTTPFixture(t, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			panic(nil)
+		}))
+
+		returned := false
+		var recovered any
+		func() {
+			defer func() { recovered = recover() }()
+			router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/fixtures/fixture-1", nil))
+			returned = true
+		}()
+		if returned || recovered != http.ErrAbortHandler {
+			t.Fatalf("panic(nil) terminal result = returned %t, recovered %#v; want http.ErrAbortHandler", returned, recovered)
+		}
+		ended := spans.Ended()
+		if len(ended) != 1 {
+			t.Fatalf("ended spans = %d, want 1", len(ended))
+		}
+		span := ended[0]
+		if span.Status().Code != codes.Error || span.Status().Description != "handler_panic" {
+			t.Fatalf("panic(nil) span status = %v, want handler_panic Error", span.Status())
+		}
+		attributes := spanAttributeMap(span)
+		if _, ok := attributes["http.response.status_code"]; ok {
+			t.Fatalf("uncommitted panic(nil) exported status: %#v", attributes)
+		}
+		if got := attributes["error.type"]; got != "handler_panic" {
+			t.Fatalf("panic(nil) error.type = %#v", got)
+		}
+		assertFinalizedHTTPMetrics(t, collectMetrics(t, reader), 0)
+		return
+	}
+
+	command := exec.Command(os.Args[0], "-test.run=^TestInstrumentHTTPRouteLegacyPanicNil$")
+	command.Env = append(withoutEnvironmentKeys(os.Environ(), "GODEBUG", childEnv),
+		"GODEBUG=panicnil=1", childEnv+"=1")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("panic(nil) child: %v\n%s", err, output)
+	}
+}
+
+func TestInstrumentHTTPRouteFlushCommitsStatusBeforePanic(t *testing.T) {
+	tests := []struct {
+		name    string
+		writer  func() http.ResponseWriter
+		handler http.Handler
+	}{
+		{
+			name:   "http flusher",
+			writer: func() http.ResponseWriter { return newOptionalResponseWriter() },
+			handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.(http.Flusher).Flush()
+				panic("hostile-panic-after-flush")
+			}),
+		},
+		{
+			name:   "response controller flush error",
+			writer: func() http.ResponseWriter { return newFlushErrorResponseWriter() },
+			handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				if err := http.NewResponseController(writer).Flush(); err != nil {
+					t.Fatalf("ResponseController.Flush: %v", err)
+				}
+				panic("hostile-panic-after-flush-error")
+			}),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, _, spans, reader := newHTTPFixture(t, test.handler)
+			handler := runtime.InstrumentHTTPRoute(http.MethodPost, fixturePattern, test.handler)
+			var recovered any
+			func() {
+				defer func() { recovered = recover() }()
+				handler.ServeHTTP(test.writer(), httptest.NewRequest(http.MethodPost, "/fixtures/fixture-1", nil))
+			}()
+			if recovered != http.ErrAbortHandler {
+				t.Fatalf("recovered panic = %#v, want http.ErrAbortHandler", recovered)
+			}
+			ended := spans.Ended()
+			if len(ended) != 1 {
+				t.Fatalf("ended spans = %d, want 1", len(ended))
+			}
+			span := ended[0]
+			if span.Status().Code != codes.Error || span.Status().Description != "handler_panic" {
+				t.Fatalf("flush panic span status = %v", span.Status())
+			}
+			attributes := spanAttributeMap(span)
+			if got := attributes["http.response.status_code"]; got != int64(http.StatusOK) {
+				t.Fatalf("flush panic status = %#v, want %d", got, http.StatusOK)
+			}
+			if got := attributes["error.type"]; got != "handler_panic" {
+				t.Fatalf("flush panic error.type = %#v", got)
+			}
+			assertFinalizedHTTPMetrics(t, collectMetrics(t, reader), http.StatusOK)
+		})
+	}
+}
+
 func TestInstrumentHTTPRoutePrivacy(t *testing.T) {
 	hostileValues := []string{
 		"hostile-path-value", "hostile-query-value", "hostile-header-value",
@@ -602,6 +706,47 @@ func collectResourceMetrics(t *testing.T, reader *sdkmetric.ManualReader) metric
 	return data
 }
 
+func assertFinalizedHTTPMetrics(t *testing.T, metrics map[string]metricdata.Metrics, status int) {
+	t.Helper()
+	if len(metrics) != 3 {
+		t.Fatalf("finalized metric count = %d, want 3: %#v", len(metrics), metrics)
+	}
+	for name, measurement := range metrics {
+		attributes, count, _ := histogramPoint(t, measurement)
+		if count != 1 {
+			t.Errorf("metric %q count = %d, want 1", name, count)
+		}
+		got, present := attributes["http.response.status_code"]
+		if status == 0 && present {
+			t.Errorf("metric %q exported an uncommitted status: %#v", name, attributes)
+		}
+		if status != 0 && got != int64(status) {
+			t.Errorf("metric %q status = %#v, want %d", name, got, status)
+		}
+	}
+}
+
+func withoutEnvironmentKeys(environment []string, keys ...string) []string {
+	prefixes := make([]string, len(keys))
+	for index, key := range keys {
+		prefixes[index] = key + "="
+	}
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		keep := true
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(entry, prefix) {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
 func histogramPoint(t *testing.T, measurement metricdata.Metrics) (map[string]any, uint64, int) {
 	t.Helper()
 	var attributes []attribute.KeyValue
@@ -684,7 +829,7 @@ func newOptionalResponseWriter() *optionalResponseWriter {
 	return &optionalResponseWriter{permissiveResponseWriter: newPermissiveResponseWriter()}
 }
 
-func (*optionalResponseWriter) Flush() {}
+func (w *optionalResponseWriter) Flush() { w.WriteHeader(http.StatusOK) }
 
 func (*optionalResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, http.ErrNotSupported
@@ -694,6 +839,17 @@ func (*optionalResponseWriter) Push(string, *http.PushOptions) error { return ht
 
 func (w *optionalResponseWriter) ReadFrom(reader io.Reader) (int64, error) {
 	return io.Copy(&w.body, reader)
+}
+
+type flushErrorResponseWriter struct{ *permissiveResponseWriter }
+
+func newFlushErrorResponseWriter() *flushErrorResponseWriter {
+	return &flushErrorResponseWriter{permissiveResponseWriter: newPermissiveResponseWriter()}
+}
+
+func (w *flushErrorResponseWriter) FlushError() error {
+	w.WriteHeader(http.StatusOK)
+	return nil
 }
 
 func assertExactSpanAttributes(t *testing.T, span sdktrace.ReadOnlySpan, want map[string]any) {

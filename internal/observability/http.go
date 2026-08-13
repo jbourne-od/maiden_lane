@@ -57,14 +57,18 @@ func (r *Runtime) InstrumentHTTPRoute(method, pattern string, next http.Handler)
 		request.Body = body
 		response := newResponseObservation(writer)
 		captured := httpsnoop.Metrics{Code: http.StatusOK}
+		completed := false
 
 		// This one defer is the terminal ownership boundary. In Go, ordinary
 		// statements after ServeHTTP do not run during panic unwinding, so the
 		// wrapper-owned clock, measurement recording, span end, and safe re-panic
 		// all belong here.
 		defer func() {
-			recovered := recover()
-			panicked := recovered != nil
+			// A legacy panic(nil) can make recover return nil. Whether ServeHTTP
+			// completed normally is therefore the only reliable panic signal; the
+			// recovered value is deliberately discarded to keep it out of telemetry.
+			_ = recover()
+			panicked := !completed
 			status := captured.Code
 			if panicked && !response.committed {
 				status = 0
@@ -104,6 +108,7 @@ func (r *Runtime) InstrumentHTTPRoute(method, pattern string, next http.Handler)
 
 		captured.CaptureMetrics(response.writer, func(observed http.ResponseWriter) {
 			next.ServeHTTP(observed, request)
+			completed = true
 		})
 	})
 }
@@ -261,6 +266,19 @@ func newResponseObservation(writer http.ResponseWriter) *responseObservation {
 				count, err := next(body)
 				observation.commit()
 				return count, err
+			}
+		},
+		Flush: func(next httpsnoop.FlushFunc) httpsnoop.FlushFunc {
+			return func() {
+				next()
+				observation.commit()
+			}
+		},
+		FlushError: func(next httpsnoop.FlushErrorFunc) httpsnoop.FlushErrorFunc {
+			return func() error {
+				err := next()
+				observation.commit()
+				return err
 			}
 		},
 		WriteString: func(next httpsnoop.WriteStringFunc) httpsnoop.WriteStringFunc {
