@@ -17,9 +17,20 @@ func TestApplyPatchStagesInsertBeforeRelationsAtomically(t *testing.T) {
 		RelateOperation(memberRelation(team.Ref(), drivers[0].Ref())),
 	)
 
-	after, failure := ApplyPatch(before, patch)
+	outcome, err := ApplyPatch(before, patch)
+	if err != nil {
+		t.Fatalf("ApplyPatch: %v", err)
+	}
+	after, failure := outcome.State(), outcome.Failure()
 	if failure != nil {
 		t.Fatalf("ApplyPatch: %s", failure.Code())
+	}
+	receipt, ok := outcome.Receipt()
+	if !ok {
+		t.Fatal("accepted patch returned no receipt")
+	}
+	if receipt.PatchDigest() != patch.Digest() || receipt.PredecessorStateDigest() != before.Digest() || receipt.ResultStateDigest() != after.Digest() {
+		t.Fatalf("receipt links = (%s, %s, %s); want (%s, %s, %s)", receipt.PatchDigest(), receipt.PredecessorStateDigest(), receipt.ResultStateDigest(), patch.Digest(), before.Digest(), after.Digest())
 	}
 	if _, ok := after.Entity(team.Ref()); !ok {
 		t.Fatal("inserted team missing")
@@ -69,9 +80,16 @@ func TestApplyPatchFailureReturnsByteIdenticalPredecessor(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			canonical := test.state.CanonicalBytes()
 			digest := test.state.Digest()
-			returned, failure := ApplyPatch(test.state, test.patch)
+			outcome, err := ApplyPatch(test.state, test.patch)
+			if err != nil {
+				t.Fatalf("ApplyPatch: %v", err)
+			}
+			returned, failure := outcome.State(), outcome.Failure()
 			if failure == nil {
 				t.Fatal("invalid patch committed")
+			}
+			if _, ok := outcome.Receipt(); ok {
+				t.Fatal("rejected patch returned an accepted receipt")
 			}
 			if failure.Code() != test.code {
 				t.Fatalf("failure code = %q; want %q", failure.Code(), test.code)
@@ -140,9 +158,16 @@ func TestApplyPatchReturnsExactClosedOperationCodes(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			returned, failure := ApplyPatch(test.state, test.patch)
+			outcome, err := ApplyPatch(test.state, test.patch)
+			if err != nil {
+				t.Fatalf("ApplyPatch: %v", err)
+			}
+			returned, failure := outcome.State(), outcome.Failure()
 			if failure == nil {
 				t.Fatal("invalid patch committed")
+			}
+			if _, ok := outcome.Receipt(); ok {
+				t.Fatal("rejected operation returned an accepted receipt")
 			}
 			if failure.Code() != test.code {
 				t.Fatalf("failure code = %q; want %q", failure.Code(), test.code)
@@ -151,6 +176,113 @@ func TestApplyPatchReturnsExactClosedOperationCodes(t *testing.T) {
 				t.Fatal("rejected operation changed predecessor")
 			}
 		})
+	}
+}
+
+// Production break caught: deferring operation/schema compatibility to final
+// state reconstruction could panic or misclassify malformed patch input as a
+// protected operation failure.
+func TestNewPatchRejectsSchemaInvalidOperations(t *testing.T) {
+	schema := fixtureSchemaForStateTests(t)
+	team := mustEntity(t, "team", testTeamID, map[FieldName]Value{"assignment_key": mustString(t, "X")})
+	driver := mustEntity(t, "driver", testDriverAID, nil)
+
+	tests := []struct {
+		name      string
+		operation Operation
+	}{
+		{
+			name: "insert field type",
+			operation: InsertOperation(mustEntity(t, "team", testTeamID, map[FieldName]Value{
+				"assignment_key": mustAtom(t, "X"),
+			})),
+		},
+		{
+			name:      "unknown relation kind",
+			operation: RelateOperation(Relation{Kind: "unknown", From: team.Ref(), To: driver.Ref()}),
+		},
+		{
+			name:      "relation endpoint kinds",
+			operation: RelateOperation(Relation{Kind: "member", From: driver.Ref(), To: team.Ref()}),
+		},
+		{
+			name: "unknown update field",
+			operation: UpdateOperation(team.Ref(), []FieldUpdate{{
+				Name: "unknown", Before: AbsentField(), After: mustString(t, "X"),
+			}}),
+		},
+		{
+			name: "update after-image type",
+			operation: UpdateOperation(team.Ref(), []FieldUpdate{{
+				Name: "elapsed_duration_hours", Before: AbsentField(), After: mustString(t, "ten"),
+			}}),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewPatch(schema, []Operation{test.operation}); err == nil {
+				t.Fatal("NewPatch accepted schema-invalid operation")
+			}
+		})
+	}
+}
+
+// Production break caught: applying a valid patch to a state under another
+// schema could reach final reconstruction and panic after staging changes.
+func TestApplyPatchSchemaMismatchReturnsErrorAndPredecessor(t *testing.T) {
+	before, team, _ := formTeamPatchFixture(t)
+	patch := mustPatch(t, InsertOperation(team))
+	alternate := fixtureSchemaWithExtraTeamField(t)
+	predecessor, err := NewState(alternate, before.InputLineageID(), before.Entities(), nil)
+	if err != nil {
+		t.Fatalf("NewState(alternate): %v", err)
+	}
+
+	outcome, err := ApplyPatch(predecessor, patch)
+	if err == nil {
+		t.Fatal("ApplyPatch accepted patch/state schema mismatch")
+	}
+	if outcome.Failure() != nil {
+		t.Fatalf("schema mismatch returned protected failure %q", outcome.Failure().Code())
+	}
+	if _, ok := outcome.Receipt(); ok {
+		t.Fatal("schema mismatch returned accepted receipt")
+	}
+	if !bytes.Equal(outcome.State().CanonicalBytes(), predecessor.CanonicalBytes()) || outcome.State().Digest() != predecessor.Digest() {
+		t.Fatal("schema mismatch did not return exact predecessor")
+	}
+}
+
+// Production break caught: mutating the staged field map before checking every
+// field image could leak an earlier update when a later before-image rejects.
+func TestApplyPatchLaterUpdateBeforeImageMismatchLeavesEveryFieldUnchanged(t *testing.T) {
+	before, team, _ := formTeamPatchFixture(t)
+	predecessor := stateWithTeam(t, before, team, nil)
+	patch := mustPatch(t, UpdateOperation(team.Ref(), []FieldUpdate{
+		{Name: "aggregation_anchor", Before: AbsentField(), After: mustAtom(t, "T0")},
+		{Name: "assignment_key", Before: PresentField(mustString(t, "wrong")), After: mustString(t, "Y")},
+	}))
+
+	outcome, err := ApplyPatch(predecessor, patch)
+	if err != nil {
+		t.Fatalf("ApplyPatch: %v", err)
+	}
+	if failure := outcome.Failure(); failure == nil || failure.Code() != OperationBeforeImageMismatch {
+		t.Fatalf("failure = %#v; want %q", failure, OperationBeforeImageMismatch)
+	}
+	if _, ok := outcome.Receipt(); ok {
+		t.Fatal("rejected multi-field update returned receipt")
+	}
+	if !bytes.Equal(outcome.State().CanonicalBytes(), predecessor.CanonicalBytes()) || outcome.State().Digest() != predecessor.Digest() {
+		t.Fatal("later before-image failure leaked an earlier field update")
+	}
+	stored, ok := outcome.State().Entity(team.Ref())
+	if !ok {
+		t.Fatal("team missing from returned predecessor")
+	}
+	if _, present := stored.Field("aggregation_anchor"); present {
+		t.Fatal("rejected earlier field update became visible")
 	}
 }
 
@@ -213,7 +345,7 @@ func TestPatchDefensivelyCopiesInputsAndGetterResults(t *testing.T) {
 	_, team, _ := formTeamPatchFixture(t)
 	changes := []FieldUpdate{{Name: "aggregation_anchor", Before: AbsentField(), After: mustAtom(t, "T0")}}
 	operations := []Operation{UpdateOperation(team.Ref(), changes)}
-	patch, err := NewPatch(operations)
+	patch, err := NewPatch(fixtureSchemaForStateTests(t), operations)
 	if err != nil {
 		t.Fatalf("NewPatch: %v", err)
 	}
@@ -244,10 +376,10 @@ func TestPatchDefensivelyCopiesInputsAndGetterResults(t *testing.T) {
 // structural provenance.
 func TestPatchCanonicalGoldenVectors(t *testing.T) {
 	const (
-		wantT1Hex                = "00000000000000146d616964656e2d6c616e652e70617463682e763100000000000000030100000000000000047465616d33333333333333333333333333333333333333333333333333333333333333330000000000000001000000000000000e61737369676e6d656e745f6b6579010000000000000001580200000000000000066d656d62657200000000000000047465616d3333333333333333333333333333333333333333333333333333333333333333000000000000000664726976657211111111111111111111111111111111111111111111111111111111111111110200000000000000066d656d62657200000000000000047465616d333333333333333333333333333333333333333333333333333333333333333300000000000000066472697665722222222222222222222222222222222222222222222222222222222222222222"
-		wantT1Digest PatchDigest = "sha256:0c9f251213f646dfc407dcd9595fd489bdd4ac6f477dc593f5588208698de2d2"
-		wantT2Hex                = "00000000000000146d616964656e2d6c616e652e70617463682e763100000000000000010300000000000000047465616d3333333333333333333333333333333333333333333333333333333333333333000000000000000300000000000000126167677265676174696f6e5f616e63686f72000200000000000000025430000000000000001664726976696e675f6475726174696f6e5f686f757273000300000000000000080000000000000016656c61707365645f6475726174696f6e5f686f7572730003000000000000000a"
-		wantT2Digest PatchDigest = "sha256:758fc7285b6639c085fda4822faeece462b5931a64180806acade3cdd8e1e818"
+		wantT1Hex                = "00000000000000146d616964656e2d6c616e652e70617463682e7631daa9e09c5060542711a13d06bb64a6fe6f84b93664e1698245e5a3e06eab628d00000000000000030100000000000000047465616d33333333333333333333333333333333333333333333333333333333333333330000000000000001000000000000000e61737369676e6d656e745f6b6579010000000000000001580200000000000000066d656d62657200000000000000047465616d3333333333333333333333333333333333333333333333333333333333333333000000000000000664726976657211111111111111111111111111111111111111111111111111111111111111110200000000000000066d656d62657200000000000000047465616d333333333333333333333333333333333333333333333333333333333333333300000000000000066472697665722222222222222222222222222222222222222222222222222222222222222222"
+		wantT1Digest PatchDigest = "sha256:7a5562086adb2fb8aa1eb83cf98145def294f57997ce78023287bca70989afa5"
+		wantT2Hex                = "00000000000000146d616964656e2d6c616e652e70617463682e7631daa9e09c5060542711a13d06bb64a6fe6f84b93664e1698245e5a3e06eab628d00000000000000010300000000000000047465616d3333333333333333333333333333333333333333333333333333333333333333000000000000000300000000000000126167677265676174696f6e5f616e63686f72000200000000000000025430000000000000001664726976696e675f6475726174696f6e5f686f757273000300000000000000080000000000000016656c61707365645f6475726174696f6e5f686f7572730003000000000000000a"
+		wantT2Digest PatchDigest = "sha256:0a69a112e4d4b10d8902c3f9336146b614fad91b3e8a989912eb3e47263c01f2"
 	)
 
 	_, team, drivers := formTeamPatchFixture(t)
@@ -285,11 +417,20 @@ func TestUndoPatchReproducesCanonicalPredecessorForGeneratedLawfulPatches(t *tes
 			InsertOperation(team),
 		)
 
-		after, failure := ApplyPatch(predecessor, patch)
+		applyOutcome, err := ApplyPatch(predecessor, patch)
+		if err != nil {
+			t.Fatalf("sample %d ApplyPatch: %v", sample, err)
+		}
+		after, failure := applyOutcome.State(), applyOutcome.Failure()
 		if failure != nil {
 			t.Fatalf("sample %d ApplyPatch: %s", sample, failure.Code())
 		}
-		reproduced, failure := UndoPatch(after, patch)
+		receipt := mustAcceptedReceipt(t, applyOutcome)
+		undoOutcome, err := UndoPatch(after, patch, receipt)
+		if err != nil {
+			t.Fatalf("sample %d UndoPatch: %v", sample, err)
+		}
+		reproduced, failure := undoOutcome.State(), undoOutcome.Failure()
 		if failure != nil {
 			t.Fatalf("sample %d UndoPatch: %s", sample, failure.Code())
 		}
@@ -309,11 +450,19 @@ func TestUndoPatchRestoresAbsentUpdateBeforeImages(t *testing.T) {
 		{Name: "elapsed_duration_hours", Before: AbsentField(), After: NewInt64Value(10)},
 		{Name: "driving_duration_hours", Before: AbsentField(), After: NewInt64Value(8)},
 	}))
-	after, failure := ApplyPatch(predecessor, patch)
+	applyOutcome, err := ApplyPatch(predecessor, patch)
+	if err != nil {
+		t.Fatalf("ApplyPatch: %v", err)
+	}
+	after, failure := applyOutcome.State(), applyOutcome.Failure()
 	if failure != nil {
 		t.Fatalf("ApplyPatch: %s", failure.Code())
 	}
-	reproduced, failure := UndoPatch(after, patch)
+	undoOutcome, err := UndoPatch(after, patch, mustAcceptedReceipt(t, applyOutcome))
+	if err != nil {
+		t.Fatalf("UndoPatch: %v", err)
+	}
+	reproduced, failure := undoOutcome.State(), undoOutcome.Failure()
 	if failure != nil {
 		t.Fatalf("UndoPatch: %s", failure.Code())
 	}
@@ -324,13 +473,17 @@ func TestUndoPatchRestoresAbsentUpdateBeforeImages(t *testing.T) {
 
 // Production break caught: inverse application that trusts the patch without
 // checking its accepted after-image could erase or overwrite a later state.
-func TestUndoPatchAfterImageMismatchReturnsCurrentStateUnchanged(t *testing.T) {
+func TestUndoPatchCurrentStateReceiptMismatchReturnsCurrentStateUnchanged(t *testing.T) {
 	before, team, _ := formTeamPatchFixture(t)
 	predecessor := stateWithTeam(t, before, team, nil)
 	patch := mustPatch(t, UpdateOperation(team.Ref(), []FieldUpdate{{
 		Name: "aggregation_anchor", Before: AbsentField(), After: mustAtom(t, "T0"),
 	}}))
-	after, failure := ApplyPatch(predecessor, patch)
+	applyOutcome, err := ApplyPatch(predecessor, patch)
+	if err != nil {
+		t.Fatalf("ApplyPatch: %v", err)
+	}
+	after, failure := applyOutcome.State(), applyOutcome.Failure()
 	if failure != nil {
 		t.Fatalf("ApplyPatch: %s", failure.Code())
 	}
@@ -343,15 +496,65 @@ func TestUndoPatchAfterImageMismatchReturnsCurrentStateUnchanged(t *testing.T) {
 	tamperedTeam = mustEntity(t, "team", testTeamID, tamperedFields)
 	tampered := replaceEntityInState(t, after, tamperedTeam)
 
-	returned, failure := UndoPatch(tampered, patch)
-	if failure == nil {
-		t.Fatal("UndoPatch accepted changed after-image")
+	undoOutcome, err := UndoPatch(tampered, patch, mustAcceptedReceipt(t, applyOutcome))
+	if err == nil {
+		t.Fatal("UndoPatch accepted current state that does not match receipt result")
 	}
-	if failure.Code() != OperationBeforeImageMismatch {
-		t.Fatalf("failure code = %q; want %q", failure.Code(), OperationBeforeImageMismatch)
+	if failure := undoOutcome.Failure(); failure != nil {
+		t.Fatalf("receipt-link error returned inaccurate protected code %q", failure.Code())
 	}
+	returned := undoOutcome.State()
 	if !bytes.Equal(returned.CanonicalBytes(), tampered.CanonicalBytes()) || returned.Digest() != tampered.Digest() {
 		t.Fatal("rejected inverse changed current state")
+	}
+}
+
+// Production break caught: accepting a patch as sufficient undo authority
+// would delete an independently existing identical entity that this patch was
+// never proven to have inserted.
+func TestUndoPatchRequiresAcceptedReceiptBeforeRemovingIdenticalEntity(t *testing.T) {
+	before, team, _ := formTeamPatchFixture(t)
+	patch := mustPatch(t, InsertOperation(team))
+	independent := stateWithTeam(t, before, team, nil)
+
+	outcome, err := UndoPatch(independent, patch, AcceptedPatchReceipt{})
+	if err == nil {
+		t.Fatal("UndoPatch removed entity without accepted-application evidence")
+	}
+	if outcome.Failure() != nil {
+		t.Fatalf("missing receipt returned protected failure %q", outcome.Failure().Code())
+	}
+	if !bytes.Equal(outcome.State().CanonicalBytes(), independent.CanonicalBytes()) || outcome.State().Digest() != independent.Digest() {
+		t.Fatal("missing receipt changed independent current state")
+	}
+	if _, ok := outcome.State().Entity(team.Ref()); !ok {
+		t.Fatal("missing receipt deleted independently existing team")
+	}
+}
+
+// Production break caught: a receipt accepted for one patch must not authorize
+// destructive inverse application of another patch.
+func TestUndoPatchRejectsMismatchedPatchReceipt(t *testing.T) {
+	before, team, drivers := formTeamPatchFixture(t)
+	acceptedPatch := mustPatch(t, InsertOperation(team))
+	applyOutcome, err := ApplyPatch(before, acceptedPatch)
+	if err != nil || applyOutcome.Failure() != nil {
+		t.Fatalf("ApplyPatch = (%#v, %v)", applyOutcome.Failure(), err)
+	}
+	otherPatch := mustPatch(t,
+		InsertOperation(team),
+		RelateOperation(memberRelation(team.Ref(), drivers[0].Ref())),
+	)
+
+	outcome, err := UndoPatch(applyOutcome.State(), otherPatch, mustAcceptedReceipt(t, applyOutcome))
+	if err == nil {
+		t.Fatal("UndoPatch accepted receipt for another patch")
+	}
+	if outcome.Failure() != nil {
+		t.Fatalf("receipt mismatch returned protected failure %q", outcome.Failure().Code())
+	}
+	if !bytes.Equal(outcome.State().CanonicalBytes(), applyOutcome.State().CanonicalBytes()) || outcome.State().Digest() != applyOutcome.State().Digest() {
+		t.Fatal("mismatched receipt changed current state")
 	}
 }
 
@@ -395,11 +598,20 @@ func stateHasRelation(state State, wanted Relation) bool {
 
 func mustPatch(t *testing.T, operations ...Operation) Patch {
 	t.Helper()
-	patch, err := NewPatch(operations)
+	patch, err := NewPatch(fixtureSchemaForStateTests(t), operations)
 	if err != nil {
 		t.Fatalf("NewPatch: %v", err)
 	}
 	return patch
+}
+
+func mustAcceptedReceipt(t *testing.T, outcome PatchOutcome) AcceptedPatchReceipt {
+	t.Helper()
+	receipt, ok := outcome.Receipt()
+	if !ok {
+		t.Fatal("accepted patch returned no receipt")
+	}
+	return receipt
 }
 
 func assertPatchVector(t *testing.T, name string, patch Patch, wantHex string, wantDigest PatchDigest) {
@@ -431,4 +643,20 @@ func replaceEntityInState(t *testing.T, state State, replacement Entity) State {
 		t.Fatalf("NewState replacement: %v", err)
 	}
 	return rebuilt
+}
+
+func fixtureSchemaWithExtraTeamField(t *testing.T) Schema {
+	t.Helper()
+	base := fixtureSchemaForStateTests(t).Declaration()
+	entities := base.EntityDeclarations()
+	for index := range entities {
+		if entities[index].Kind == "team" {
+			entities[index].Fields = append(entities[index].Fields, FieldDeclaration{Name: "extra", Kind: ValueString})
+		}
+	}
+	schema, err := NewSchema(entities, base.RelationDeclarations())
+	if err != nil {
+		t.Fatalf("NewSchema(extra field): %v", err)
+	}
+	return schema
 }

@@ -24,9 +24,10 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
 - Deterministic compilation of the walking skeleton's two closed
   transformation declarations, checkpoint boundaries, invariant obligations,
   and completeness-profile declarations.
-- An immutable, content-addressed atomic patch subset containing exactly
-  `Insert`, `Relate`, and `Update`, with closed operation failures, explicit
-  update before-images, and verified inverse application.
+- An immutable, schema-bound, content-addressed atomic patch subset containing
+  exactly `Insert`, `Relate`, and `Update`, with closed operation failures,
+  explicit update before-images, success-only accepted-application receipts,
+  and receipt-authorized verified inverse application.
 
 There is no rule executor, accepted semantic journal, sealed-checkpoint model,
 readiness assessment, worker, persistence adapter, promotion gate, semantic
@@ -87,7 +88,10 @@ cardinality boundary.
   packages must not import it or make decisions from telemetry state.
 - `internal/semantic` is pure and standard-library-only. Its constructors clone
   caller-owned maps and slices, its getters return defensive copies, and its
-  canonical patch order stages inserts before relations before updates.
+  canonical patch order stages inserts before relations before updates. Patch
+  construction validates every operation against its pinned schema; malformed
+  or schema-incompatible calls are ordinary errors rather than protected
+  semantic failures.
 - `context.Context` carries cancellation across call boundaries. It is passed
   explicitly rather than discovered globally. Here it carries cancellation and
   trace context, never Maiden Lane transformation semantics.

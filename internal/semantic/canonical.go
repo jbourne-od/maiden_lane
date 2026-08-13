@@ -42,7 +42,8 @@ import (
 //
 // Patch artifact encoding table (v1):
 //
-//   patch:        tag, operation count, operations in canonical rank/key order
+//   patch:        tag, schema digest, operation count, operations in canonical
+//                 rank/key order
 //   insert:       Insert tag, complete entity(kind, ID, sorted fields)
 //   relate:       Relate tag, relation(kind, from ref, to ref)
 //   update:       Update tag, target ref, field count, fields sorted by name;
@@ -412,9 +413,10 @@ func encodeState(state State) ([]byte, error) {
 	return encoder.bytes()
 }
 
-func encodePatch(operations []Operation) ([]byte, error) {
+func encodePatch(schema SchemaDigest, operations []Operation) ([]byte, error) {
 	var encoder canonicalEncoder
 	encoder.tag(patchDomainTag)
+	encoder.digest(string(schema))
 	encoder.uint64(uint64(len(operations)))
 	for _, operation := range operations {
 		encoder.byte(byte(operation.kind))

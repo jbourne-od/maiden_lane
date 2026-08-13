@@ -149,13 +149,17 @@ func (o Operation) Update() (Update, bool) {
 
 // Patch is an immutable, content-addressed atomic structural proposal.
 type Patch struct {
-	operations []Operation
-	canonical  []byte
-	digest     PatchDigest
+	schemaDigest SchemaDigest
+	operations   []Operation
+	canonical    []byte
+	digest       PatchDigest
 }
 
 // NewPatch validates and defensively copies the supported operation subset.
-func NewPatch(operations []Operation) (Patch, error) {
+func NewPatch(schema Schema, operations []Operation) (Patch, error) {
+	if len(schema.canonical) == 0 {
+		return Patch{}, fmt.Errorf("patch schema is not initialized")
+	}
 	if len(operations) == 0 {
 		return Patch{}, fmt.Errorf("patch contains no operations")
 	}
@@ -171,20 +175,28 @@ func NewPatch(operations []Operation) (Patch, error) {
 		if err := validateOperation(normalized[index]); err != nil {
 			return Patch{}, fmt.Errorf("operation %d: %w", index, err)
 		}
+		if err := validateOperationAgainstSchema(schema, normalized[index]); err != nil {
+			return Patch{}, fmt.Errorf("operation %d: %w", index, err)
+		}
 	}
 	sort.Slice(normalized, func(i, j int) bool {
 		return compareOperations(normalized[i], normalized[j]) < 0
 	})
-	canonical, err := encodePatch(normalized)
+	canonical, err := encodePatch(schema.Digest(), normalized)
 	if err != nil {
 		return Patch{}, fmt.Errorf("canonicalize patch: %w", err)
 	}
 	return Patch{
-		operations: normalized,
-		canonical:  canonical,
-		digest:     PatchDigest(canonicalDigest(canonical)),
+		schemaDigest: schema.Digest(),
+		operations:   normalized,
+		canonical:    canonical,
+		digest:       PatchDigest(canonicalDigest(canonical)),
 	}, nil
 }
+
+// SchemaDigest returns the immutable schema identity against which every
+// operation was validated.
+func (p Patch) SchemaDigest() SchemaDigest { return p.schemaDigest }
 
 // Operations returns defensive copies in canonical patch order.
 func (p Patch) Operations() []Operation { return cloneOperations(p.operations) }
@@ -195,9 +207,61 @@ func (p Patch) CanonicalBytes() []byte { return bytes.Clone(p.canonical) }
 // Digest returns the content identity of the complete atomic patch.
 func (p Patch) Digest() PatchDigest { return p.digest }
 
+// AcceptedPatchReceipt is immutable proof that one exact patch committed from
+// one predecessor digest to one result digest. Only ApplyPatch can construct a
+// non-zero accepted receipt.
+type AcceptedPatchReceipt struct {
+	accepted          bool
+	patchDigest       PatchDigest
+	predecessorDigest StateDigest
+	resultDigest      StateDigest
+}
+
+// PatchDigest returns the patch committed by this receipt.
+func (r AcceptedPatchReceipt) PatchDigest() PatchDigest { return r.patchDigest }
+
+// PredecessorStateDigest returns the authoritative state before application.
+func (r AcceptedPatchReceipt) PredecessorStateDigest() StateDigest { return r.predecessorDigest }
+
+// ResultStateDigest returns the authoritative accepted result state.
+func (r AcceptedPatchReceipt) ResultStateDigest() StateDigest { return r.resultDigest }
+
+// PatchOutcome separates an immutable state frontier from an optional
+// protected rejection and the success-only accepted-application receipt.
+type PatchOutcome struct {
+	state   State
+	failure *OperationFailure
+	receipt *AcceptedPatchReceipt
+}
+
+// State returns the accepted result on success or the exact input state on any
+// protected rejection or Go error.
+func (o PatchOutcome) State() State { return o.state }
+
+// Failure returns a defensive copy of the protected operation rejection.
+func (o PatchOutcome) Failure() *OperationFailure {
+	if o.failure == nil {
+		return nil
+	}
+	result := *o.failure
+	return &result
+}
+
+// Receipt returns immutable accepted-application evidence only after success.
+func (o PatchOutcome) Receipt() (AcceptedPatchReceipt, bool) {
+	if o.receipt == nil {
+		return AcceptedPatchReceipt{}, false
+	}
+	return *o.receipt, true
+}
+
 // ApplyPatch validates operations against an isolated candidate and returns it
 // only after every operation and final graph reconstruction succeeds.
-func ApplyPatch(predecessor State, patch Patch) (State, *OperationFailure) {
+func ApplyPatch(predecessor State, patch Patch) (PatchOutcome, error) {
+	base := PatchOutcome{state: predecessor}
+	if err := validateStatePatchLink(predecessor, patch); err != nil {
+		return base, err
+	}
 	entities := predecessor.Entities()
 	relations := predecessor.Relations()
 
@@ -206,46 +270,58 @@ func ApplyPatch(predecessor State, patch Patch) (State, *OperationFailure) {
 		case OperationInsert:
 			entity := operation.insert.entity
 			if findEntityIndex(entities, entity.ref) >= 0 {
-				return predecessor, operationFailure(OperationEntityIdentityCollision)
+				return rejectedPatchOutcome(predecessor, OperationEntityIdentityCollision), nil
 			}
 			entities = append(entities, cloneEntity(entity))
 		case OperationRelate:
 			relation := operation.relate.relation
 			if slices.Contains(relations, relation) {
-				return predecessor, operationFailure(OperationRelationAlreadyPresent)
+				return rejectedPatchOutcome(predecessor, OperationRelationAlreadyPresent), nil
 			}
 			if findEntityIndex(entities, relation.From) < 0 || findEntityIndex(entities, relation.To) < 0 {
-				return predecessor, operationFailure(OperationRelationEndpointMissing)
+				return rejectedPatchOutcome(predecessor, OperationRelationEndpointMissing), nil
 			}
 			relations = append(relations, relation)
 		case OperationUpdate:
 			index := findEntityIndex(entities, operation.update.target)
 			if index < 0 {
-				return predecessor, operationFailure(OperationUpdateTargetNotFound)
+				return rejectedPatchOutcome(predecessor, OperationUpdateTargetNotFound), nil
 			}
 			fields := cloneFields(entities[index].fields)
 			for _, change := range operation.update.fields {
 				actual, present := fields[change.Name]
 				if present != change.Before.present || (present && !actual.Equal(change.Before.value)) {
-					return predecessor, operationFailure(OperationBeforeImageMismatch)
+					return rejectedPatchOutcome(predecessor, OperationBeforeImageMismatch), nil
 				}
+			}
+			for _, change := range operation.update.fields {
 				fields[change.Name] = change.After
 			}
 			entities[index] = Entity{ref: entities[index].ref, fields: fields}
+		default:
+			return base, fmt.Errorf("apply patch: unknown operation kind %d", operation.kind)
 		}
 	}
 
 	candidate, err := NewState(predecessor.Schema(), predecessor.InputLineageID(), entities, relations)
 	if err != nil {
-		panic(fmt.Sprintf("semantic: validated patch produced invalid state: %v", err))
+		return base, fmt.Errorf("apply patch candidate: %w", err)
 	}
-	return candidate, nil
+	receipt := acceptedPatchReceipt(patch.Digest(), predecessor.Digest(), candidate.Digest())
+	return PatchOutcome{state: candidate, receipt: &receipt}, nil
 }
 
 // UndoPatch verifies the accepted after-image and applies the inverse in
 // reverse canonical operation order. A mismatch returns the supplied current
 // state, never a partially undone candidate.
-func UndoPatch(current State, patch Patch) (State, *OperationFailure) {
+func UndoPatch(current State, patch Patch, receipt AcceptedPatchReceipt) (PatchOutcome, error) {
+	base := PatchOutcome{state: current}
+	if err := validateStatePatchLink(current, patch); err != nil {
+		return base, err
+	}
+	if err := validateAcceptedReceipt(current, patch, receipt); err != nil {
+		return base, err
+	}
 	entities := current.Entities()
 	relations := current.Relations()
 
@@ -255,13 +331,13 @@ func UndoPatch(current State, patch Patch) (State, *OperationFailure) {
 		case OperationUpdate:
 			index := findEntityIndex(entities, operation.update.target)
 			if index < 0 {
-				return current, operationFailure(OperationUpdateTargetNotFound)
+				return rejectedPatchOutcome(current, OperationUpdateTargetNotFound), nil
 			}
 			fields := cloneFields(entities[index].fields)
 			for _, change := range operation.update.fields {
 				actual, present := fields[change.Name]
 				if !present || !actual.Equal(change.After) {
-					return current, operationFailure(OperationBeforeImageMismatch)
+					return rejectedPatchOutcome(current, OperationBeforeImageMismatch), nil
 				}
 			}
 			for _, change := range operation.update.fields {
@@ -276,29 +352,77 @@ func UndoPatch(current State, patch Patch) (State, *OperationFailure) {
 			relation := operation.relate.relation
 			index := slices.Index(relations, relation)
 			if index < 0 {
-				return current, operationFailure(OperationBeforeImageMismatch)
+				return rejectedPatchOutcome(current, OperationBeforeImageMismatch), nil
 			}
 			relations = slices.Delete(relations, index, index+1)
 		case OperationInsert:
 			inserted := operation.insert.entity
 			index := findEntityIndex(entities, inserted.ref)
 			if index < 0 || !entitiesEqual(entities[index], inserted) {
-				return current, operationFailure(OperationBeforeImageMismatch)
+				return rejectedPatchOutcome(current, OperationBeforeImageMismatch), nil
 			}
 			for _, relation := range relations {
 				if relation.From == inserted.ref || relation.To == inserted.ref {
-					return current, operationFailure(OperationBeforeImageMismatch)
+					return rejectedPatchOutcome(current, OperationBeforeImageMismatch), nil
 				}
 			}
 			entities = slices.Delete(entities, index, index+1)
+		default:
+			return base, fmt.Errorf("undo patch: unknown operation kind %d", operation.kind)
 		}
 	}
 
 	predecessor, err := NewState(current.Schema(), current.InputLineageID(), entities, relations)
 	if err != nil {
-		panic(fmt.Sprintf("semantic: validated inverse produced invalid state: %v", err))
+		return base, fmt.Errorf("undo patch predecessor: %w", err)
 	}
-	return predecessor, nil
+	if predecessor.Digest() != receipt.predecessorDigest {
+		return base, fmt.Errorf("undo patch: reconstructed predecessor digest does not match accepted receipt")
+	}
+	return PatchOutcome{state: predecessor}, nil
+}
+
+func acceptedPatchReceipt(patch PatchDigest, predecessor, result StateDigest) AcceptedPatchReceipt {
+	return AcceptedPatchReceipt{accepted: true, patchDigest: patch, predecessorDigest: predecessor, resultDigest: result}
+}
+
+func rejectedPatchOutcome(state State, code OperationInvariantCode) PatchOutcome {
+	return PatchOutcome{state: state, failure: operationFailure(code)}
+}
+
+func validateStatePatchLink(state State, patch Patch) error {
+	if len(state.canonical) == 0 {
+		return fmt.Errorf("patch state is not initialized")
+	}
+	if len(patch.canonical) == 0 || patch.digest == "" || patch.schemaDigest == "" {
+		return fmt.Errorf("patch is not initialized")
+	}
+	if state.Schema().Digest() != patch.schemaDigest {
+		return fmt.Errorf("patch schema does not match state schema")
+	}
+	return nil
+}
+
+func validateAcceptedReceipt(current State, patch Patch, receipt AcceptedPatchReceipt) error {
+	if !receipt.accepted {
+		return fmt.Errorf("undo patch requires an accepted-application receipt")
+	}
+	if _, err := decodeDigest(string(receipt.patchDigest)); err != nil {
+		return fmt.Errorf("accepted receipt patch digest: %w", err)
+	}
+	if _, err := decodeDigest(string(receipt.predecessorDigest)); err != nil {
+		return fmt.Errorf("accepted receipt predecessor digest: %w", err)
+	}
+	if _, err := decodeDigest(string(receipt.resultDigest)); err != nil {
+		return fmt.Errorf("accepted receipt result digest: %w", err)
+	}
+	if receipt.patchDigest != patch.Digest() {
+		return fmt.Errorf("accepted receipt patch digest does not match patch")
+	}
+	if receipt.resultDigest != current.Digest() {
+		return fmt.Errorf("accepted receipt result digest does not match current state")
+	}
+	return nil
 }
 
 func operationFailure(code OperationInvariantCode) *OperationFailure {
@@ -393,6 +517,48 @@ func validateOperation(operation Operation) error {
 			}
 			if !change.After.Valid() {
 				return fmt.Errorf("update field %q has invalid after-image", change.Name)
+			}
+		}
+	default:
+		return fmt.Errorf("unknown operation kind %d", operation.kind)
+	}
+	return nil
+}
+
+func validateOperationAgainstSchema(schema Schema, operation Operation) error {
+	switch operation.kind {
+	case OperationInsert:
+		declaration, ok := schema.entityDeclaration(operation.insert.entity.ref.Kind)
+		if !ok {
+			return fmt.Errorf("insert entity kind is not declared by patch schema")
+		}
+		if err := validateEntityFields(operation.insert.entity, declaration); err != nil {
+			return fmt.Errorf("insert entity is incompatible with patch schema: %w", err)
+		}
+	case OperationRelate:
+		relation := operation.relate.relation
+		declaration, ok := schema.relationDeclaration(relation.Kind)
+		if !ok {
+			return fmt.Errorf("relation kind is not declared by patch schema")
+		}
+		if relation.From.Kind != declaration.FromKind || relation.To.Kind != declaration.ToKind {
+			return fmt.Errorf("relation endpoint kinds do not match patch schema")
+		}
+	case OperationUpdate:
+		declaration, ok := schema.entityDeclaration(operation.update.target.Kind)
+		if !ok {
+			return fmt.Errorf("update target kind is not declared by patch schema")
+		}
+		for _, change := range operation.update.fields {
+			field, ok := findFieldDeclaration(declaration.Fields, change.Name)
+			if !ok {
+				return fmt.Errorf("update field %q is not declared by patch schema", change.Name)
+			}
+			if change.Before.present && change.Before.value.Kind() != field.Kind {
+				return fmt.Errorf("update field %q before-image kind does not match patch schema", change.Name)
+			}
+			if change.After.Kind() != field.Kind {
+				return fmt.Errorf("update field %q after-image kind does not match patch schema", change.Name)
 			}
 		}
 	default:
