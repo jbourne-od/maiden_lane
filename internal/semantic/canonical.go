@@ -23,17 +23,39 @@ import (
 //                 relations(kind, from ref(kind+digest), to ref(kind+digest))
 //   world:        tag, sorted closed references(kind byte, content digest)
 //
+// Compiler artifact encoding table (v1):
+//
+//   ruleset:      tag, sorted complete transformation declarations, sorted
+//                 compiler-derived invariant declarations, sorted checkpoint
+//                 declarations
+//   compiler input: tag, schema digest, ruleset digest, compiler-semantics
+//                 version, sorted complete profile source declarations
+//   plan:         tag, schema digest, ruleset digest, compiler-semantics
+//                 version, dependency-ordered compiled transformations
+//                 (complete source declaration, derived reads/writes/accesses,
+//                 dependencies, level, derived invariants), prefix-ordered
+//                 checkpoints, required provenance policy
+//   profile:      tag, compiler-semantics version, schema digest, normalized
+//                 complete profile declaration, sorted implication proofs
+//   compile failure: tag, compiler-input digest, INVALID_PLAN kind, sorted
+//                 diagnostics(code, subject key, detail key)
+//
 // Tags and semantic strings are uint64-big-endian length-prefixed exact UTF-8
 // bytes. Counts are uint64 big endian. Int64 values use big-endian two's
 // complement. Digests are 32 raw bytes decoded from validated lowercase
 // sha256:<hex> strings. Optional/Boolean markers are exactly one byte, 0 or 1.
 
 const (
-	lineageRootDomainTag  = "maiden-lane.lineage-root.v1"
-	sourceEntityDomainTag = "maiden-lane.source-entity-id.v1"
-	schemaDomainTag       = "maiden-lane.schema.v1"
-	stateDomainTag        = "maiden-lane.state.v1"
-	worldDomainTag        = "maiden-lane.world.v1"
+	lineageRootDomainTag        = "maiden-lane.lineage-root.v1"
+	sourceEntityDomainTag       = "maiden-lane.source-entity-id.v1"
+	schemaDomainTag             = "maiden-lane.schema.v1"
+	stateDomainTag              = "maiden-lane.state.v1"
+	worldDomainTag              = "maiden-lane.world.v1"
+	rulesetDomainTag            = "maiden-lane.ruleset.v1"
+	compilationInputDomainTag   = "maiden-lane.compilation-input.v1"
+	planDomainTag               = "maiden-lane.plan.v1"
+	compiledProfileDomainTag    = "maiden-lane.compiled-profile.v1"
+	compilationFailureDomainTag = "maiden-lane.compilation-failure.v1"
 )
 
 // contentHasher hashes bytes whose semantic meaning and canonical order have
@@ -410,4 +432,208 @@ func sortedFieldNames(fields map[FieldName]Value) []FieldName {
 	}
 	slices.Sort(names)
 	return names
+}
+
+func encodeRuleset(rules normalizedRuleset) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(rulesetDomainTag)
+	encoder.uint64(uint64(len(rules.transformations)))
+	for _, transformation := range rules.transformations {
+		encodeTransformationDeclaration(&encoder, transformation)
+	}
+	invariants := make([]InvariantDeclaration, 0)
+	for _, transformation := range rules.transformations {
+		switch transformation.Operator {
+		case OperatorFormRelatedEntity:
+			if transformation.Form != nil {
+				invariants = append(invariants, formInvariants(transformation.ID, transformation.Form.GroupingField)...)
+			}
+		case OperatorAggregateRelatedFields:
+			if transformation.Aggregate != nil {
+				invariants = append(invariants, aggregateInvariants(transformation.ID, transformation.Aggregate)...)
+			}
+		}
+	}
+	sort.Slice(invariants, func(i, j int) bool { return invariants[i].key < invariants[j].key })
+	encoder.uint64(uint64(len(invariants)))
+	for _, invariant := range invariants {
+		encodeInvariantDeclaration(&encoder, invariant)
+	}
+	encodeCheckpoints(&encoder, rules.checkpoints)
+	return encoder.bytes()
+}
+
+func encodeCompilationInput(schema SchemaDigest, rules RulesetDigest, profiles []ProfileDeclaration, version CompilerSemanticsVersion) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(compilationInputDomainTag)
+	encoder.digest(string(schema))
+	encoder.digest(string(rules))
+	encoder.string(string(version))
+	encoder.uint64(uint64(len(profiles)))
+	for _, profile := range profiles {
+		encodeProfileDeclaration(&encoder, profile)
+	}
+	return encoder.bytes()
+}
+
+func encodePlan(schema SchemaDigest, rules RulesetDigest, version CompilerSemanticsVersion, transformations []CompiledTransformation, checkpoints []CheckpointDeclaration) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(planDomainTag)
+	encoder.digest(string(schema))
+	encoder.digest(string(rules))
+	encoder.string(string(version))
+	encoder.uint64(uint64(len(transformations)))
+	for _, transformation := range transformations {
+		encodeTransformationDeclaration(&encoder, transformation.declaration)
+		encodeFieldPaths(&encoder, transformation.reads)
+		encodeFieldPaths(&encoder, transformation.writes)
+		encoder.uint64(uint64(len(transformation.accesses)))
+		for _, access := range transformation.accesses {
+			encoder.byte(byte(access.Kind))
+			encoder.byte(byte(access.Mode))
+			encoder.string(string(access.EntityKind))
+			encoder.string(string(access.RelationKind))
+			encoder.string(string(access.Field))
+		}
+		encoder.uint64(uint64(len(transformation.dependencies)))
+		for _, dependency := range transformation.dependencies {
+			encoder.string(string(dependency))
+		}
+		encoder.uint64(transformation.level)
+		encoder.uint64(uint64(len(transformation.invariants)))
+		for _, invariant := range transformation.invariants {
+			encodeInvariantDeclaration(&encoder, invariant)
+		}
+	}
+	encodeCheckpoints(&encoder, checkpoints)
+	encoder.string("changes.v1")
+	return encoder.bytes()
+}
+
+func encodeInvariantDeclaration(encoder *canonicalEncoder, invariant InvariantDeclaration) {
+	encoder.string(invariant.key)
+	encoder.string(string(invariant.code))
+	encoder.byte(byte(invariant.scope))
+	encodeFieldPaths(encoder, invariant.reads)
+	encoder.string(string(invariant.appliesAfter))
+}
+
+func encodeCompiledProfile(profile CompiledProfile) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(compiledProfileDomainTag)
+	encoder.string(string(profile.compilerVersion))
+	encoder.digest(string(profile.schemaDigest))
+	encodeProfileDeclaration(&encoder, profile.declaration)
+	encoder.uint64(uint64(len(profile.proofs)))
+	for _, proof := range profile.proofs {
+		encoder.string(string(proof.target))
+		encoder.byte(byte(proof.kind))
+	}
+	return encoder.bytes()
+}
+
+func encodeCompilationFailure(input CompilationInputDigest, diagnostics []CompilationDiagnostic) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(compilationFailureDomainTag)
+	encoder.digest(string(input))
+	encoder.string("INVALID_PLAN")
+	encoder.uint64(uint64(len(diagnostics)))
+	for _, diagnostic := range diagnostics {
+		encoder.string(string(diagnostic.code))
+		encoder.string(diagnostic.subject)
+		encoder.string(diagnostic.detail)
+	}
+	return encoder.bytes()
+}
+
+func encodeTransformationDeclaration(encoder *canonicalEncoder, transformation TransformationDeclaration) {
+	encoder.string(string(transformation.ID))
+	encoder.byte(byte(transformation.Operator))
+	encodeFieldPaths(encoder, transformation.DeclaredReads)
+	encodeFieldPaths(encoder, transformation.DeclaredWrites)
+	encoder.uint64(uint64(len(transformation.After)))
+	for _, dependency := range transformation.After {
+		encoder.string(string(dependency))
+	}
+	encoder.optional(transformation.Form != nil, func() {
+		form := transformation.Form
+		encoder.string(string(form.SourceKind))
+		encoder.uint64(uint64(len(form.Sources)))
+		for _, source := range form.Sources {
+			encoder.string(string(source.Kind))
+			encoder.string(source.CanonicalSourceKey)
+		}
+		encoder.string(string(form.OutputKind))
+		encoder.string(string(form.OutputSlot))
+		encoder.string(string(form.GroupingField))
+		encoder.uint64(form.SourceCount)
+		encoder.uint64(uint64(len(form.CopiedFields)))
+		for _, copied := range form.CopiedFields {
+			encoder.string(string(copied.Source))
+			encoder.string(string(copied.Destination))
+		}
+		encoder.string(string(form.RelationKind))
+		encoder.optional(form.OutputKey != nil, func() {
+			encoder.byte(byte(form.OutputKey.Kind))
+			encoder.string(string(form.OutputKey.Field))
+		})
+	})
+	encoder.optional(transformation.Aggregate != nil, func() {
+		aggregate := transformation.Aggregate
+		encoder.string(string(aggregate.Target.Rule))
+		encoder.string(string(aggregate.Target.Slot))
+		encoder.string(string(aggregate.RelationKind))
+		encoder.string(string(aggregate.SourceKind))
+		encodeFieldPaths(encoder, aggregate.RequiredSourceTuple)
+		encodePredicates(encoder, aggregate.Predicates)
+		encoder.string(string(aggregate.Anchor.Source))
+		encoder.string(string(aggregate.Anchor.Destination))
+		encoder.uint64(uint64(len(aggregate.Reductions)))
+		for _, reduction := range aggregate.Reductions {
+			encoder.byte(byte(reduction.Kind))
+			encoder.string(string(reduction.Source))
+			encoder.string(string(reduction.Destination))
+		}
+		encodePredicates(encoder, aggregate.ResultPredicates)
+	})
+}
+
+func encodePredicates(encoder *canonicalEncoder, predicates []AggregatePredicate) {
+	encoder.uint64(uint64(len(predicates)))
+	for _, predicate := range predicates {
+		encoder.byte(byte(predicate.Kind))
+		encodeFieldPaths(encoder, predicate.Fields)
+	}
+}
+
+func encodeFieldPaths(encoder *canonicalEncoder, fields []FieldPath) {
+	encoder.uint64(uint64(len(fields)))
+	for _, field := range fields {
+		encoder.string(string(field))
+	}
+}
+
+func encodeCheckpoints(encoder *canonicalEncoder, checkpoints []CheckpointDeclaration) {
+	encoder.uint64(uint64(len(checkpoints)))
+	for _, checkpoint := range checkpoints {
+		encoder.string(string(checkpoint.Key))
+		encoder.string(string(checkpoint.After))
+	}
+}
+
+func encodeProfileDeclaration(encoder *canonicalEncoder, profile ProfileDeclaration) {
+	encoder.string(string(profile.Key))
+	encoder.byte(byte(profile.Scope.Kind))
+	encoder.string(string(profile.Scope.EntityKind))
+	encoder.byte(byte(profile.Aggregation))
+	encoder.uint64(uint64(len(profile.Requirements)))
+	for _, requirement := range profile.Requirements {
+		encoder.string(string(requirement.Code))
+		encoder.byte(byte(requirement.Kind))
+		encoder.string(string(requirement.Field))
+	}
+	encoder.uint64(uint64(len(profile.Implies)))
+	for _, target := range profile.Implies {
+		encoder.string(string(target))
+	}
 }
