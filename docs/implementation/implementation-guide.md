@@ -45,9 +45,9 @@ Only implemented packages appear in this map.
 2. `execute` loads and validates operational observability configuration.
 3. `internal/observability` constructs the JSON `slog` logger, explicit W3C
    trace-context propagator, and either no-op providers or OTLP/HTTP trace and
-   metric providers. Unsupported upstream `OTEL_GO_X_*` policy is rejected at
-   configuration and provider boundaries; an export pipeline is permanently
-   closed if such policy appears after startup.
+   metric providers. The OTel SDK is deliberately pinned to v1.37, before
+   experimental environment policy moved into metric collection/export. Known
+   `OTEL_GO_X_*` switches are rejected at configuration and provider boundaries.
 4. `run` parses the explicit `serve` command and listen-address flag.
 5. `serve` binds the requested TCP address, and `serveListener` runs
    `http.Server` with the health-only chi router and a sanitized error logger.

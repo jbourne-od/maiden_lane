@@ -19,8 +19,6 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -98,7 +96,7 @@ func TestNewRuntimeResourceHasOnlyApprovedServiceAttributes(t *testing.T) {
 	if got := resources[0].Attributes(); !equalAttributes(got, want) {
 		t.Fatalf("resource attributes = %#v, want %#v", got, want)
 	}
-	if got, want := resources[0].SchemaURL(), "https://opentelemetry.io/schemas/1.43.0"; got != want {
+	if got, want := resources[0].SchemaURL(), "https://opentelemetry.io/schemas/1.34.0"; got != want {
 		t.Fatalf("resource schema = %q, want %q", got, want)
 	}
 }
@@ -163,40 +161,6 @@ func TestNewRuntimeRejectsExperimentalPolicyAddedAfterValidation(t *testing.T) {
 		},
 	})
 	assertSafeFieldError(t, err, field, hostile)
-}
-
-func TestGuardedMetricExporterPermanentlyRejectsLateExperimentalPolicy(t *testing.T) {
-	t.Setenv("OTEL_GO_X_PER_SERIES_START_TIMESTAMPS", "")
-	delegate := &recordingMetricExporter{}
-	exporter := newGuardedMetricExporter(delegate)
-	t.Setenv("OTEL_GO_X_PER_SERIES_START_TIMESTAMPS", "true")
-
-	err := exporter.Export(t.Context(), new(metricdata.ResourceMetrics))
-	assertSafeFieldError(t, err, "OTEL_GO_X_PER_SERIES_START_TIMESTAMPS", "true")
-	t.Setenv("OTEL_GO_X_PER_SERIES_START_TIMESTAMPS", "")
-	if err := exporter.Export(t.Context(), new(metricdata.ResourceMetrics)); err == nil {
-		t.Fatal("guarded exporter resumed after hidden policy poisoned the pipeline")
-	}
-	if delegate.exports != 0 {
-		t.Fatalf("delegate exports = %d, want 0", delegate.exports)
-	}
-}
-
-func TestGuardedTraceExporterPermanentlyRejectsLateExperimentalPolicy(t *testing.T) {
-	t.Setenv("OTEL_GO_X_OBSERVABILITY", "")
-	delegate := &recordingTraceExporter{}
-	exporter := newGuardedTraceExporter(delegate)
-	t.Setenv("OTEL_GO_X_OBSERVABILITY", "true")
-
-	err := exporter.ExportSpans(t.Context(), nil)
-	assertSafeFieldError(t, err, "OTEL_GO_X_OBSERVABILITY", "true")
-	t.Setenv("OTEL_GO_X_OBSERVABILITY", "")
-	if err := exporter.ExportSpans(t.Context(), nil); err == nil {
-		t.Fatal("guarded trace exporter resumed after hidden policy poisoned the pipeline")
-	}
-	if delegate.exports != 0 {
-		t.Fatalf("delegate exports = %d, want 0", delegate.exports)
-	}
 }
 
 func TestProviderFactoriesRejectAmbientResourceImmediatelyBeforeSDKConstruction(t *testing.T) {
@@ -850,37 +814,6 @@ func (e *failingSpanExporter) ExportSpans(context.Context, []sdktrace.ReadOnlySp
 }
 
 func (*failingSpanExporter) Shutdown(context.Context) error { return nil }
-
-type recordingTraceExporter struct {
-	exports int
-}
-
-func (exporter *recordingTraceExporter) ExportSpans(context.Context, []sdktrace.ReadOnlySpan) error {
-	exporter.exports++
-	return nil
-}
-
-func (*recordingTraceExporter) Shutdown(context.Context) error { return nil }
-
-type recordingMetricExporter struct {
-	exports int
-}
-
-func (*recordingMetricExporter) Temporality(sdkmetric.InstrumentKind) metricdata.Temporality {
-	return metricdata.CumulativeTemporality
-}
-
-func (*recordingMetricExporter) Aggregation(sdkmetric.InstrumentKind) sdkmetric.Aggregation {
-	return sdkmetric.AggregationDefault{}
-}
-
-func (exporter *recordingMetricExporter) Export(context.Context, *metricdata.ResourceMetrics) error {
-	exporter.exports++
-	return nil
-}
-
-func (*recordingMetricExporter) ForceFlush(context.Context) error { return nil }
-func (*recordingMetricExporter) Shutdown(context.Context) error   { return nil }
 
 type typedHostileError struct{ text string }
 

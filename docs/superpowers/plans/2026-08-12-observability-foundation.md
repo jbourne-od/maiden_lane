@@ -6,7 +6,7 @@
 
 **Architecture:** `cmd/maiden-lane` remains the composition root. A new `internal/observability` package owns validated operational configuration, sanitized OTel diagnostics, explicit trace and metric providers, and a Maiden Lane-owned route wrapper whose contract is narrower than standard OTel HTTP middleware. The chi transport registers instrumentation only around matched non-health handlers; semantic packages never import observability.
 
-**Tech Stack:** Go 1.26.5, standard-library `log/slog`, OpenTelemetry Go v1.45.0 with semantic conventions v1.43.0, OTLP/HTTP protobuf exporters v1.45.0, `github.com/go-logr/logr` v1.4.4, `github.com/felixge/httpsnoop` v1.1.0, chi v5.3.1.
+**Tech Stack:** Go 1.26.5, standard-library `log/slog`, OpenTelemetry Go v1.37.0 with semantic conventions v1.34.0, OTLP/HTTP protobuf exporters v1.37.0, `github.com/go-logr/logr` v1.4.4, `github.com/felixge/httpsnoop` v1.1.0, chi v5.3.1.
 
 ## Global Constraints
 
@@ -244,7 +244,7 @@ Expected: package and race tests pass; the commit contains only configuration fi
 
 - [ ] **Step 1: Pin logging-facing dependencies**
 
-Run: `go get github.com/go-logr/logr@v1.4.4 go.opentelemetry.io/otel@v1.45.0`
+Run: `go get github.com/go-logr/logr@v1.4.4 go.opentelemetry.io/otel@v1.37.0`
 
 Expected: direct `logr` and OTel requirements appear; no contrib HTTP instrumentation is added.
 
@@ -350,13 +350,13 @@ Expected: only stable codes remain in diagnostics, and `go.mod` has no Zap or OT
 
 ```bash
 go get \
-  go.opentelemetry.io/otel/sdk@v1.45.0 \
-  go.opentelemetry.io/otel/sdk/metric@v1.45.0 \
-  go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp@v1.45.0 \
-  go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp@v1.45.0
+  go.opentelemetry.io/otel/sdk@v1.37.0 \
+  go.opentelemetry.io/otel/sdk/metric@v1.37.0 \
+  go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp@v1.37.0 \
+  go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp@v1.37.0
 ```
 
-Expected: every direct OTel module resolves to v1.45.0.
+Expected: every direct OTel module resolves to v1.37.0.
 
 - [ ] **Step 2: Write failing disabled-mode and resource tests**
 
@@ -435,7 +435,6 @@ reader := sdkmetric.NewPeriodicReader(exporter,
 provider := sdkmetric.NewMeterProvider(
 	sdkmetric.WithResource(res), sdkmetric.WithReader(reader),
 	sdkmetric.WithExemplarFilter(exemplar.AlwaysOffFilter),
-	sdkmetric.WithCardinalityLimit(2000),
 )
 ```
 
@@ -466,7 +465,7 @@ func TestNewInstallsSanitizedOTelGlobals(t *testing.T) {
 }
 ```
 
-The malformed ambient endpoint deliberately exercises `otlptracehttp`'s v1.45.0 internal `global.Error` path; the already-validated explicit endpoint still owns exporter behavior. OTel exposes no safe getter/restorer for its internal logger, so this test must remain isolated.
+The malformed ambient endpoint deliberately exercises `otlptracehttp`'s v1.37.0 internal `global.Error` path; the already-validated explicit endpoint still owns exporter behavior. OTel exposes no safe getter/restorer for its internal logger, so this test must remain isolated.
 
 - [ ] **Step 6: Write failing rollback and idempotent-shutdown tests**
 
@@ -548,7 +547,7 @@ git add internal/observability/runtime.go internal/observability/runtime_test.go
 git commit -m "feat: add OpenTelemetry provider lifecycle"
 ```
 
-Expected: disabled/resource/rollback/concurrency tests pass; direct OTel modules remain v1.45.0.
+Expected: disabled/resource/rollback/concurrency tests pass; direct OTel modules remain v1.37.0.
 
 ### Task 4: Privacy-Safe Registered-Route HTTP Telemetry
 

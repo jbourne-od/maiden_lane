@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -19,10 +18,9 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/exemplar"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/semconv/v1.34.0"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
@@ -196,8 +194,7 @@ func newTraceProvider(ctx context.Context, cfg Config, res *resource.Resource) (
 	if err != nil {
 		return nil, nil, err
 	}
-	guardedExporter := newGuardedTraceExporter(exporter)
-	processor := sdktrace.NewBatchSpanProcessor(guardedExporter,
+	processor := sdktrace.NewBatchSpanProcessor(exporter,
 		sdktrace.WithMaxQueueSize(2048),
 		sdktrace.WithMaxExportBatchSize(512),
 		sdktrace.WithBatchTimeout(5*time.Second),
@@ -221,7 +218,6 @@ func newTraceProvider(ctx context.Context, cfg Config, res *resource.Resource) (
 			AttributePerLinkCountLimit:  sdktrace.DefaultAttributePerLinkCountLimit,
 		}),
 		sdktrace.WithSpanProcessor(processor),
-		sdktrace.WithoutPanicRecording(),
 	)
 	return provider, provider, nil
 }
@@ -234,8 +230,7 @@ func newMetricProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 	if err != nil {
 		return nil, nil, err
 	}
-	guardedExporter := newGuardedMetricExporter(exporter)
-	reader := sdkmetric.NewPeriodicReader(guardedExporter,
+	reader := sdkmetric.NewPeriodicReader(exporter,
 		sdkmetric.WithInterval(60*time.Second),
 		sdkmetric.WithTimeout(30*time.Second),
 	)
@@ -249,7 +244,6 @@ func newMetricProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 		sdkmetric.WithResource(res),
 		sdkmetric.WithReader(reader),
 		sdkmetric.WithExemplarFilter(exemplar.AlwaysOffFilter),
-		sdkmetric.WithCardinalityLimit(2000),
 		sdkmetric.WithView(httpMetricViews()...),
 	)
 	return provider, provider, nil
@@ -258,90 +252,6 @@ func newMetricProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 func rejectAmbientOTelExperimental() error {
 	return rejectUnsupportedOTelExperimental(os.LookupEnv)
 }
-
-// guardedTraceExporter permanently closes the export path if unsupported
-// experimental OTel policy appears after runtime validation. Poisoning is
-// intentional: an experimental setting can mutate SDK-owned state before the
-// exporter observes it, so clearing the environment later must not resume a
-// pipeline whose output may already have changed.
-type guardedTraceExporter struct {
-	delegate sdktrace.SpanExporter
-	poisoned atomic.Bool
-}
-
-func newGuardedTraceExporter(delegate sdktrace.SpanExporter) *guardedTraceExporter {
-	return &guardedTraceExporter{delegate: delegate}
-}
-
-func (exporter *guardedTraceExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
-	if err := exporter.guard(); err != nil {
-		return err
-	}
-	return exporter.delegate.ExportSpans(ctx, spans)
-}
-
-func (exporter *guardedTraceExporter) Shutdown(ctx context.Context) error {
-	return exporter.delegate.Shutdown(ctx)
-}
-
-func (exporter *guardedTraceExporter) guard() error {
-	if exporter.poisoned.Load() {
-		return errExperimentalOTelPipelinePoisoned
-	}
-	if err := rejectAmbientOTelExperimental(); err != nil {
-		exporter.poisoned.Store(true)
-		return err
-	}
-	return nil
-}
-
-type guardedMetricExporter struct {
-	delegate sdkmetric.Exporter
-	poisoned atomic.Bool
-}
-
-func newGuardedMetricExporter(delegate sdkmetric.Exporter) *guardedMetricExporter {
-	return &guardedMetricExporter{delegate: delegate}
-}
-
-func (exporter *guardedMetricExporter) Temporality(kind sdkmetric.InstrumentKind) metricdata.Temporality {
-	return exporter.delegate.Temporality(kind)
-}
-
-func (exporter *guardedMetricExporter) Aggregation(kind sdkmetric.InstrumentKind) sdkmetric.Aggregation {
-	return exporter.delegate.Aggregation(kind)
-}
-
-func (exporter *guardedMetricExporter) Export(ctx context.Context, metrics *metricdata.ResourceMetrics) error {
-	if err := exporter.guard(); err != nil {
-		return err
-	}
-	return exporter.delegate.Export(ctx, metrics)
-}
-
-func (exporter *guardedMetricExporter) ForceFlush(ctx context.Context) error {
-	if err := exporter.guard(); err != nil {
-		return err
-	}
-	return exporter.delegate.ForceFlush(ctx)
-}
-
-func (exporter *guardedMetricExporter) Shutdown(ctx context.Context) error {
-	return exporter.delegate.Shutdown(ctx)
-}
-
-func (exporter *guardedMetricExporter) guard() error {
-	if exporter.poisoned.Load() {
-		return errExperimentalOTelPipelinePoisoned
-	}
-	if err := rejectAmbientOTelExperimental(); err != nil {
-		exporter.poisoned.Store(true)
-		return err
-	}
-	return nil
-}
-
-var errExperimentalOTelPipelinePoisoned = errors.New("OpenTelemetry export disabled after unsupported experimental policy was observed")
 
 func shutdownOwned(owned interface{ Shutdown(context.Context) error }, message string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -375,7 +285,7 @@ func metricExporterOptions(cfg otlpHTTPConfig) []otlpmetrichttp.Option {
 		otlpmetrichttp.WithEndpointURL(cfg.endpoint.String()),
 		otlpmetrichttp.WithHeaders(cloneHeaders(cfg.headers)),
 		otlpmetrichttp.WithTimeout(cfg.timeout),
-		otlpmetrichttp.WithTemporalitySelector(sdkmetric.CumulativeTemporalitySelector),
+		otlpmetrichttp.WithTemporalitySelector(sdkmetric.DefaultTemporalitySelector),
 		otlpmetrichttp.WithAggregationSelector(sdkmetric.DefaultAggregationSelector),
 		otlpmetrichttp.WithHTTPClient(explicitHTTPClient(cfg)),
 	}
@@ -391,7 +301,7 @@ func metricExporterOptions(cfg otlpHTTPConfig) []otlpmetrichttp.Option {
 }
 
 // explicitHTTPClient carries the validated TLS value through exporter
-// configuration even for an HTTP endpoint, where OTel v1.45 rejects combining
+// configuration even for an HTTP endpoint, where OTel v1.37 rejects combining
 // WithTLSClientConfig and WithInsecure. The transport deliberately has no
 // ambient proxy function; the endpoint URL is the complete network policy.
 func explicitHTTPClient(cfg otlpHTTPConfig) *http.Client {
