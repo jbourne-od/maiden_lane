@@ -1,6 +1,6 @@
 # Observability Foundation Design
 
-**Status:** Approved design; implementation not started
+**Status:** Implemented foundation
 
 **Date:** 2026-08-12
 

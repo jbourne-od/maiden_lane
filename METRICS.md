@@ -1,6 +1,6 @@
 # Maiden Lane Metrics Catalog
 
-**Status:** Reserved; no metrics are exported yet
+**Status:** Active
 
 This document is the registry for operational telemetry metrics exported by
 Maiden Lane. It records the metric names and semantics that dashboards, alerts,
@@ -23,7 +23,26 @@ must conform to Inviolate 17.
 
 ## Exported metrics
 
-No metrics are currently exported.
-
 | Name | Instrument | Unit | Permitted attributes or labels | Meaning |
 |---|---|---|---|---|
+| `http.server.request.duration` | `Float64Histogram` | `s` | `http.request.method`, `http.route`, optional `http.response.status_code` | Duration of a matched non-health HTTP server request |
+| `http.server.request.body.size` | `Int64Histogram` | `By` | `http.request.method`, `http.route`, optional `http.response.status_code` | Request body bytes actually observed by the server wrapper |
+| `http.server.response.body.size` | `Int64Histogram` | `By` | `http.request.method`, `http.route`, optional `http.response.status_code` | Response body bytes written by the server wrapper |
+
+The permitted values are deliberately closed or bounded:
+
+- `http.request.method` is one of `GET`, `HEAD`, `POST`, `PUT`, `DELETE`,
+  `CONNECT`, `OPTIONS`, `TRACE`, `PATCH`, or `OTHER`.
+- `http.route` is a trusted route template supplied at handler registration,
+  never a request path or parameter value.
+- `http.response.status_code` is present only for a valid observed terminal
+  status from 100 through 599. It is omitted when no valid status exists.
+
+The three instruments are registered when the observability runtime starts.
+They record only for handlers explicitly wrapped at registration. Health,
+readiness, unmatched, and method-not-allowed requests are excluded. The current
+production router contains only health and readiness routes, so it exports no
+HTTP request points yet.
+
+Exemplars are disabled. Metric points cannot carry trace attributes outside
+the label allowlist above.

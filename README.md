@@ -29,6 +29,58 @@ The current HTTP surface is:
 - `GET /healthz` — process liveness, returning `204 No Content`.
 - `GET /readyz` — process readiness, returning `204 No Content`.
 
+## Observability
+
+Maiden Lane writes structured JSON application logs to standard output using
+the Go standard library's `log/slog`. OpenTelemetry traces and metrics are
+disabled by default, so local startup does not contact a collector:
+
+```bash
+go run ./cmd/maiden-lane serve --listen-address=127.0.0.1:8080
+```
+
+Enable OTLP over HTTP/protobuf explicitly:
+
+```bash
+OTEL_TRACES_EXPORTER=otlp \
+OTEL_METRICS_EXPORTER=otlp \
+OTEL_EXPORTER_OTLP_ENDPOINT=https://collector.example \
+go run ./cmd/maiden-lane serve --listen-address=127.0.0.1:8080
+```
+
+Operational configuration does not participate in Maiden Lane semantic output
+or identity. Supported variables are:
+
+| Variable | Accepted values or meaning |
+|---|---|
+| `LOG_LEVEL` | `debug`, `info`, `warn`, or `error`; default `info` |
+| `OTEL_TRACES_EXPORTER` | `none` or `otlp`; default `none` |
+| `OTEL_METRICS_EXPORTER` | `none` or `otlp`; default `none` |
+| `OTEL_SERVICE_NAME` | 1–128 UTF-8 bytes without control characters; default `maiden-lane` |
+
+For each suffix below, the signal-specific
+`OTEL_EXPORTER_OTLP_TRACES_<SUFFIX>` or
+`OTEL_EXPORTER_OTLP_METRICS_<SUFFIX>` takes precedence over the global
+`OTEL_EXPORTER_OTLP_<SUFFIX>`:
+
+| Suffix | Accepted values or meaning |
+|---|---|
+| `ENDPOINT` | Absolute `http` or `https` URL without credentials, query, or fragment. A global endpoint receives `/v1/traces` or `/v1/metrics`; a signal endpoint is used as supplied. |
+| `PROTOCOL` | `http/protobuf` only |
+| `HEADERS` | Comma-separated `header=value` pairs with unique case-insensitive names; values may be percent encoded |
+| `TIMEOUT` | Positive integer milliseconds; default `10000` |
+| `COMPRESSION` | `none` or `gzip`; default `none` |
+| `INSECURE` | `true` for an `http` endpoint or `false` for an `https` endpoint |
+| `CERTIFICATE` | Path to a readable PEM root certificate |
+| `CLIENT_CERTIFICATE` | Path to a readable PEM client certificate; requires `CLIENT_KEY` |
+| `CLIENT_KEY` | Path to the paired readable PEM client key |
+
+`OTEL_RESOURCE_ATTRIBUTES` is intentionally unsupported and must be unset.
+OTLP/gRPC, OpenTelemetry log export, baggage propagation, arbitrary resource
+attributes, and semantic transformation telemetry are not part of this
+foundation. Exporter and HTTP diagnostic text is sanitized before it reaches
+ordinary logs.
+
 ## Common commands
 
 ```bash

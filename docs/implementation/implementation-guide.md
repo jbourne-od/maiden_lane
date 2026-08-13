@@ -11,13 +11,18 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
 - One Go module and one `maiden-lane` binary.
 - A `serve` command with explicit listen configuration and graceful shutdown.
 - A chi router exposing `/healthz` and `/readyz`.
+- Structured JSON application logging through `log/slog`.
+- Explicit OpenTelemetry trace and metric providers with disabled or
+  OTLP-over-HTTP/protobuf operation.
+- Privacy-safe registered-route HTTP instrumentation and bounded telemetry
+  flush/shutdown after the HTTP server drains.
 - Tracked Staticcheck and govulncheck tools.
 - Local verification and a non-root container build.
 - GitHub Actions verification and ECR image publication.
 
 There is no transformation model, compiler, executor, sealed-checkpoint model,
 completeness profile, readiness assessment, worker, persistence adapter,
-promotion gate, exported metric, or stable typed application error.
+promotion gate, semantic telemetry, or stable typed application error.
 
 ## Current repository map
 
@@ -25,6 +30,7 @@ promotion gate, exported metric, or stable typed application error.
 api/openapi.yaml                 current health wire contract
 cmd/maiden-lane/main.go          CLI, process composition, server lifecycle
 internal/httpapi/router.go       HTTP transport routes and handlers
+internal/observability/          operational config, slog, OTel runtime and HTTP instrumentation
 Dockerfile                       non-root application image
 Makefile                         explicit local verification commands
 .github/workflows/pipeline.yml   CI and ECR publication
@@ -34,25 +40,50 @@ Only implemented packages appear in this map.
 
 ## Runtime flow
 
-1. `main` creates a structured logger and signal-aware process context.
-2. `run` parses the explicit `serve` command and listen-address flag.
-3. `serve` binds the requested TCP address.
-4. `serveListener` starts `http.Server` with the chi router.
-5. Cancellation creates a separate bounded shutdown context and drains active
-   requests before returning.
+1. `processMain` creates a signal-aware process context and defers its cleanup
+   before returning an exit code to `main`.
+2. `execute` loads and validates operational observability configuration.
+3. `internal/observability` constructs the JSON `slog` logger, explicit W3C
+   trace-context propagator, and either no-op providers or OTLP/HTTP trace and
+   metric providers.
+4. `run` parses the explicit `serve` command and listen-address flag.
+5. `serve` binds the requested TCP address, and `serveListener` runs
+   `http.Server` with the health-only chi router and a sanitized error logger.
+6. Cancellation or an unexpected serving failure enters the same bounded drain
+   path. Active handlers finish before server lifecycle returns.
+7. `execute` creates a fresh ten-second context, flushes and shuts down OTel,
+   then returns the joined command and telemetry result for the final exit
+   decision.
+
+The observability runtime owns a registered-route wrapper for future
+non-health handlers. It accepts trace context, removes baggage, emits only
+trusted route templates and closed attributes, explicitly marks every ended
+span `OK` or `Error`, and records the three metrics in `METRICS.md`. The current
+health and readiness handlers are deliberately not wrapped, so the instruments
+are registered but no production HTTP points are currently recorded.
+
+Standard OTel HTTP server middleware is not used because it captures raw
+request-derived attributes before Maiden Lane can enforce its privacy and
+cardinality boundary.
 
 ## Go orientation for Python-oriented contributors
 
 - `cmd/maiden-lane` is a `package main`; building it creates the executable.
 - `internal/httpapi` can be imported only from within this module, which keeps
   transport details from becoming a public library contract.
+- `internal/observability` is also an infrastructure-only package. Semantic
+  packages must not import it or make decisions from telemetry state.
 - `context.Context` carries cancellation across call boundaries. It is passed
-  explicitly rather than discovered globally.
+  explicitly rather than discovered globally. Here it carries cancellation and
+  trace context, never Maiden Lane transformation semantics.
 - `%w` preserves an error's causal value so callers can use `errors.Is` and
   `errors.As`; do not inspect error-message strings for behavior.
 - Goroutines do not propagate errors automatically. The server lifecycle uses a
   buffered channel so `http.Server.Serve` always has somewhere to report its
   terminal result while the main goroutine coordinates shutdown.
+- `os.Exit` does not run deferred functions. `processMain` therefore returns an
+  exit code only after signal cleanup, server drain, and telemetry shutdown;
+  only the small `main` function calls `os.Exit`.
 - `httptest` exercises an `http.Handler` without binding a real port. The
   lifecycle test uses a real loopback listener because cancellation behavior is
   the property under test.
@@ -113,5 +144,7 @@ plus Docker for the container targets.
 ## Known gaps
 
 The semantic transformation system and AWS runtime adapters described by the
-HLD are not implemented. Their eventual package boundaries will be documented
-here only after the corresponding code exists.
+HLD are not implemented. There are no application-operation spans, worker or
+adapter spans, OTel log export, collector deployment, or wrapped non-health
+production routes. Their eventual package boundaries will be documented here
+only after the corresponding code exists.
