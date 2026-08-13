@@ -20,7 +20,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/semconv/v1.34.0"
+	"go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
@@ -218,6 +218,7 @@ func newTraceProvider(ctx context.Context, cfg Config, res *resource.Resource) (
 			AttributePerLinkCountLimit:  sdktrace.DefaultAttributePerLinkCountLimit,
 		}),
 		sdktrace.WithSpanProcessor(processor),
+		sdktrace.WithoutPanicRecording(),
 	)
 	return provider, provider, nil
 }
@@ -244,6 +245,7 @@ func newMetricProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 		sdkmetric.WithResource(res),
 		sdkmetric.WithReader(reader),
 		sdkmetric.WithExemplarFilter(exemplar.AlwaysOffFilter),
+		sdkmetric.WithCardinalityLimit(2000),
 		sdkmetric.WithView(httpMetricViews()...),
 	)
 	return provider, provider, nil
@@ -285,7 +287,7 @@ func metricExporterOptions(cfg otlpHTTPConfig) []otlpmetrichttp.Option {
 		otlpmetrichttp.WithEndpointURL(cfg.endpoint.String()),
 		otlpmetrichttp.WithHeaders(cloneHeaders(cfg.headers)),
 		otlpmetrichttp.WithTimeout(cfg.timeout),
-		otlpmetrichttp.WithTemporalitySelector(sdkmetric.DefaultTemporalitySelector),
+		otlpmetrichttp.WithTemporalitySelector(sdkmetric.CumulativeTemporalitySelector),
 		otlpmetrichttp.WithAggregationSelector(sdkmetric.DefaultAggregationSelector),
 		otlpmetrichttp.WithHTTPClient(explicitHTTPClient(cfg)),
 	}
@@ -301,7 +303,7 @@ func metricExporterOptions(cfg otlpHTTPConfig) []otlpmetrichttp.Option {
 }
 
 // explicitHTTPClient carries the validated TLS value through exporter
-// configuration even for an HTTP endpoint, where OTel v1.37 rejects combining
+// configuration even for an HTTP endpoint, where OTel v1.45 rejects combining
 // WithTLSClientConfig and WithInsecure. The transport deliberately has no
 // ambient proxy function; the endpoint URL is the complete network policy.
 func explicitHTTPClient(cfg otlpHTTPConfig) *http.Client {

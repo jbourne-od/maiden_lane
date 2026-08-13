@@ -96,7 +96,7 @@ func TestNewRuntimeResourceHasOnlyApprovedServiceAttributes(t *testing.T) {
 	if got := resources[0].Attributes(); !equalAttributes(got, want) {
 		t.Fatalf("resource attributes = %#v, want %#v", got, want)
 	}
-	if got, want := resources[0].SchemaURL(), "https://opentelemetry.io/schemas/1.34.0"; got != want {
+	if got, want := resources[0].SchemaURL(), "https://opentelemetry.io/schemas/1.43.0"; got != want {
 		t.Fatalf("resource schema = %q, want %q", got, want)
 	}
 }

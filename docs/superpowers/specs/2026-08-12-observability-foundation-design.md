@@ -166,11 +166,11 @@ must receive an explicit safe contract before it is enabled.
 The upstream Go SDK's experimental `OTEL_GO_X_*` switches are unsupported.
 They can change batching, metric timestamps, resource behavior, cardinality,
 exemplars, or SDK self-observability outside this closed configuration. Maiden
-Lane pins the SDK to v1.37, before experimental policy moved into metric
-collection/export, rejects known switches when configuration is loaded, and
-rechecks immediately before provider construction. Production code must not
-mutate the process environment after startup; operational environment is an
-immutable process input, not a runtime control channel.
+Lane rejects known switches when configuration is loaded and rechecks
+immediately before provider construction. Production code must not mutate the
+process environment after startup; operational environment is an immutable
+process input, not a runtime control channel. This boundary is what prevents an
+upstream runtime environment lookup from becoming hidden Maiden Lane policy.
 
 The initial trace sampler is fixed to parent-based, always-on sampling when
 tracing is enabled. Configurable sampling remains ordinary operational policy,
