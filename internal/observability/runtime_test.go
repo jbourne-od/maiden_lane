@@ -19,6 +19,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	metricnoop "go.opentelemetry.io/otel/metric/noop"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -138,6 +140,63 @@ func TestNewRuntimeRejectsAmbientResourceAttributesAfterValidation(t *testing.T)
 
 	_, err = newRuntime(t.Context(), cfg, io.Discard, factories{})
 	assertSafeFieldError(t, err, "OTEL_RESOURCE_ATTRIBUTES", "tenant.secret", "hostile-value")
+}
+
+func TestNewRuntimeRejectsExperimentalPolicyAddedAfterValidation(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+	cfg, err := LoadConfig(emptyEnv, rejectRead, "devel")
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	const field = "OTEL_GO_X_METRIC_EXPORT_BATCH_SIZE"
+	const hostile = "hostile-batch-policy"
+	t.Setenv(field, hostile)
+
+	_, err = newRuntime(t.Context(), cfg, io.Discard, factories{
+		newTrace: func(context.Context, Config, *resource.Resource) (trace.TracerProvider, providerLifecycle, error) {
+			t.Fatal("trace factory called after experimental policy appeared")
+			return nil, nil, nil
+		},
+		newMetric: func(context.Context, Config, *resource.Resource) (metric.MeterProvider, providerLifecycle, error) {
+			t.Fatal("metric factory called after experimental policy appeared")
+			return nil, nil, nil
+		},
+	})
+	assertSafeFieldError(t, err, field, hostile)
+}
+
+func TestGuardedMetricExporterPermanentlyRejectsLateExperimentalPolicy(t *testing.T) {
+	t.Setenv("OTEL_GO_X_PER_SERIES_START_TIMESTAMPS", "")
+	delegate := &recordingMetricExporter{}
+	exporter := newGuardedMetricExporter(delegate)
+	t.Setenv("OTEL_GO_X_PER_SERIES_START_TIMESTAMPS", "true")
+
+	err := exporter.Export(t.Context(), new(metricdata.ResourceMetrics))
+	assertSafeFieldError(t, err, "OTEL_GO_X_PER_SERIES_START_TIMESTAMPS", "true")
+	t.Setenv("OTEL_GO_X_PER_SERIES_START_TIMESTAMPS", "")
+	if err := exporter.Export(t.Context(), new(metricdata.ResourceMetrics)); err == nil {
+		t.Fatal("guarded exporter resumed after hidden policy poisoned the pipeline")
+	}
+	if delegate.exports != 0 {
+		t.Fatalf("delegate exports = %d, want 0", delegate.exports)
+	}
+}
+
+func TestGuardedTraceExporterPermanentlyRejectsLateExperimentalPolicy(t *testing.T) {
+	t.Setenv("OTEL_GO_X_OBSERVABILITY", "")
+	delegate := &recordingTraceExporter{}
+	exporter := newGuardedTraceExporter(delegate)
+	t.Setenv("OTEL_GO_X_OBSERVABILITY", "true")
+
+	err := exporter.ExportSpans(t.Context(), nil)
+	assertSafeFieldError(t, err, "OTEL_GO_X_OBSERVABILITY", "true")
+	t.Setenv("OTEL_GO_X_OBSERVABILITY", "")
+	if err := exporter.ExportSpans(t.Context(), nil); err == nil {
+		t.Fatal("guarded trace exporter resumed after hidden policy poisoned the pipeline")
+	}
+	if delegate.exports != 0 {
+		t.Fatalf("delegate exports = %d, want 0", delegate.exports)
+	}
 }
 
 func TestProviderFactoriesRejectAmbientResourceImmediatelyBeforeSDKConstruction(t *testing.T) {
@@ -285,6 +344,45 @@ func TestNewRejectsInvalidConfigBeforeInstallingGlobals(t *testing.T) {
 		t.Fatalf("child: %v\n%s", err, output)
 	}
 	assertContainsOnlyCode(t, string(output), "otel_async_error", "hostile-async-value", "mutated-service")
+}
+
+func TestNewRejectsLateExperimentalPolicyBeforeInstallingGlobals(t *testing.T) {
+	if os.Getenv("MAIDEN_LANE_OTEL_EXPERIMENTAL_GLOBAL_CHILD") == "1" {
+		_ = os.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+		_ = os.Setenv("OTEL_GO_X_OBSERVABILITY", "")
+		cfg, err := LoadConfig(emptyEnv, rejectRead, "devel")
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		_ = os.Setenv("OTEL_GO_X_OBSERVABILITY", "true")
+		var rejectedOutput bytes.Buffer
+		if _, err := New(context.Background(), cfg, &rejectedOutput); err == nil {
+			t.Fatal("New accepted late experimental policy")
+		}
+
+		_ = os.Setenv("OTEL_GO_X_OBSERVABILITY", "")
+		var acceptedOutput bytes.Buffer
+		runtime, err := New(context.Background(), cfg, &acceptedOutput)
+		if err != nil {
+			t.Fatalf("New after rejected experimental policy: %v", err)
+		}
+		otel.Handle(errors.New("hostile-async-value"))
+		if err := runtime.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+		if rejectedOutput.Len() != 0 {
+			t.Fatalf("rejected logger captured global diagnostics: %s", rejectedOutput.String())
+		}
+		_, _ = os.Stdout.Write(acceptedOutput.Bytes())
+		return
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestNewRejectsLateExperimentalPolicyBeforeInstallingGlobals$")
+	command.Env = append(os.Environ(), "MAIDEN_LANE_OTEL_EXPERIMENTAL_GLOBAL_CHILD=1")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("child: %v\n%s", err, output)
+	}
+	assertContainsOnlyCode(t, string(output), "otel_async_error", "hostile-async-value")
 }
 
 func TestNewRuntimeIgnoresAmbientSDKPolicy(t *testing.T) {
@@ -752,6 +850,37 @@ func (e *failingSpanExporter) ExportSpans(context.Context, []sdktrace.ReadOnlySp
 }
 
 func (*failingSpanExporter) Shutdown(context.Context) error { return nil }
+
+type recordingTraceExporter struct {
+	exports int
+}
+
+func (exporter *recordingTraceExporter) ExportSpans(context.Context, []sdktrace.ReadOnlySpan) error {
+	exporter.exports++
+	return nil
+}
+
+func (*recordingTraceExporter) Shutdown(context.Context) error { return nil }
+
+type recordingMetricExporter struct {
+	exports int
+}
+
+func (*recordingMetricExporter) Temporality(sdkmetric.InstrumentKind) metricdata.Temporality {
+	return metricdata.CumulativeTemporality
+}
+
+func (*recordingMetricExporter) Aggregation(sdkmetric.InstrumentKind) sdkmetric.Aggregation {
+	return sdkmetric.AggregationDefault{}
+}
+
+func (exporter *recordingMetricExporter) Export(context.Context, *metricdata.ResourceMetrics) error {
+	exporter.exports++
+	return nil
+}
+
+func (*recordingMetricExporter) ForceFlush(context.Context) error { return nil }
+func (*recordingMetricExporter) Shutdown(context.Context) error   { return nil }
 
 type typedHostileError struct{ text string }
 

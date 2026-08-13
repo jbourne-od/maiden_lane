@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -18,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/exemplar"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/semconv/v1.43.0"
@@ -58,6 +60,9 @@ func New(ctx context.Context, cfg Config, output io.Writer) (*Runtime, error) {
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
+	if err := rejectAmbientOTelExperimental(); err != nil {
+		return nil, err
+	}
 	logger := NewLogger(output, cfg.LogLevel)
 	installOTelGlobals(logger)
 	return newRuntimeWithLogger(ctx, cfg, logger, defaultFactories())
@@ -76,6 +81,9 @@ func newRuntimeWithLogger(ctx context.Context, cfg Config, logger *slog.Logger, 
 	}
 	if ambientResourcePresent() {
 		return nil, invalidField("OTEL_RESOURCE_ATTRIBUTES", "an unset value")
+	}
+	if err := rejectAmbientOTelExperimental(); err != nil {
+		return nil, err
 	}
 
 	attributes := []attribute.KeyValue{semconv.ServiceName(cfg.ServiceName)}
@@ -181,11 +189,15 @@ func defaultFactories() factories {
 }
 
 func newTraceProvider(ctx context.Context, cfg Config, res *resource.Resource) (trace.TracerProvider, providerLifecycle, error) {
+	if err := rejectAmbientOTelExperimental(); err != nil {
+		return nil, nil, err
+	}
 	exporter, err := otlptracehttp.New(ctx, traceExporterOptions(cfg.traces)...)
 	if err != nil {
 		return nil, nil, err
 	}
-	processor := sdktrace.NewBatchSpanProcessor(exporter,
+	guardedExporter := newGuardedTraceExporter(exporter)
+	processor := sdktrace.NewBatchSpanProcessor(guardedExporter,
 		sdktrace.WithMaxQueueSize(2048),
 		sdktrace.WithMaxExportBatchSize(512),
 		sdktrace.WithBatchTimeout(5*time.Second),
@@ -193,6 +205,9 @@ func newTraceProvider(ctx context.Context, cfg Config, res *resource.Resource) (
 	)
 	if ambientResourcePresent() {
 		return nil, nil, errors.Join(errAmbientResource, shutdownOwned(processor, "trace exporter rollback failed"))
+	}
+	if err := rejectAmbientOTelExperimental(); err != nil {
+		return nil, nil, errors.Join(err, shutdownOwned(processor, "trace exporter rollback failed"))
 	}
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
@@ -212,16 +227,23 @@ func newTraceProvider(ctx context.Context, cfg Config, res *resource.Resource) (
 }
 
 func newMetricProvider(ctx context.Context, cfg Config, res *resource.Resource) (metric.MeterProvider, providerLifecycle, error) {
+	if err := rejectAmbientOTelExperimental(); err != nil {
+		return nil, nil, err
+	}
 	exporter, err := otlpmetrichttp.New(ctx, metricExporterOptions(cfg.metrics)...)
 	if err != nil {
 		return nil, nil, err
 	}
-	reader := sdkmetric.NewPeriodicReader(exporter,
+	guardedExporter := newGuardedMetricExporter(exporter)
+	reader := sdkmetric.NewPeriodicReader(guardedExporter,
 		sdkmetric.WithInterval(60*time.Second),
 		sdkmetric.WithTimeout(30*time.Second),
 	)
 	if ambientResourcePresent() {
 		return nil, nil, errors.Join(errAmbientResource, shutdownOwned(reader, "metric exporter rollback failed"))
+	}
+	if err := rejectAmbientOTelExperimental(); err != nil {
+		return nil, nil, errors.Join(err, shutdownOwned(reader, "metric exporter rollback failed"))
 	}
 	provider := sdkmetric.NewMeterProvider(
 		sdkmetric.WithResource(res),
@@ -232,6 +254,94 @@ func newMetricProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 	)
 	return provider, provider, nil
 }
+
+func rejectAmbientOTelExperimental() error {
+	return rejectUnsupportedOTelExperimental(os.LookupEnv)
+}
+
+// guardedTraceExporter permanently closes the export path if unsupported
+// experimental OTel policy appears after runtime validation. Poisoning is
+// intentional: an experimental setting can mutate SDK-owned state before the
+// exporter observes it, so clearing the environment later must not resume a
+// pipeline whose output may already have changed.
+type guardedTraceExporter struct {
+	delegate sdktrace.SpanExporter
+	poisoned atomic.Bool
+}
+
+func newGuardedTraceExporter(delegate sdktrace.SpanExporter) *guardedTraceExporter {
+	return &guardedTraceExporter{delegate: delegate}
+}
+
+func (exporter *guardedTraceExporter) ExportSpans(ctx context.Context, spans []sdktrace.ReadOnlySpan) error {
+	if err := exporter.guard(); err != nil {
+		return err
+	}
+	return exporter.delegate.ExportSpans(ctx, spans)
+}
+
+func (exporter *guardedTraceExporter) Shutdown(ctx context.Context) error {
+	return exporter.delegate.Shutdown(ctx)
+}
+
+func (exporter *guardedTraceExporter) guard() error {
+	if exporter.poisoned.Load() {
+		return errExperimentalOTelPipelinePoisoned
+	}
+	if err := rejectAmbientOTelExperimental(); err != nil {
+		exporter.poisoned.Store(true)
+		return err
+	}
+	return nil
+}
+
+type guardedMetricExporter struct {
+	delegate sdkmetric.Exporter
+	poisoned atomic.Bool
+}
+
+func newGuardedMetricExporter(delegate sdkmetric.Exporter) *guardedMetricExporter {
+	return &guardedMetricExporter{delegate: delegate}
+}
+
+func (exporter *guardedMetricExporter) Temporality(kind sdkmetric.InstrumentKind) metricdata.Temporality {
+	return exporter.delegate.Temporality(kind)
+}
+
+func (exporter *guardedMetricExporter) Aggregation(kind sdkmetric.InstrumentKind) sdkmetric.Aggregation {
+	return exporter.delegate.Aggregation(kind)
+}
+
+func (exporter *guardedMetricExporter) Export(ctx context.Context, metrics *metricdata.ResourceMetrics) error {
+	if err := exporter.guard(); err != nil {
+		return err
+	}
+	return exporter.delegate.Export(ctx, metrics)
+}
+
+func (exporter *guardedMetricExporter) ForceFlush(ctx context.Context) error {
+	if err := exporter.guard(); err != nil {
+		return err
+	}
+	return exporter.delegate.ForceFlush(ctx)
+}
+
+func (exporter *guardedMetricExporter) Shutdown(ctx context.Context) error {
+	return exporter.delegate.Shutdown(ctx)
+}
+
+func (exporter *guardedMetricExporter) guard() error {
+	if exporter.poisoned.Load() {
+		return errExperimentalOTelPipelinePoisoned
+	}
+	if err := rejectAmbientOTelExperimental(); err != nil {
+		exporter.poisoned.Store(true)
+		return err
+	}
+	return nil
+}
+
+var errExperimentalOTelPipelinePoisoned = errors.New("OpenTelemetry export disabled after unsupported experimental policy was observed")
 
 func shutdownOwned(owned interface{ Shutdown(context.Context) error }, message string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

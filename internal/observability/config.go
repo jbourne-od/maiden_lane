@@ -25,6 +25,21 @@ const (
 	defaultOTLPTimeout  = 10 * time.Second
 )
 
+// unsupportedOTelExperimentalFields are upstream Go SDK feature switches that
+// can alter exported telemetry outside Maiden Lane's validated Config. Empty is
+// equivalent to unset in OTel; every nonempty value is rejected, including a
+// value such as "false", so this boundary does not inherit upstream parsing or
+// future experimental-policy changes.
+var unsupportedOTelExperimentalFields = []string{
+	"OTEL_GO_X_OBSERVABILITY",
+	"OTEL_GO_X_SELF_OBSERVABILITY",
+	"OTEL_GO_X_METRIC_EXPORT_BATCH_SIZE",
+	"OTEL_GO_X_PER_SERIES_START_TIMESTAMPS",
+	"OTEL_GO_X_RESOURCE",
+	"OTEL_GO_X_CARDINALITY_LIMIT",
+	"OTEL_GO_X_EXEMPLAR",
+}
+
 // LookupEnv has the same signature as os.LookupEnv. Dependency injection keeps
 // ambient process configuration at this operational boundary and testable.
 type LookupEnv func(string) (string, bool)
@@ -83,6 +98,9 @@ type otlpHTTPConfig struct {
 // returns configured values in validation errors because endpoints, header
 // values, and certificate paths may contain sensitive information.
 func LoadConfig(lookup LookupEnv, readFile ReadFile, serviceVersion string) (Config, error) {
+	if err := rejectUnsupportedOTelExperimental(lookup); err != nil {
+		return Config{}, err
+	}
 	logLevel, err := loadLogLevel(lookup)
 	if err != nil {
 		return Config{}, err
@@ -128,6 +146,15 @@ func LoadConfig(lookup LookupEnv, readFile ReadFile, serviceVersion string) (Con
 	cfg.snapshot = cfg.exportedSnapshot()
 	cfg.validated = true
 	return cfg, nil
+}
+
+func rejectUnsupportedOTelExperimental(lookup LookupEnv) error {
+	for _, field := range unsupportedOTelExperimentalFields {
+		if raw, present := lookup(field); present && raw != "" {
+			return invalidField(field, "an unset or empty value")
+		}
+	}
+	return nil
 }
 
 func (cfg Config) exportedSnapshot() validatedConfig {

@@ -97,6 +97,16 @@ func TestLoadConfigRejectsClosedValueViolations(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsUnsupportedExperimentalOTelPolicy(t *testing.T) {
+	for _, field := range unsupportedOTelExperimentalFields {
+		t.Run(field, func(t *testing.T) {
+			const hostile = "hostile-experimental-policy"
+			_, err := LoadConfig(mapLookup(map[string]string{field: hostile}), rejectRead, "devel")
+			assertSafeFieldError(t, err, field, hostile)
+		})
+	}
+}
+
 func TestLoadConfigResolvesEnabledOTLPHTTP(t *testing.T) {
 	env := map[string]string{
 		"OTEL_TRACES_EXPORTER":                   "otlp",

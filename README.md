@@ -76,7 +76,12 @@ For each suffix below, the signal-specific
 | `CLIENT_KEY` | Path to the paired readable PEM client key; requires the effective `CLIENT_CERTIFICATE` |
 
 `OTEL_RESOURCE_ATTRIBUTES` is intentionally unsupported and must be unset or
-empty.
+empty. The upstream Go SDK's experimental `OTEL_GO_X_OBSERVABILITY`,
+`OTEL_GO_X_SELF_OBSERVABILITY`, `OTEL_GO_X_METRIC_EXPORT_BATCH_SIZE`,
+`OTEL_GO_X_PER_SERIES_START_TIMESTAMPS`, `OTEL_GO_X_RESOURCE`,
+`OTEL_GO_X_CARDINALITY_LIMIT`, and `OTEL_GO_X_EXEMPLAR` variables must also be
+unset or empty; Maiden Lane fixes those policies explicitly instead of
+inheriting experimental ambient behavior.
 OTLP/gRPC, OpenTelemetry log export, baggage propagation, arbitrary resource
 attributes, and semantic transformation telemetry are not part of this
 foundation. Exporter and HTTP diagnostic text is sanitized before it reaches

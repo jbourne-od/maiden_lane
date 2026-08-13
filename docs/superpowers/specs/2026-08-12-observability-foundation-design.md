@@ -163,6 +163,14 @@ this slice. The foundation does not consume arbitrary
 customer data, secrets, or unbounded cardinality. A future resource attribute
 must receive an explicit safe contract before it is enabled.
 
+The upstream Go SDK's experimental `OTEL_GO_X_*` switches are unsupported.
+They can change batching, metric timestamps, resource behavior, cardinality,
+exemplars, or SDK self-observability outside this closed configuration. Maiden
+Lane rejects the known switches when configuration is loaded and immediately
+before provider construction. If one appears after startup, guarded exporters
+permanently close the affected export path so SDK state influenced by hidden
+ambient policy cannot later become externally visible.
+
 The initial trace sampler is fixed to parent-based, always-on sampling when
 tracing is enabled. Configurable sampling remains ordinary operational policy,
 but it is added only when the repository can state and test its supported
@@ -416,6 +424,9 @@ The implementation must establish at least these properties:
     global installation is verified in an isolated subprocess.
 19. Metric exemplars remain absent even when a measurement is recorded from a
     sampled trace carrying hostile attributes.
+20. Unsupported experimental `OTEL_GO_X_*` policy fails configuration or
+    provider construction; policy introduced after startup permanently closes
+    export rather than changing externally visible telemetry.
 
 Verification broadens through the repository's authoritative `make verify`
 and `make container-check` commands. The container smoke check continues to
