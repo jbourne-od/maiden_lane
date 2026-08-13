@@ -936,6 +936,24 @@ The closed integrity codes are:
 - `ASSESSMENT_IDENTITY_CONFLICT`
 - `REPLAY_DIVERGENCE`
 
+The closed `ArtifactKind` rank and canonical tokens for this slice are:
+
+1. `plan`
+2. `compiled_profile`
+3. `state`
+4. `world`
+5. `patch`
+6. `journal_entry`
+7. `journal_prefix`
+8. `invariant_result_set`
+9. `checkpoint_artifact`
+10. `readiness_assessment`
+
+An `ArtifactRef` is the one-byte closed artifact-kind tag plus the implicated
+artifact's raw 32-byte content digest. It never substitutes a semantic
+question or claim identity such as `CheckpointArtifactID` or `AssessmentID`
+for the content digest.
+
 `OperationInvariantCode`, `InvariantCode`, `RequirementCode`,
 `CompilationDiagnosticCode`, `IntegrityCode`, `ArtifactKind`, `FailureKind`,
 `ReadinessVerdict`, `SpineStatus`, and `ExecutionStatus` are distinct named
@@ -1010,6 +1028,12 @@ pinned input and state. They do not contain raw payloads, customer source IDs,
 database primary keys, backend row locations, or human error strings.
 Operational telemetry uses an even narrower representation and must not expose
 entity references as metric dimensions.
+
+For this slice, `FactRef` is the complete typed tuple `(EntityRef, FieldName)`
+and `InvariantEvidenceRef` is the compiler-derived invariant declaration key.
+Both are immutable, kernel-constructed values with read-only accessors. They
+may appear in semantic provenance and failure artifacts but are never admitted
+to the app observation carrier or telemetry projections.
 
 ## 10. Golden lifecycle variants
 

@@ -201,6 +201,9 @@ Implement these spellings exactly as distinct named code types. Human prose neve
 - Requirement codes: `TEAM_ASSIGNMENT_KEY_REQUIRED`, `TEAM_AGGREGATION_ANCHOR_REQUIRED`, `TEAM_ELAPSED_DURATION_REQUIRED`, `TEAM_DRIVING_DURATION_REQUIRED`.
 - Compilation diagnostics: `UNKNOWN_FIELD`, `UNSUPPORTED_OPERATOR`, `DECLARED_ACCESS_MISMATCH`, `WRITE_CONFLICT_UNRESOLVED`, `DEPENDENCY_CYCLE`, `PROFILE_ORDER_UNPROVABLE`.
 - Integrity codes: `ARTIFACT_DIGEST_MISMATCH`, `ARTIFACT_LINK_INCONSISTENT`, `ASSESSMENT_IDENTITY_CONFLICT`, `REPLAY_DIVERGENCE`.
+- Artifact kinds by closed rank: `plan`, `compiled_profile`, `state`, `world`, `patch`, `journal_entry`, `journal_prefix`, `invariant_result_set`, `checkpoint_artifact`, `readiness_assessment`.
+
+`ArtifactRef` contains the closed artifact-kind tag plus the artifact content digest, never a checkpoint/assessment claim identity. `FactRef` contains `EntityRef + FieldName`; `InvariantEvidenceRef` contains a compiler-derived invariant declaration key. These private-field, read-only semantic references never enter app observations or telemetry.
 
 `OperationInvariantCode`, `InvariantCode`, `RequirementCode`, `CompilationDiagnosticCode`, `IntegrityCode`, `ArtifactKind`, `FailureKind`, `ReadinessVerdict`, `SpineStatus`, and `ExecutionStatus` remain separate Go types. There is no catch-all protected code.
 
