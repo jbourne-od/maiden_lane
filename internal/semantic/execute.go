@@ -52,9 +52,9 @@ func ExecuteTransition(binding RunBinding, rule RuleID, state State, journal Jou
 	if err := verifyBinding(binding); err != nil {
 		return base, err
 	}
-	verifiedState, verifiedJournal, err := replayVerifiedJournal(binding, journal)
-	if err != nil {
-		return integrityTransitionOutcome(binding, verifiedState, verifiedJournal, ArtifactLinkInconsistent, ArtifactJournalPrefix, digestOrFallback(string(journal.PrefixDigest(binding)), string(binding.initialStateDigest)), Digest(verifiedState.Digest()))
+	verifiedState, verifiedJournal, issue := replayVerifiedJournal(binding, journal)
+	if issue != nil {
+		return journalIntegrityTransitionOutcome(binding, verifiedState, verifiedJournal, *issue)
 	}
 	if err := verifyState(state); err != nil {
 		return integrityTransitionOutcome(binding, verifiedState, verifiedJournal, ArtifactDigestMismatch, ArtifactState, digestOrFallback(string(state.digest), string(canonicalDigest(state.canonical))), Digest(verifiedState.Digest()))
@@ -226,6 +226,7 @@ func protectedFailure(binding RunBinding, rule RuleID, predecessor StateDigest, 
 	for _, result := range results {
 		report.invariantRefs = append(report.invariantRefs, InvariantEvidenceRef{declarationKey: result.declarationKey})
 	}
+	report.invariantRefs = canonicalInvariantEvidenceRefs(report.invariantRefs)
 	if patch != nil {
 		digest := patch.Digest()
 		report.patchDigest = &digest
@@ -236,6 +237,12 @@ func protectedFailure(binding RunBinding, rule RuleID, predecessor StateDigest, 
 	}
 	report.canonical, report.digest = canonical, FailureReportDigest(canonicalDigest(canonical))
 	return report, nil
+}
+
+func canonicalInvariantEvidenceRefs(input []InvariantEvidenceRef) []InvariantEvidenceRef {
+	result := slices.Clone(input)
+	sort.Slice(result, func(i, j int) bool { return result[i].declarationKey < result[j].declarationKey })
+	return slices.CompactFunc(result, func(a, b InvariantEvidenceRef) bool { return a.declarationKey == b.declarationKey })
 }
 
 func newJournalEntry(rule RuleID, predecessor, result State, patch Patch, evidence []FactRef, results []InvariantResult) (JournalEntry, error) {
@@ -272,61 +279,4 @@ func canonicalFactRefs(input []FactRef) []FactRef {
 		return result[i].field < result[j].field
 	})
 	return slices.Compact(result)
-}
-
-func verifyJournalEntries(binding RunBinding, journal Journal) error {
-	_, _, err := replayVerifiedJournal(binding, journal)
-	return err
-}
-
-func replayVerifiedJournal(binding RunBinding, journal Journal) (State, Journal, error) {
-	state := binding.initialState
-	verified := NewJournal()
-	for index, entry := range journal.entries {
-		if index >= len(binding.plan.transformations) || entry.rule != binding.plan.transformations[index].declaration.ID {
-			return state, verified, fmt.Errorf("entry %d rule does not match plan prefix", index)
-		}
-		if entry.predecessor != state.Digest() {
-			return state, verified, fmt.Errorf("entry %d predecessor link mismatch", index)
-		}
-		if entry.patch.schemaDigest != binding.plan.schemaDigest {
-			return state, verified, fmt.Errorf("entry %d patch link invalid", index)
-		}
-		if !verifiedJournalEntry(entry) {
-			return state, verified, fmt.Errorf("entry %d identity mismatch", index)
-		}
-		if !exactPassingInvariantResults(binding.plan.transformations[index].invariants, entry.invariantResults) {
-			return state, verified, fmt.Errorf("entry %d invariant results are incomplete", index)
-		}
-		applied, err := ApplyPatch(state, entry.patch)
-		if err != nil || applied.Failure() != nil || applied.State().Digest() != entry.result {
-			return state, verified, fmt.Errorf("entry %d patch replay diverged", index)
-		}
-		state = applied.State()
-		verified = verified.AppendAccepted(entry)
-	}
-	return state, verified, nil
-}
-
-func exactPassingInvariantResults(declarations []InvariantDeclaration, results []InvariantResult) bool {
-	if len(declarations) != len(results) {
-		return false
-	}
-	byKey := make(map[string]InvariantResult, len(results))
-	for _, result := range results {
-		if !result.passed {
-			return false
-		}
-		if _, duplicate := byKey[result.declarationKey]; duplicate {
-			return false
-		}
-		byKey[result.declarationKey] = result
-	}
-	for _, declaration := range declarations {
-		result, ok := byKey[declaration.key]
-		if !ok || result.code != declaration.code || result.scope != declaration.scope || result.boundary != declaration.appliesAfter {
-			return false
-		}
-	}
-	return true
 }

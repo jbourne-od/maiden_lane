@@ -41,7 +41,22 @@ func executeFormRelatedEntity(binding RunBinding, transformation CompiledTransfo
 	if !grouping[0].Equal(grouping[1]) {
 		return rejectInvariant(binding, declaration.ID, state, journal, transformation.invariants, TeamAssignmentKeyMismatch, refs, facts, nil)
 	}
-	teamID, err := syntheticEntityID(state.InputLineageID(), form.OutputKind, declaration.ID, refs, grouping[0])
+	_, outputKeyName := splitFieldPath(form.OutputKey.Field)
+	outputKeys := make([]Value, len(sources))
+	for i, source := range sources {
+		value, present := source.Field(outputKeyName)
+		if !present || !value.Valid() {
+			return rejectInvariant(binding, declaration.ID, state, journal, transformation.invariants, TeamAssignmentKeyInvalid, refs, facts, nil)
+		}
+		outputKeys[i] = value
+		facts = append(facts, FactRef{entity: source.Ref(), field: outputKeyName})
+	}
+	for _, value := range outputKeys[1:] {
+		if !outputKeys[0].Equal(value) {
+			return rejectInvariant(binding, declaration.ID, state, journal, transformation.invariants, TeamAssignmentKeyMismatch, refs, facts, nil)
+		}
+	}
+	teamID, err := syntheticEntityID(state.InputLineageID(), form.OutputKind, declaration.ID, refs, outputKeys[0])
 	if err != nil {
 		return base, err
 	}

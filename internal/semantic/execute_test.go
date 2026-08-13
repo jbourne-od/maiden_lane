@@ -136,6 +136,52 @@ func TestExecuteFormTeamReadsEachCompiledCopiedField(t *testing.T) {
 	assertFieldEquals(t, team, "dispatch_label", mustString(t, "dispatch"))
 }
 
+// Production break caught: deriving synthetic identity from GroupingField
+// instead of the compiled OutputKey.Field makes a distinct semantic output key
+// inert and can collide outputs whose grouping assignment is unchanged.
+func TestExecuteFormTeamUsesDistinctCompiledOutputKey(t *testing.T) {
+	request := compileFixtureRequest(t, false)
+	form := &request.Rules.Transformations[0]
+	form.Form.OutputKey.Field = "driver.hos_anchor"
+	form.DeclaredReads = append(form.DeclaredReads, "driver.hos_anchor")
+	compilation, err := Compile(request)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	plan, ok := compilation.Plan()
+	if !ok {
+		t.Fatal("distinct-output-key fixture did not compile")
+	}
+
+	execute := func(anchor string) (EntityRef, State) {
+		fields := passingDriverFields(t)
+		fields[0]["hos_anchor"] = mustAtom(t, anchor)
+		fields[1]["hos_anchor"] = mustAtom(t, anchor)
+		_, state, world := executionFixture(t, false, &fields)
+		binding := mustBindRun(t, plan, state, world, testGoExecutor)
+		outcome := mustAcceptedTransition(t, binding, "form_team.v1", state, NewJournal())
+		return insertedRef(t, outcome.Patch()), state
+	}
+
+	first, firstState := execute("T0")
+	again, _ := execute("T0")
+	changed, _ := execute("T9")
+	if first != again {
+		t.Fatalf("same compiled output key produced nondeterministic refs %v and %v", first, again)
+	}
+	if first == changed {
+		t.Fatal("changing only the compiled output key did not change synthetic identity")
+	}
+	want, err := syntheticEntityID(firstState.InputLineageID(), "team", "form_team.v1",
+		[]EntityRef{firstState.Entities()[0].Ref(), firstState.Entities()[1].Ref()}, mustAtom(t, "T0"))
+	if err != nil {
+		t.Fatalf("syntheticEntityID: %v", err)
+	}
+	if first.ID != want {
+		t.Fatalf("team ID=%s, want output-key-derived %s", first.ID, want)
+	}
+}
+
 // Production break caught: binding unchecked/corrupt semantic artifacts or an
 // unsupported execution contract would manufacture identities for a request
 // that was never validly established.
@@ -265,6 +311,31 @@ func TestExecuteAggregateTeamHOSRejectsProtectedInputsBeforePatch(t *testing.T) 
 	}
 }
 
+// Production break caught: treating two present empty anchor atoms as a valid
+// common source anchor would materialize and commit an empty aggregate anchor.
+func TestExecuteAggregateTeamHOSRejectsEmptySourceAnchorBeforePatch(t *testing.T) {
+	fields := passingDriverFields(t)
+	fields[0]["hos_anchor"] = mustAtom(t, "")
+	fields[1]["hos_anchor"] = mustAtom(t, "")
+	plan, state, world := executionFixture(t, false, &fields)
+	binding := mustBindRun(t, plan, state, world, testGoExecutor)
+	t1 := mustAcceptedTransition(t, binding, "form_team.v1", state, NewJournal())
+	outcome, err := ExecuteTransition(binding, "aggregate_team_hos.v1", t1.State(), t1.Journal())
+	if err != nil {
+		t.Fatalf("ExecuteTransition: %v", err)
+	}
+	failure := mustTransitionFailure(t, outcome)
+	if failure.InvariantCode() != HOSTupleIncomplete {
+		t.Fatalf("code=%s, want %s", failure.InvariantCode(), HOSTupleIncomplete)
+	}
+	if outcome.HasPatch() {
+		t.Fatal("empty source anchor materialized a patch")
+	}
+	if len(outcome.Journal().Entries()) != 1 {
+		t.Fatal("empty source anchor entered accepted history")
+	}
+}
+
 // Production break caught: assuming RequiredSourceTuple subsumes an explicit
 // CompleteTuple predicate would accept a missing field the compiled predicate reads.
 func TestExecuteAggregateEvaluatesDeclaredCompleteTupleFields(t *testing.T) {
@@ -352,6 +423,102 @@ func TestExecuteTransitionReturnsTypedIntegrityFailureForCorruptEstablishedArtif
 	}
 }
 
+// Production break caught: flattening journal verification errors loses the
+// exact integrity code, implicated artifact, digest evidence, and verified
+// prefix required to diagnose an established-run corruption safely.
+func TestExecuteTransitionClassifiesJournalIntegrityFailures(t *testing.T) {
+	fields := passingDriverFields(t)
+	plan, state, world := executionFixture(t, false, &fields)
+	binding := mustBindRun(t, plan, state, world, testGoExecutor)
+	t1 := mustAcceptedTransition(t, binding, "form_team.v1", state, NewJournal())
+	t2 := mustAcceptedTransition(t, binding, "aggregate_team_hos.v1", t1.State(), t1.Journal())
+	validEntries := t2.Journal().Entries()
+
+	tests := []struct {
+		name         string
+		mutate       func([]JournalEntry)
+		code         IntegrityCode
+		kind         ArtifactKind
+		verified     int
+		wantExpected bool
+		wantObserved bool
+		expected     Digest
+		observed     Digest
+	}{
+		{name: "embedded patch self digest", mutate: func(entries []JournalEntry) {
+			entries[1].patch.digest = PatchDigest("sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")
+			canonical, _ := encodeJournalEntry(entries[1])
+			entries[1].canonical, entries[1].digest = canonical, JournalEntryDigest(canonicalDigest(canonical))
+		}, code: ArtifactDigestMismatch, kind: ArtifactPatch, verified: 1, wantExpected: true, wantObserved: true,
+			expected: Digest(validEntries[1].patch.digest), observed: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},
+		{name: "entry self digest", mutate: func(entries []JournalEntry) {
+			entries[1].digest = JournalEntryDigest("sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+		}, code: ArtifactDigestMismatch, kind: ArtifactJournalEntry, verified: 1, wantExpected: true, wantObserved: true,
+			expected: Digest(validEntries[1].digest), observed: "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"},
+		{name: "result replay divergence", mutate: func(entries []JournalEntry) {
+			entries[1].result = StateDigest("sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+			canonical, _ := encodeJournalEntry(entries[1])
+			entries[1].canonical, entries[1].digest = canonical, JournalEntryDigest(canonicalDigest(canonical))
+		}, code: ReplayDivergence, kind: ArtifactJournalEntry, verified: 1, wantExpected: true, wantObserved: true,
+			expected: Digest(t2.State().Digest()), observed: "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+		{name: "predecessor link", mutate: func(entries []JournalEntry) {
+			entries[1].predecessor = state.Digest()
+			canonical, _ := encodeJournalEntry(entries[1])
+			entries[1].canonical, entries[1].digest = canonical, JournalEntryDigest(canonicalDigest(canonical))
+		}, code: ArtifactLinkInconsistent, kind: ArtifactJournalEntry, verified: 1},
+		{name: "plan rule link", mutate: func(entries []JournalEntry) {
+			entries[1].rule = "form_team.v1"
+			canonical, _ := encodeJournalEntry(entries[1])
+			entries[1].canonical, entries[1].digest = canonical, JournalEntryDigest(canonicalDigest(canonical))
+		}, code: ArtifactLinkInconsistent, kind: ArtifactJournalEntry, verified: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			entries := cloneJournalEntries(validEntries)
+			test.mutate(entries)
+			journal := Journal{entries: entries}
+			outcome, err := ExecuteTransition(binding, "aggregate_team_hos.v1", t2.State(), journal)
+			if err != nil {
+				t.Fatalf("ExecuteTransition: %v", err)
+			}
+			failure := mustTransitionFailure(t, outcome)
+			integrity, ok := failure.ArtifactIntegrity()
+			if !ok {
+				t.Fatal("failure is not artifact integrity")
+			}
+			if integrity.Code() != test.code || integrity.ArtifactKind() != test.kind {
+				t.Fatalf("integrity=(%s,%s), want (%s,%s)", integrity.Code(), integrity.ArtifactKind(), test.code, test.kind)
+			}
+			wantArtifact := Digest(canonicalDigest(entries[1].canonical))
+			if test.kind == ArtifactPatch {
+				wantArtifact = Digest(canonicalDigest(entries[1].patch.canonical))
+			}
+			if integrity.Artifact().Digest() != wantArtifact {
+				t.Fatalf("artifact digest=%s, want implicated entry content %s", integrity.Artifact().Digest(), wantArtifact)
+			}
+			gotExpected, hasExpected := integrity.ExpectedDigest()
+			gotObserved, hasObserved := integrity.ObservedDigest()
+			if hasExpected != test.wantExpected || hasObserved != test.wantObserved {
+				t.Fatalf("optional evidence expected=(%t,%t), want (%t,%t)", hasExpected, hasObserved, test.wantExpected, test.wantObserved)
+			}
+			if gotExpected != test.expected || gotObserved != test.observed {
+				t.Fatalf("digest evidence=(%s,%s), want (%s,%s)", gotExpected, gotObserved, test.expected, test.observed)
+			}
+			last, ok := integrity.LastVerifiedStateDigest()
+			if !ok || last != t1.State().Digest() {
+				t.Fatalf("last verified state=(%s,%t), want C1", last, ok)
+			}
+			refs := integrity.References()
+			if len(refs) != 2 || refs[0].Kind() != ArtifactState || refs[0].Digest() != Digest(t1.State().Digest()) || refs[1] != integrity.Artifact() {
+				t.Fatalf("integrity references=%v", refs)
+			}
+			if len(outcome.Journal().Entries()) != test.verified || outcome.State().Digest() != t1.State().Digest() {
+				t.Fatal("integrity outcome did not preserve the exact independently verified C1 prefix")
+			}
+		})
+	}
+}
+
 // Production break caught: allowing callers to select a non-next or repeated
 // compiled rule would create an invalid accepted-plan prefix.
 func TestExecuteTransitionRequiresNextCompiledRule(t *testing.T) {
@@ -427,6 +594,40 @@ func TestArtifactIntegrityFailureCopiesOptionalInputs(t *testing.T) {
 	}
 }
 
+// Production break caught: encoding invariant evidence references in runtime
+// evaluation order makes a semantically identical failure digest depend on an
+// executor refactor even though runtime result order remains inspectable.
+func TestProtectedFailureCanonicalizesInvariantEvidenceRefs(t *testing.T) {
+	fields := passingDriverFields(t)
+	plan, state, world := executionFixture(t, false, &fields)
+	binding := mustBindRun(t, plan, state, world, testGoExecutor)
+	declarations := plan.MustTransformation("aggregate_team_hos.v1").Invariants()
+	first := invariantResult(declarations[0], true, nil, nil)
+	second := invariantResult(declarations[1], false, nil, nil)
+
+	a, err := protectedFailure(binding, "aggregate_team_hos.v1", state.Digest(), protectedInvariantCode, "", HOSTupleIncomplete,
+		[]InvariantResult{first, second}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("protectedFailure a: %v", err)
+	}
+	b, err := protectedFailure(binding, "aggregate_team_hos.v1", state.Digest(), protectedInvariantCode, "", HOSTupleIncomplete,
+		[]InvariantResult{second, first}, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("protectedFailure b: %v", err)
+	}
+	if a.Digest() != b.Digest() || !bytes.Equal(a.CanonicalBytes(), b.CanonicalBytes()) {
+		t.Fatal("evidence reference order/duplicates changed failure identity")
+	}
+	refs := a.InvariantEvidenceRefs()
+	if len(refs) != 2 || refs[0].DeclarationKey() >= refs[1].DeclarationKey() {
+		t.Fatalf("invariant refs are not sorted and deduplicated: %v", refs)
+	}
+	results := a.InvariantResults()
+	if len(results) != 2 || results[1].DeclarationKey() != second.DeclarationKey() {
+		t.Fatal("canonical evidence normalization changed truthful runtime result order")
+	}
+}
+
 // Production break caught: selecting one contributor on an equal maximum
 // would make provenance depend on source traversal order.
 func TestExecuteAggregateTeamHOSRetainsAllMaximumTies(t *testing.T) {
@@ -474,6 +675,31 @@ func TestExecuteAggregateTeamHOSDetectsEmittedAggregateMismatch(t *testing.T) {
 	}
 	if validateAggregateCandidate(mutated, teamRef, expected, declaration.ResultPredicates) {
 		t.Fatal("emitted reduction mismatch passed candidate validation")
+	}
+}
+
+// Production break caught: emitted-boundary validation that checks only
+// presence and equality would certify an empty aggregate anchor.
+func TestValidateAggregateCandidateRejectsEmptyEmittedAnchor(t *testing.T) {
+	fields := passingDriverFields(t)
+	plan, state, world := executionFixture(t, false, &fields)
+	binding := mustBindRun(t, plan, state, world, testGoExecutor)
+	t1 := mustAcceptedTransition(t, binding, "form_team.v1", state, NewJournal())
+	teamRef := insertedRef(t, t1.Patch())
+	team, _ := t1.State().Entity(teamRef)
+	emitted := team.Fields()
+	emitted["aggregation_anchor"] = mustAtom(t, "")
+	emitted["elapsed_duration_hours"] = NewInt64Value(10)
+	emitted["driving_duration_hours"] = NewInt64Value(8)
+	candidate := replaceEntityInState(t, t1.State(), mustEntity(t, teamRef.Kind, teamRef.ID, emitted))
+	aggregate := plan.MustTransformation("aggregate_team_hos.v1").Declaration().Aggregate
+	expected := map[FieldName]Value{
+		"aggregation_anchor":     mustAtom(t, ""),
+		"elapsed_duration_hours": NewInt64Value(10),
+		"driving_duration_hours": NewInt64Value(8),
+	}
+	if validateAggregateCandidate(candidate, teamRef, expected, aggregate.ResultPredicates) {
+		t.Fatal("empty emitted aggregate anchor passed boundary validation")
 	}
 }
 

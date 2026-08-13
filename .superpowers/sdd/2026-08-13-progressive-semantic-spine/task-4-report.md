@@ -48,7 +48,9 @@ orchestration, or semantic telemetry.
 - `internal/semantic/failure.go` — closed integrity/protected failure artifacts
   and immutable safe references.
 - `internal/semantic/execute.go` — transition outcome/dispatcher, accepted
-  prefix replay, and common invariant/journal construction.
+  outcome construction, and common invariant/journal construction.
+- `internal/semantic/journal_verify.go` — structured journal-entry identity,
+  link, and replay verification with exact verified-prefix retention.
 - `internal/semantic/execute_form.go` — closed related-entity operator.
 - `internal/semantic/execute_aggregate.go` — closed related-field aggregate
   operator and typed output-slot resolution.
@@ -184,3 +186,38 @@ resolved and reverified. Statically unreachable protected codes (for example a
 source-kind mismatch after compiler-enforced typed source references) remain in
 the exact closed taxonomy but are not manufactured through artificial domain
 states merely to exercise a runtime branch.
+
+## Fix round 1/5
+
+Independent review found four execution-boundary defects, all resolved with a
+focused RED -> GREEN cycle:
+
+- Equal empty source anchor atoms previously passed equality and committed.
+  `TestExecuteAggregateTeamHOSRejectsEmptySourceAnchorBeforePatch` reproduced
+  the acceptance; T2 now returns `HOS_TUPLE_INCOMPLETE` before patch creation.
+  `TestValidateAggregateCandidateRejectsEmptyEmittedAnchor` also protects the
+  emitted aggregate boundary.
+- T1 previously used `GroupingField` as the synthetic output key regardless of
+  the compiled `OutputKey.Field`. `TestExecuteFormTeamUsesDistinctCompiledOutputKey`
+  reproduced the inert key; T1 now reads the output-key field from every
+  explicit source, requires a common valid typed value, records its safe fact
+  refs, and derives identity from it deterministically.
+- Journal replay flattened every defect into a journal-prefix link failure.
+  `TestExecuteTransitionClassifiesJournalIntegrityFailures` now freezes entry
+  self-digest mismatch as `ARTIFACT_DIGEST_MISMATCH`, replayed result mismatch
+  as `REPLAY_DIVERGENCE`, and plan/predecessor links as
+  `ARTIFACT_LINK_INCONSISTENT`, all on the concrete `journal_entry` content
+  digest with exact safe optional digest evidence and retained C1 frontier.
+  Embedded patch identity corruption likewise implicates the concrete `patch`
+  content digest rather than its enclosing entry or a fabricated prefix ref.
+- Protected failure evidence refs followed runtime evaluation order.
+  `TestProtectedFailureCanonicalizesInvariantEvidenceRefs` reproduced the
+  identity drift; refs are now sorted/deduplicated by declaration key while
+  runtime results retain evaluation order. The independently frozen protected
+  failure vector changed legitimately to
+  `sha256:677c45d2f45b89b5b046e8dc908426c821bf5bdee5a8d762599c50c43512c7be`.
+
+Focused tests and `go test ./internal/semantic -count=1` pass. A fresh
+`make verify` also passed module tidy diff, vet, staticcheck, all tests, all
+race tests, govulncheck (`No vulnerabilities found`), and the trimmed binary
+build. The fix commit is recorded at handoff.

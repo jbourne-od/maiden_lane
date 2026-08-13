@@ -52,6 +52,14 @@ func executeAggregateRelatedFields(binding RunBinding, transformation CompiledTr
 			facts = append(facts, FactRef{entity: member.Ref(), field: name})
 		}
 	}
+	_, anchorSource := splitFieldPath(aggregate.Anchor.Source)
+	for _, member := range members {
+		anchor, present := member.Field(anchorSource)
+		if !present || !nonEmptyAtom(anchor) {
+			failed := invariantResult(tupleInvariant, false, memberRefs, facts)
+			return rejectInvariantEvaluated(binding, declaration.ID, state, journal, HOSTupleIncomplete, append(evaluated, failed), memberRefs, facts, nil)
+		}
+	}
 	evaluated = append(evaluated, invariantResult(tupleInvariant, true, memberRefs, facts))
 
 	// Declaration order is canonical content order, not evaluation order. The
@@ -144,7 +152,6 @@ func executeAggregateRelatedFields(binding RunBinding, transformation CompiledTr
 		}
 	}
 
-	_, anchorSource := splitFieldPath(aggregate.Anchor.Source)
 	anchor, _ := members[0].Field(anchorSource)
 	updates := []FieldUpdate{{Name: anchorDestination, Before: AbsentField(), After: anchor}}
 	expected := map[FieldName]Value{anchorDestination: anchor}
@@ -268,7 +275,7 @@ func validateAggregateCandidate(state State, target EntityRef, expected map[Fiel
 	}
 	for name, want := range expected {
 		got, present := entity.Field(name)
-		if !present || !got.Equal(want) {
+		if !present || !got.Equal(want) || (got.Kind() == ValueAtom && !nonEmptyAtom(got)) {
 			return false
 		}
 	}
@@ -307,4 +314,9 @@ func validateAggregateCandidate(state State, target EntityRef, expected map[Fiel
 		}
 	}
 	return true
+}
+
+func nonEmptyAtom(value Value) bool {
+	text, ok := value.String()
+	return ok && value.Kind() == ValueAtom && text != ""
 }

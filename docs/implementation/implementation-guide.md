@@ -105,6 +105,14 @@ cardinality boundary.
   complete patch and every applicable protected check pass. Deterministic
   protected rejection returns the predecessor plus typed failure with nil Go
   error; malformed or inconsistent machinery remains on the error channel.
+- Formed-entity identity uses the compiled common-source output-key field,
+  independently of the grouping field. Aggregate execution requires a
+  present, non-empty atom anchor at both the source and emitted boundaries.
+- Established-run journal verification retains only the independently replayed
+  prefix and distinguishes entry content-digest mismatch, replay divergence,
+  and semantic link inconsistency with the implicated entry content digest.
+  Protected failure evidence references are sorted and deduplicated separately
+  from the truthful runtime result sequence.
 - `context.Context` carries cancellation across call boundaries. It is passed
   explicitly rather than discovered globally. Here it carries cancellation and
   trace context, never Maiden Lane transformation semantics.

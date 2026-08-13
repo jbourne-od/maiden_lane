@@ -288,3 +288,10 @@ func (f FailureReport) InvariantResults() []InvariantResult {
 	}
 	return f.protected.InvariantResults()
 }
+
+func (f FailureReport) ArtifactIntegrity() (ArtifactIntegrityFailureReport, bool) {
+	if f.integrity == nil {
+		return ArtifactIntegrityFailureReport{}, false
+	}
+	return *f.integrity, true
+}
