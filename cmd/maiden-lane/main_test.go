@@ -47,6 +47,41 @@ func TestExecuteDrainsApplicationBeforeTelemetryShutdown(t *testing.T) {
 	if got := strings.Join(events, ","); got != "server-drained,telemetry-shutdown" {
 		t.Fatalf("events = %q", got)
 	}
+	if got := runtime.shutdownCalls(); got != 1 {
+		t.Fatalf("telemetry shutdown calls = %d, want 1", got)
+	}
+}
+
+func TestExecuteDefaultDisabledRuntimeUsesNoExporter(t *testing.T) {
+	served := false
+	deps := processDeps{
+		lookupEnv: func(string) (string, bool) { return "", false },
+		readFile: func(string) ([]byte, error) {
+			t.Fatal("disabled observability read a TLS file")
+			return nil, nil
+		},
+		newRuntime: func(ctx context.Context, cfg observability.Config, output io.Writer) (observabilityRuntime, *slog.Logger, error) {
+			if cfg.TracesExporter != observability.ExporterNone || cfg.MetricsExporter != observability.ExporterNone {
+				t.Fatalf("default exporters = (%q, %q), want none", cfg.TracesExporter, cfg.MetricsExporter)
+			}
+			runtime, err := observability.New(ctx, cfg, output)
+			if err != nil {
+				return nil, nil, err
+			}
+			return runtime, runtime.Logger, nil
+		},
+		serve: func(context.Context, string, *slog.Logger, http.Handler, *log.Logger) error {
+			served = true
+			return nil
+		},
+	}
+
+	if err := execute(context.Background(), []string{"serve"}, io.Discard, io.Discard, deps); err != nil {
+		t.Fatalf("execute with disabled runtime: %v", err)
+	}
+	if !served {
+		t.Fatal("fake server was not invoked")
+	}
 }
 
 func TestExecutePreservesCausesWithoutLoggingTheirText(t *testing.T) {
@@ -458,6 +493,12 @@ func (runtime *fakeObservabilityRuntime) Shutdown(ctx context.Context) error {
 	defer runtime.mu.Unlock()
 	runtime.calls++
 	return runtime.shutdown(ctx)
+}
+
+func (runtime *fakeObservabilityRuntime) shutdownCalls() int {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	return runtime.calls
 }
 
 func testProcessDeps(runtime observabilityRuntime, serveCommand serveCommand) processDeps {
