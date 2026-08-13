@@ -40,6 +40,15 @@ import (
 //   compile failure: tag, compiler-input digest, INVALID_PLAN kind, sorted
 //                 diagnostics(code, subject key, detail key)
 //
+// Patch artifact encoding table (v1):
+//
+//   patch:        tag, operation count, operations in canonical rank/key order
+//   insert:       Insert tag, complete entity(kind, ID, sorted fields)
+//   relate:       Relate tag, relation(kind, from ref, to ref)
+//   update:       Update tag, target ref, field count, fields sorted by name;
+//                 each field contains its explicit before presence marker and
+//                 optional typed value followed by its present after value
+//
 // Tags and semantic strings are uint64-big-endian length-prefixed exact UTF-8
 // bytes. Counts are uint64 big endian. Int64 values use big-endian two's
 // complement. Digests are 32 raw bytes decoded from validated lowercase
@@ -56,6 +65,7 @@ const (
 	planDomainTag               = "maiden-lane.plan.v1"
 	compiledProfileDomainTag    = "maiden-lane.compiled-profile.v1"
 	compilationFailureDomainTag = "maiden-lane.compilation-failure.v1"
+	patchDomainTag              = "maiden-lane.patch.v1"
 )
 
 // contentHasher hashes bytes whose semantic meaning and canonical order have
@@ -400,6 +410,67 @@ func encodeState(state State) ([]byte, error) {
 		encoder.digest(string(relation.To.ID))
 	}
 	return encoder.bytes()
+}
+
+func encodePatch(operations []Operation) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(patchDomainTag)
+	encoder.uint64(uint64(len(operations)))
+	for _, operation := range operations {
+		encoder.byte(byte(operation.kind))
+		encodeOperationPayload(&encoder, operation)
+	}
+	return encoder.bytes()
+}
+
+func encodeOperationPayloadBytes(operation Operation) ([]byte, error) {
+	var encoder canonicalEncoder
+	encodeOperationPayload(&encoder, operation)
+	return encoder.bytes()
+}
+
+func encodeOperationPayload(encoder *canonicalEncoder, operation Operation) {
+	switch operation.kind {
+	case OperationInsert:
+		encodeEntity(encoder, operation.insert.entity)
+	case OperationRelate:
+		encodeRelation(encoder, operation.relate.relation)
+	case OperationUpdate:
+		encodeEntityRef(encoder, operation.update.target)
+		encoder.uint64(uint64(len(operation.update.fields)))
+		for _, change := range operation.update.fields {
+			encoder.string(string(change.Name))
+			encoder.optional(change.Before.present, func() {
+				encoder.value(change.Before.value)
+			})
+			encoder.value(change.After)
+		}
+	default:
+		if encoder.err == nil {
+			encoder.err = fmt.Errorf("unknown operation kind %d", operation.kind)
+		}
+	}
+}
+
+func encodeEntity(encoder *canonicalEncoder, entity Entity) {
+	encodeEntityRef(encoder, entity.ref)
+	fieldNames := sortedFieldNames(entity.fields)
+	encoder.uint64(uint64(len(fieldNames)))
+	for _, name := range fieldNames {
+		encoder.string(string(name))
+		encoder.value(entity.fields[name])
+	}
+}
+
+func encodeEntityRef(encoder *canonicalEncoder, ref EntityRef) {
+	encoder.string(string(ref.Kind))
+	encoder.digest(string(ref.ID))
+}
+
+func encodeRelation(encoder *canonicalEncoder, relation Relation) {
+	encoder.string(string(relation.Kind))
+	encodeEntityRef(encoder, relation.From)
+	encodeEntityRef(encoder, relation.To)
 }
 
 func compareEntityRefs(a, b EntityRef) int {
