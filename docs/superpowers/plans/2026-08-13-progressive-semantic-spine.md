@@ -199,7 +199,7 @@ Implement these spellings exactly as distinct named code types. Human prose neve
 - Operation invariant codes: `OP_ENTITY_IDENTITY_COLLISION`, `OP_UPDATE_TARGET_NOT_FOUND`, `OP_BEFORE_IMAGE_MISMATCH`, `OP_RELATION_ALREADY_PRESENT`, `OP_RELATION_ENDPOINT_MISSING`.
 - Rule invariant codes: `DECLARED_SOURCE_NOT_FOUND`, `DECLARED_SOURCE_KIND_INVALID`, `TEAM_ASSIGNMENT_KEY_INVALID`, `TEAM_ASSIGNMENT_KEY_MISMATCH`, `TEAM_MEMBER_CARDINALITY_INVALID`, `HOS_TUPLE_INCOMPLETE`, `HOS_DURATION_INVALID`, `HOS_ANCHOR_MISMATCH`, `HOS_AGGREGATE_INVALID`.
 - Requirement codes: `TEAM_ASSIGNMENT_KEY_REQUIRED`, `TEAM_AGGREGATION_ANCHOR_REQUIRED`, `TEAM_ELAPSED_DURATION_REQUIRED`, `TEAM_DRIVING_DURATION_REQUIRED`.
-- Compilation diagnostics: `UNKNOWN_FIELD`, `UNSUPPORTED_OPERATOR`, `DECLARED_ACCESS_MISMATCH`, `DEPENDENCY_CYCLE`, `PROFILE_ORDER_UNPROVABLE`.
+- Compilation diagnostics: `UNKNOWN_FIELD`, `UNSUPPORTED_OPERATOR`, `DECLARED_ACCESS_MISMATCH`, `WRITE_CONFLICT_UNRESOLVED`, `DEPENDENCY_CYCLE`, `PROFILE_ORDER_UNPROVABLE`.
 - Integrity codes: `ARTIFACT_DIGEST_MISMATCH`, `ARTIFACT_LINK_INCONSISTENT`, `ASSESSMENT_IDENTITY_CONFLICT`, `REPLAY_DIVERGENCE`.
 
 `OperationInvariantCode`, `InvariantCode`, `RequirementCode`, `CompilationDiagnosticCode`, `IntegrityCode`, `ArtifactKind`, `FailureKind`, `ReadinessVerdict`, `SpineStatus`, and `ExecutionStatus` remain separate Go types. There is no catch-all protected code.
@@ -367,7 +367,7 @@ func TestCompileDerivesExactTeamHOSAccess(t *testing.T) {
 }
 ```
 
-Add table cases for unknown fields, unsupported operator tags, multiple active union variants, missing typed output key, declared/derived access disagreement, unresolved output-slot reference, and dependency cycle. Assert the exact `CompilationDiagnosticCode` ordering and absence of `PlanID`/`ProfileID` on failure.
+Add table cases for unknown fields, unsupported operator tags, multiple active union variants, missing typed output key, declared/derived access disagreement, unresolved output-slot reference, unresolved write/write conflict, and dependency cycle. Assert the exact `CompilationDiagnosticCode` ordering and absence of `PlanID`/`ProfileID` on failure. Use `WRITE_CONFLICT_UNRESOLVED` only when overlapping writers have no dependency path ordering either writer before the other.
 
 - [ ] **Step 2: Run compiler tests and observe RED**
 
@@ -406,9 +406,10 @@ Profiles use explicit `AllEntitiesOfKind` scope, `AllSelected` aggregation, and 
 2. validate schema/rules/profiles and collect typed diagnostics;
 3. derive entity/relation/field accesses and invariant declarations;
 4. reject authored/derived disagreement;
-5. topologically order dependencies using a canonical semantic-key priority queue;
-6. prove profile implications only for identical scope/aggregation/atom semantics and requirement-set containment; and
-7. return either an immutable plan plus compiled profiles or one canonical compilation failure, never a partial accepted program.
+5. reject overlapping writers with `WRITE_CONFLICT_UNRESOLVED` unless the dependency graph contains a path ordering one before the other;
+6. topologically order dependencies using a canonical semantic-key priority queue;
+7. prove profile implications only for identical scope/aggregation/atom semantics and requirement-set containment; and
+8. return either an immutable plan plus compiled profiles or one canonical compilation failure, never a partial accepted program.
 
 ```go
 type Compilation struct { /* private */ }

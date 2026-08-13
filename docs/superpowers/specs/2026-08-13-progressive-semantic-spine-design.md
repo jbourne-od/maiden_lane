@@ -906,8 +906,15 @@ The minimum closed compilation diagnostic codes exercised by this slice are:
 - `UNKNOWN_FIELD`
 - `UNSUPPORTED_OPERATOR`
 - `DECLARED_ACCESS_MISMATCH`
+- `WRITE_CONFLICT_UNRESOLVED`
 - `DEPENDENCY_CYCLE`
 - `PROFILE_ORDER_UNPROVABLE`
+
+`WRITE_CONFLICT_UNRESOLVED` means that two transformations write at least one
+overlapping semantic target and the declared dependency graph contains no path
+ordering either writer before the other. A real dependency path may order
+overlapping writers; authoring position, rule-name order, and compiler
+tie-breaking may not silently resolve the conflict.
 
 The closed integrity codes are:
 
@@ -1269,8 +1276,9 @@ Implementation is test-first and must cover the following properties.
 - Rules compile to exactly two typed transformations and two named checkpoint
   boundaries.
 - Derived reads and writes match declarations; disagreement, unknown fields,
-  invalid operators, dependency cycles, and unprovable profile ordering reject
-  without a `PlanID` or `ProfileID` as applicable.
+  unresolved write conflicts, invalid operators, dependency cycles, and
+  unprovable profile ordering reject without a `PlanID` or `ProfileID` as
+  applicable.
 - Shuffled schema, rule, invariant, checkpoint, and profile declaration order
   yields identical canonical bytes and IDs when semantics are unchanged.
 - Reversing the same two normalized source references preserves plan bytes;
