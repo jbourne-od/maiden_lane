@@ -28,10 +28,17 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
   exactly `Insert`, `Relate`, and `Update`, with closed operation failures,
   explicit update before-images, success-only accepted-application receipts,
   and receipt-authorized verified inverse application.
+- A deterministic reference executor for the compiled walking-skeleton plan,
+  including verified run binding, the closed related-entity and related-field
+  aggregate operators, compiler-derived protected invariant results, typed
+  semantic failure reports, and immutable accepted-only journals.
+- Versioned identities for provenance policy, semantic input/run/execution,
+  synthetic entities, accepted journal entries and prefixes, invariant-result
+  sets, and protected/integrity failure reports. Executor build identity affects
+  only `ExecutionID`; accepted semantic artifacts remain backend-independent.
 
-There is no rule executor, accepted semantic journal, sealed-checkpoint model,
-readiness assessment, worker, persistence adapter, promotion gate, semantic
-telemetry, or stable typed application error.
+There is no sealed-checkpoint model, readiness assessment, worker, persistence
+adapter, promotion gate, semantic telemetry, or stable typed application error.
 
 ## Current repository map
 
@@ -40,7 +47,7 @@ api/openapi.yaml                 current health wire contract
 cmd/maiden-lane/main.go          CLI, process composition, server lifecycle
 internal/httpapi/router.go       HTTP transport routes and handlers
 internal/observability/          operational config, slog, OTel runtime and HTTP instrumentation
-internal/semantic/               pure typed state, canonical compiler values, and atomic patch kernel
+internal/semantic/               pure typed state, compiler, atomic patches, reference executor, invariants, and journal
 Dockerfile                       non-root application image
 Makefile                         explicit local verification commands
 .github/workflows/pipeline.yml   CI and ECR publication
@@ -92,6 +99,12 @@ cardinality boundary.
   construction validates every operation against its pinned schema; malformed
   or schema-incompatible calls are ordinary errors rather than protected
   semantic failures.
+- The executor selects only transformations already present in a verified
+  compiled plan. It validates the state/journal frontier, resolves T2's team
+  through T1's accepted typed output patch, and appends history only after a
+  complete patch and every applicable protected check pass. Deterministic
+  protected rejection returns the predecessor plus typed failure with nil Go
+  error; malformed or inconsistent machinery remains on the error channel.
 - `context.Context` carries cancellation across call boundaries. It is passed
   explicitly rather than discovered globally. Here it carries cancellation and
   trace context, never Maiden Lane transformation semantics.
@@ -162,10 +175,10 @@ plus Docker for the container targets.
 
 ## Known gaps
 
-The semantic execution, accepted-history, checkpoint, readiness, application,
-and AWS runtime layers described by the HLD are not implemented. The current
-patch kernel intentionally supports no delete, unrelate, merge, split, rule
-execution, journal append, sealing, or publication behavior. There are no
+Checkpoint sealing, readiness, application orchestration, and AWS runtime
+layers described by the HLD are not implemented. The current patch kernel
+intentionally supports no delete, unrelate, merge, split, sealing, or
+publication behavior. There are no
 application-operation spans, worker or adapter spans, OTel log export,
 collector deployment, or wrapped non-health production routes. Their eventual
 package boundaries will be documented here only after the corresponding code

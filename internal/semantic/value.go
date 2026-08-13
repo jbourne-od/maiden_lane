@@ -26,7 +26,6 @@ type (
 	WorldID                  string
 	SemanticRunID            string
 	ProvenancePolicyID       string
-	ExecutorIdentity         string
 	ExecutionID              string
 	PatchDigest              string
 	JournalEntryDigest       string
@@ -42,6 +41,43 @@ type (
 	FailureReportDigest      string
 	CompilerSemanticsVersion string
 )
+
+// ExecutorIdentity is a canonical technical identity for one executor build.
+// Backend is deliberately syntax-only; certification is a separate concern.
+type ExecutorIdentity struct {
+	backend string
+	version Digest
+}
+
+// NewExecutorIdentity validates the narrow v1 backend token and immutable
+// executor-version digest used by execution identity.
+func NewExecutorIdentity(backend string, version Digest) (ExecutorIdentity, error) {
+	if !validExecutorBackend(backend) {
+		return ExecutorIdentity{}, fmt.Errorf("executor backend must match [a-z0-9][a-z0-9.-]*")
+	}
+	if _, err := decodeDigest(string(version)); err != nil {
+		return ExecutorIdentity{}, fmt.Errorf("executor version: %w", err)
+	}
+	return ExecutorIdentity{backend: backend, version: version}, nil
+}
+
+// Backend returns the canonical technical backend token.
+func (i ExecutorIdentity) Backend() string { return i.backend }
+
+// Version returns the immutable executor build digest.
+func (i ExecutorIdentity) Version() Digest { return i.version }
+
+func validExecutorBackend(value string) bool {
+	if value == "" || ((value[0] < 'a' || value[0] > 'z') && (value[0] < '0' || value[0] > '9')) {
+		return false
+	}
+	for _, b := range []byte(value) {
+		if (b < 'a' || b > 'z') && (b < '0' || b > '9') && b != '.' && b != '-' {
+			return false
+		}
+	}
+	return true
+}
 
 // ValueKind identifies one of the closed scalar variants supported by the
 // initial semantic format.

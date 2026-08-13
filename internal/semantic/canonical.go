@@ -50,6 +50,31 @@ import (
 //                 each field contains its explicit before presence marker and
 //                 optional typed value followed by its present after value
 //
+// Execution artifact encoding table (v1):
+//
+//   provenance policy: tag, closed policy token
+//   input identity:     tag, initial-state digest, world ID
+//   semantic run:       tag, input ID, plan ID
+//   executor identity:  tag, backend token, version digest
+//   execution identity: tag, semantic-run ID, counted canonical executor
+//                       identity bytes, provenance-policy ID
+//   synthetic entity:   tag, lineage ID, entity kind, rule ID, sorted
+//                       progenitor EntityIDs, typed semantic output key
+//   invariant results:  tag, results sorted by declaration key; each contains
+//                       key, scope, boundary, verdict, code, sorted entity and
+//                       fact references
+//   journal entry:      tag, rule ID, predecessor/result state digests, patch
+//                       digest, sorted fact evidence, counted complete
+//                       invariant-result-set bytes
+//   journal prefix:     tag, semantic-run ID, provenance-policy ID, accepted
+//                       entry digests in execution order
+//   protected failure:  tag, run ID, failure kind, protected-code union and
+//                       code, rule/predecessor, invariant results, sorted safe
+//                       references, optional proposed-patch digest
+//   integrity failure:  tag, run ID, failure kind and integrity code, artifact
+//                       kind/ref, optional verified-prefix/expected/observed
+//                       links, sorted artifact references
+//
 // Tags and semantic strings are uint64-big-endian length-prefixed exact UTF-8
 // bytes. Counts are uint64 big endian. Int64 values use big-endian two's
 // complement. Digests are 32 raw bytes decoded from validated lowercase
@@ -67,6 +92,17 @@ const (
 	compiledProfileDomainTag    = "maiden-lane.compiled-profile.v1"
 	compilationFailureDomainTag = "maiden-lane.compilation-failure.v1"
 	patchDomainTag              = "maiden-lane.patch.v1"
+	provenancePolicyDomainTag   = "maiden-lane.provenance-policy.v1"
+	inputIdentityDomainTag      = "maiden-lane.input-id.v1"
+	semanticRunDomainTag        = "maiden-lane.semantic-run-id.v1"
+	executorIdentityDomainTag   = "maiden-lane.executor-identity.v1"
+	executionIdentityDomainTag  = "maiden-lane.execution-id.v1"
+	syntheticEntityDomainTag    = "maiden-lane.synthetic-entity.v1"
+	invariantResultsDomainTag   = "maiden-lane.invariant-results.v1"
+	journalEntryDomainTag       = "maiden-lane.journal-entry.v1"
+	journalPrefixDomainTag      = "maiden-lane.journal-prefix.v1"
+	protectedFailureDomainTag   = "maiden-lane.protected-invariant-failure.v1"
+	artifactFailureDomainTag    = "maiden-lane.artifact-integrity-failure.v1"
 )
 
 // contentHasher hashes bytes whose semantic meaning and canonical order have
@@ -709,4 +745,202 @@ func encodeProfileDeclaration(encoder *canonicalEncoder, profile ProfileDeclarat
 	for _, target := range profile.Implies {
 		encoder.string(string(target))
 	}
+}
+
+func encodeProvenancePolicy(policy ProvenancePolicy) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(provenancePolicyDomainTag)
+	if policy != ChangesProvenance {
+		return nil, fmt.Errorf("unknown provenance policy %d", policy)
+	}
+	encoder.string("changes.v1")
+	return encoder.bytes()
+}
+
+func encodeInputIdentity(state StateDigest, world WorldID) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(inputIdentityDomainTag)
+	encoder.digest(string(state))
+	encoder.digest(string(world))
+	return encoder.bytes()
+}
+
+func encodeSemanticRunIdentity(input InputID, plan PlanID) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(semanticRunDomainTag)
+	encoder.digest(string(input))
+	encoder.digest(string(plan))
+	return encoder.bytes()
+}
+
+func encodeExecutorIdentity(identity ExecutorIdentity) ([]byte, error) {
+	if !validExecutorIdentity(identity) {
+		return nil, fmt.Errorf("invalid executor identity")
+	}
+	var encoder canonicalEncoder
+	encoder.tag(executorIdentityDomainTag)
+	encoder.string(identity.backend)
+	encoder.digest(string(identity.version))
+	return encoder.bytes()
+}
+
+func encodeExecutionIdentity(run SemanticRunID, executor ExecutorIdentity, policy ProvenancePolicyID) ([]byte, error) {
+	identity, err := encodeExecutorIdentity(executor)
+	if err != nil {
+		return nil, err
+	}
+	var encoder canonicalEncoder
+	encoder.tag(executionIdentityDomainTag)
+	encoder.digest(string(run))
+	encoder.uint64(uint64(len(identity)))
+	if encoder.err == nil {
+		_, encoder.err = encoder.buffer.Write(identity)
+	}
+	encoder.digest(string(policy))
+	return encoder.bytes()
+}
+
+func encodeSyntheticEntityIdentity(lineage InputLineageID, kind EntityKind, rule RuleID, progenitors []EntityRef, outputKey Value) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(syntheticEntityDomainTag)
+	encoder.digest(string(lineage))
+	encoder.string(string(kind))
+	encoder.string(string(rule))
+	encoder.uint64(uint64(len(progenitors)))
+	for _, progenitor := range progenitors {
+		encoder.digest(string(progenitor.ID))
+	}
+	encoder.value(outputKey)
+	return encoder.bytes()
+}
+
+func encodeInvariantResults(results []InvariantResult) ([]byte, error) {
+	normalized := cloneInvariantResults(results)
+	sort.Slice(normalized, func(i, j int) bool { return normalized[i].declarationKey < normalized[j].declarationKey })
+	for i := 1; i < len(normalized); i++ {
+		if normalized[i-1].declarationKey == normalized[i].declarationKey {
+			return nil, fmt.Errorf("duplicate invariant result declaration key")
+		}
+	}
+	var encoder canonicalEncoder
+	encoder.tag(invariantResultsDomainTag)
+	encoder.uint64(uint64(len(normalized)))
+	for _, result := range normalized {
+		encodeInvariantResult(&encoder, result)
+	}
+	return encoder.bytes()
+}
+
+func encodeInvariantResult(encoder *canonicalEncoder, result InvariantResult) {
+	encoder.string(result.declarationKey)
+	encoder.byte(byte(result.scope))
+	encoder.string(string(result.boundary))
+	encoder.optional(result.passed, func() {})
+	encoder.string(string(result.code))
+	encoder.uint64(uint64(len(result.entities)))
+	for _, ref := range result.entities {
+		encodeEntityRef(encoder, ref)
+	}
+	encoder.uint64(uint64(len(result.facts)))
+	for _, fact := range result.facts {
+		encodeEntityRef(encoder, fact.entity)
+		encoder.string(string(fact.field))
+	}
+}
+
+func encodeJournalEntry(entry JournalEntry) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(journalEntryDomainTag)
+	encoder.string(string(entry.rule))
+	encoder.digest(string(entry.predecessor))
+	encoder.digest(string(entry.result))
+	encoder.digest(string(entry.patch.digest))
+	encoder.uint64(uint64(len(entry.evidence)))
+	for _, fact := range entry.evidence {
+		encodeEntityRef(&encoder, fact.entity)
+		encoder.string(string(fact.field))
+	}
+	results, err := encodeInvariantResults(entry.invariantResults)
+	if err != nil {
+		return nil, err
+	}
+	encoder.uint64(uint64(len(results)))
+	if encoder.err == nil {
+		_, encoder.err = encoder.buffer.Write(results)
+	}
+	return encoder.bytes()
+}
+
+func encodeJournalPrefix(run SemanticRunID, policy ProvenancePolicyID, entries []JournalEntry) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(journalPrefixDomainTag)
+	encoder.digest(string(run))
+	encoder.digest(string(policy))
+	encoder.uint64(uint64(len(entries)))
+	for _, entry := range entries {
+		encoder.digest(string(entry.digest))
+	}
+	return encoder.bytes()
+}
+
+func encodeProtectedFailure(report ProtectedInvariantFailureReport) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(protectedFailureDomainTag)
+	encoder.digest(string(report.semanticRunID))
+	encoder.string(string(ProtectedInvariantFailed))
+	encoder.byte(byte(report.codeKind))
+	if report.codeKind == protectedOperationCode {
+		encoder.string(string(report.operationCode))
+	} else {
+		encoder.string(string(report.invariantCode))
+	}
+	encoder.string(string(report.rule))
+	encoder.digest(string(report.predecessor))
+	results, err := encodeInvariantResults(report.results)
+	if err != nil {
+		return nil, err
+	}
+	encoder.uint64(uint64(len(results)))
+	if encoder.err == nil {
+		_, encoder.err = encoder.buffer.Write(results)
+	}
+	encoder.uint64(uint64(len(report.entities)))
+	for _, ref := range report.entities {
+		encodeEntityRef(&encoder, ref)
+	}
+	encoder.uint64(uint64(len(report.invariantRefs)))
+	for _, ref := range report.invariantRefs {
+		encoder.string(ref.declarationKey)
+	}
+	encoder.uint64(uint64(len(report.facts)))
+	for _, fact := range report.facts {
+		encodeEntityRef(&encoder, fact.entity)
+		encoder.string(string(fact.field))
+	}
+	encoder.optional(report.patchDigest != nil, func() { encoder.digest(string(*report.patchDigest)) })
+	return encoder.bytes()
+}
+
+func encodeArtifactIntegrityFailure(report ArtifactIntegrityFailureReport) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(artifactFailureDomainTag)
+	encoder.digest(string(report.semanticRunID))
+	encoder.string(string(ArtifactIntegrityFailed))
+	encoder.string(string(report.code))
+	encoder.byte(byte(report.artifactKind))
+	encodeArtifactRef(&encoder, report.artifact)
+	encoder.optional(report.lastState != nil, func() { encoder.digest(string(*report.lastState)) })
+	encoder.optional(report.lastCheckpoint != nil, func() { encoder.digest(string(*report.lastCheckpoint)) })
+	encoder.optional(report.expected != nil, func() { encoder.digest(string(*report.expected)) })
+	encoder.optional(report.observed != nil, func() { encoder.digest(string(*report.observed)) })
+	encoder.uint64(uint64(len(report.references)))
+	for _, reference := range report.references {
+		encodeArtifactRef(&encoder, reference)
+	}
+	return encoder.bytes()
+}
+
+func encodeArtifactRef(encoder *canonicalEncoder, reference ArtifactRef) {
+	encoder.byte(byte(reference.kind))
+	encoder.digest(string(reference.digest))
 }
