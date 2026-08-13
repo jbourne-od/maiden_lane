@@ -12,11 +12,12 @@ import (
 type CompilationDiagnosticCode string
 
 const (
-	UnknownField           CompilationDiagnosticCode = "UNKNOWN_FIELD"
-	UnsupportedOperator    CompilationDiagnosticCode = "UNSUPPORTED_OPERATOR"
-	DeclaredAccessMismatch CompilationDiagnosticCode = "DECLARED_ACCESS_MISMATCH"
-	DependencyCycle        CompilationDiagnosticCode = "DEPENDENCY_CYCLE"
-	ProfileOrderUnprovable CompilationDiagnosticCode = "PROFILE_ORDER_UNPROVABLE"
+	UnknownField            CompilationDiagnosticCode = "UNKNOWN_FIELD"
+	UnsupportedOperator     CompilationDiagnosticCode = "UNSUPPORTED_OPERATOR"
+	DeclaredAccessMismatch  CompilationDiagnosticCode = "DECLARED_ACCESS_MISMATCH"
+	WriteConflictUnresolved CompilationDiagnosticCode = "WRITE_CONFLICT_UNRESOLVED"
+	DependencyCycle         CompilationDiagnosticCode = "DEPENDENCY_CYCLE"
+	ProfileOrderUnprovable  CompilationDiagnosticCode = "PROFILE_ORDER_UNPROVABLE"
 )
 
 // FailureKind distinguishes invalid compilation from later protected or
@@ -398,10 +399,17 @@ func normalizeTransformationPayload(transformation *TransformationDeclaration) e
 			}
 		}
 		sort.Slice(form.CopiedFields, func(i, j int) bool { return compareFieldCopy(form.CopiedFields[i], form.CopiedFields[j]) < 0 })
+		copyDestinations := make(map[FieldPath]struct{}, len(form.CopiedFields))
 		for i := 1; i < len(form.CopiedFields); i++ {
 			if form.CopiedFields[i] == form.CopiedFields[i-1] {
 				return fmt.Errorf("duplicate copied field")
 			}
+		}
+		for _, copied := range form.CopiedFields {
+			if _, exists := copyDestinations[copied.Destination]; exists {
+				return fmt.Errorf("multiple copied fields write destination %q", copied.Destination)
+			}
+			copyDestinations[copied.Destination] = struct{}{}
 		}
 	}
 	if aggregate := transformation.Aggregate; aggregate != nil {
@@ -421,11 +429,33 @@ func normalizeTransformationPayload(transformation *TransformationDeclaration) e
 		sort.Slice(aggregate.ResultPredicates, func(i, j int) bool {
 			return predicateKey(aggregate.ResultPredicates[i]) < predicateKey(aggregate.ResultPredicates[j])
 		})
+		if duplicatePredicate(aggregate.Predicates) || duplicatePredicate(aggregate.ResultPredicates) {
+			return fmt.Errorf("duplicate normalized aggregate predicate")
+		}
 		sort.Slice(aggregate.Reductions, func(i, j int) bool {
 			return reductionKey(aggregate.Reductions[i]) < reductionKey(aggregate.Reductions[j])
 		})
+		reductionDestinations := map[FieldPath]struct{}{aggregate.Anchor.Destination: {}}
+		for i, reduction := range aggregate.Reductions {
+			if i > 0 && reductionKey(reduction) == reductionKey(aggregate.Reductions[i-1]) {
+				return fmt.Errorf("duplicate normalized reduction")
+			}
+			if _, exists := reductionDestinations[reduction.Destination]; exists {
+				return fmt.Errorf("multiple aggregate writers target destination %q", reduction.Destination)
+			}
+			reductionDestinations[reduction.Destination] = struct{}{}
+		}
 	}
 	return nil
+}
+
+func duplicatePredicate(predicates []AggregatePredicate) bool {
+	for i := 1; i < len(predicates); i++ {
+		if predicateKey(predicates[i]) == predicateKey(predicates[i-1]) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizePredicates(predicates []AggregatePredicate) error {
@@ -631,6 +661,14 @@ func resolveDependencies(_ Schema, declarations []TransformationDeclaration, com
 				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "output_slot:"+string(target.Rule)+":"+string(target.Slot)))
 			} else {
 				edges[declaration.ID][target.Rule] = struct{}{}
+				consumer := compiled[declaration.ID]
+				consumer.accesses = append(consumer.accesses,
+					SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: producer.declaration.Form.OutputKind},
+					SemanticAccess{Kind: AccessEntity, Mode: AccessWrite, EntityKind: producer.declaration.Form.OutputKind},
+				)
+				sort.Slice(consumer.accesses, func(i, j int) bool { return accessKey(consumer.accesses[i]) < accessKey(consumer.accesses[j]) })
+				consumer.accesses = slices.Compact(consumer.accesses)
+				compiled[declaration.ID] = consumer
 				targetKind, _ := splitFieldPath(declaration.Aggregate.Anchor.Destination)
 				validTarget := targetKind == producer.declaration.Form.OutputKind
 				for _, reduction := range declaration.Aggregate.Reductions {
@@ -659,6 +697,22 @@ func resolveDependencies(_ Schema, declarations []TransformationDeclaration, com
 			}
 		}
 	}
+	ruleIDs := make([]RuleID, 0, len(compiled))
+	for id := range compiled {
+		ruleIDs = append(ruleIDs, id)
+	}
+	slices.Sort(ruleIDs)
+	for i, leftID := range ruleIDs {
+		for _, rightID := range ruleIDs[i+1:] {
+			overlap := fieldIntersection(compiled[leftID].writes, compiled[rightID].writes)
+			if len(overlap) == 0 || dependencyPathExists(edges, leftID, rightID) || dependencyPathExists(edges, rightID, leftID) {
+				continue
+			}
+			for _, field := range overlap {
+				diagnostics = append(diagnostics, diagnostic(WriteConflictUnresolved, string(leftID)+"|"+string(rightID), string(field)))
+			}
+		}
+	}
 	for id, dependencies := range edges {
 		transformation := compiled[id]
 		transformation.dependencies = make([]RuleID, 0, len(dependencies))
@@ -671,6 +725,36 @@ func resolveDependencies(_ Schema, declarations []TransformationDeclaration, com
 		compiled[id] = transformation
 	}
 	return diagnostics
+}
+
+func dependencyPathExists(edges map[RuleID]map[RuleID]struct{}, from, target RuleID) bool {
+	visited := make(map[RuleID]struct{}, len(edges))
+	frontier := []RuleID{from}
+	for len(frontier) > 0 {
+		current := frontier[len(frontier)-1]
+		frontier = frontier[:len(frontier)-1]
+		if _, seen := visited[current]; seen {
+			continue
+		}
+		visited[current] = struct{}{}
+		for dependency := range edges[current] {
+			if dependency == target {
+				return true
+			}
+			frontier = append(frontier, dependency)
+		}
+	}
+	return false
+}
+
+func fieldIntersection(left, right []FieldPath) []FieldPath {
+	result := make([]FieldPath, 0)
+	for _, field := range left {
+		if _, ok := slices.BinarySearch(right, field); ok {
+			result = append(result, field)
+		}
+	}
+	return result
 }
 
 func topologicalOrder(compiled map[RuleID]CompiledTransformation) ([]CompiledTransformation, bool) {
@@ -888,10 +972,12 @@ func diagnosticRank(code CompilationDiagnosticCode) int {
 		return 2
 	case DeclaredAccessMismatch:
 		return 3
-	case DependencyCycle:
+	case WriteConflictUnresolved:
 		return 4
-	case ProfileOrderUnprovable:
+	case DependencyCycle:
 		return 5
+	case ProfileOrderUnprovable:
+		return 6
 	default:
 		return 99
 	}

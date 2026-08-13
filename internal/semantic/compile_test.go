@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/hex"
 	"slices"
-	"strings"
 	"testing"
 )
 
@@ -138,8 +137,16 @@ func TestCompileRejectsInvalidClosedDeclarations(t *testing.T) {
 // would make an invalid request's canonical failure identity nondeterministic.
 func TestCompileOrdersDiagnosticsByClosedCodeRank(t *testing.T) {
 	req := compileFixtureRequest(t, false)
+	left := cloneTransformation(req.Rules.Transformations[0])
+	left.ID = "conflict_left.v1"
+	left.Form.OutputSlot = "left"
+	right := cloneTransformation(req.Rules.Transformations[0])
+	right.ID = "conflict_right.v1"
+	right.Form.OutputSlot = "right"
+	req.Rules.Transformations = append(req.Rules.Transformations, left, right)
 	req.Rules.Transformations[1].Aggregate.RequiredSourceTuple = []FieldPath{"driver.unknown"}
 	req.Rules.Transformations[0].Operator = OperatorKind(99)
+	req.Rules.Transformations[0].After = []RuleID{"aggregate_team_hos.v1"}
 	req.Profiles[1].Implies = []ProfileKey{"missing.v1"}
 
 	result, err := Compile(req)
@@ -150,7 +157,7 @@ func TestCompileOrdersDiagnosticsByClosedCodeRank(t *testing.T) {
 	if !ok {
 		t.Fatal("invalid request compiled")
 	}
-	want := []CompilationDiagnosticCode{UnknownField, UnsupportedOperator, DeclaredAccessMismatch, ProfileOrderUnprovable}
+	want := []CompilationDiagnosticCode{UnknownField, UnsupportedOperator, DeclaredAccessMismatch, WriteConflictUnresolved, DependencyCycle, ProfileOrderUnprovable}
 	got := make([]CompilationDiagnosticCode, 0, len(failure.Diagnostics()))
 	for _, diagnostic := range failure.Diagnostics() {
 		if len(got) == 0 || got[len(got)-1] != diagnostic.Code() {
@@ -235,6 +242,160 @@ func TestCompileReportsUnknownDeclaredAccess(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("diagnostic codes=%v, want %v", got, want)
+	}
+}
+
+// Production break caught: canonical rule-name order must not silently choose
+// which of two unordered writers owns the same semantic target.
+func TestCompileRejectsUnorderedWriteConflict(t *testing.T) {
+	req, _ := compileGoldenVectorRequest(t)
+	second := cloneTransformation(req.Rules.Transformations[0])
+	second.ID = "g"
+	second.Form.OutputSlot = "p"
+	req.Rules.Transformations = append(req.Rules.Transformations, second)
+
+	result, err := Compile(req)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	failure, ok := result.Failure()
+	if !ok {
+		t.Fatal("unordered overlapping writers received a plan")
+	}
+	if got := failure.Diagnostics()[0].Code(); got != WriteConflictUnresolved {
+		t.Fatalf("diagnostic=%s, want %s", got, WriteConflictUnresolved)
+	}
+	if _, ok := result.Plan(); ok {
+		t.Fatal("write conflict exposed PlanID")
+	}
+}
+
+// Production break caught: rejecting writers that have a real dependency path
+// would ignore the author-declared semantic order and overconstrain valid plans.
+func TestCompileAcceptsOrderedOverlappingWriters(t *testing.T) {
+	req, _ := compileGoldenVectorRequest(t)
+	middle := cloneTransformation(req.Rules.Transformations[0])
+	middle.ID = "g"
+	middle.Form.OutputSlot = "p"
+	middle.After = []RuleID{"f"}
+	last := cloneTransformation(req.Rules.Transformations[0])
+	last.ID = "h"
+	last.Form.OutputSlot = "q"
+	last.After = []RuleID{"g"}
+	req.Rules.Transformations = append(req.Rules.Transformations, middle, last)
+
+	result, err := Compile(req)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	plan, ok := result.Plan()
+	if !ok {
+		failure, _ := result.Failure()
+		t.Fatalf("ordered writers rejected: %v", failure.Diagnostics())
+	}
+	if got := plan.MustTransformation("h").Dependencies(); !slices.Equal(got, []RuleID{"g"}) {
+		t.Fatalf("dependencies=%v, want [g]", got)
+	}
+}
+
+// Production break caught: omitting the resolved output-slot entity from T2's
+// access contract would hide its destination before-image read and update.
+func TestCompileDerivesAggregateTargetEntityReadAndWrite(t *testing.T) {
+	result, err := Compile(compileFixtureRequest(t, false))
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	plan, ok := result.Plan()
+	if !ok {
+		t.Fatal("no plan")
+	}
+	accesses := plan.MustTransformation("aggregate_team_hos.v1").Accesses()
+	entities := make([]SemanticAccess, 0)
+	for _, access := range accesses {
+		if access.Kind == AccessEntity {
+			entities = append(entities, access)
+		}
+	}
+	want := []SemanticAccess{
+		{Kind: AccessEntity, Mode: AccessRead, EntityKind: "driver"},
+		{Kind: AccessEntity, Mode: AccessRead, EntityKind: "team"},
+		{Kind: AccessEntity, Mode: AccessWrite, EntityKind: "team"},
+	}
+	if !slices.Equal(entities, want) {
+		t.Fatalf("aggregate entity accesses=%v, want %v", entities, want)
+	}
+}
+
+// Production break caught: duplicate normalized operator members or multiple
+// declarations writing one destination make composition ambiguous and must not
+// acquire distinct canonical identities.
+func TestCompileRejectsAmbiguousOperatorCollections(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*CompileRequest)
+	}{
+		{
+			name: "duplicate normalized predicate",
+			mutate: func(req *CompileRequest) {
+				duplicate := req.Rules.Transformations[1].Aggregate.Predicates[0]
+				duplicate.Fields = slices.Clone(duplicate.Fields)
+				slices.Reverse(duplicate.Fields)
+				req.Rules.Transformations[1].Aggregate.Predicates = append(req.Rules.Transformations[1].Aggregate.Predicates, duplicate)
+			},
+		},
+		{
+			name: "duplicate reduction",
+			mutate: func(req *CompileRequest) {
+				req.Rules.Transformations[1].Aggregate.Reductions = append(
+					req.Rules.Transformations[1].Aggregate.Reductions,
+					req.Rules.Transformations[1].Aggregate.Reductions[0],
+				)
+			},
+		},
+		{
+			name: "conflicting reduction destination",
+			mutate: func(req *CompileRequest) {
+				reductions := req.Rules.Transformations[1].Aggregate.Reductions
+				reductions[1].Destination = reductions[0].Destination
+				req.Rules.Transformations[1].DeclaredWrites = []FieldPath{
+					"team.aggregation_anchor", reductions[0].Destination,
+				}
+			},
+		},
+		{
+			name: "conflicting copied-field destination",
+			mutate: func(req *CompileRequest) {
+				declaration := req.Schema
+				entities := declaration.EntityDeclarations()
+				for i := range entities {
+					if entities[i].Kind == "driver" {
+						entities[i].Fields = append(entities[i].Fields, FieldDeclaration{Name: "other_assignment", Kind: ValueString})
+					}
+				}
+				schema, err := NewSchema(entities, declaration.RelationDeclarations())
+				if err != nil {
+					t.Fatalf("NewSchema: %v", err)
+				}
+				req.Schema = schema.Declaration()
+				req.Rules.Transformations[0].Form.CopiedFields = append(
+					req.Rules.Transformations[0].Form.CopiedFields,
+					FieldCopy{Source: "driver.other_assignment", Destination: "team.assignment_key"},
+				)
+				req.Rules.Transformations[0].DeclaredReads = append(
+					req.Rules.Transformations[0].DeclaredReads, "driver.other_assignment",
+				)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := compileFixtureRequest(t, false)
+			tt.mutate(&req)
+			if _, err := Compile(req); err == nil {
+				t.Fatal("ambiguous operator collection reached canonical compilation")
+			}
+		})
 	}
 }
 
@@ -398,27 +559,17 @@ func TestCompileCanonicalGoldenVectors(t *testing.T) {
 		wantSchemaDigest  SchemaDigest             = "sha256:f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec6"
 		wantRulesHex                               = "00000000000000166d616964656e2d6c616e652e72756c657365742e763100000000000000010000000000000001660100000000000000010000000000000003612e6700000000000000010000000000000003622e67000000000000000001000000000000000161000000000000000200000000000000016100000000000000013100000000000000016100000000000000013200000000000000016200000000000000016f0000000000000003612e67000000000000000200000000000000010000000000000003612e670000000000000003622e6700000000000000017201010000000000000003612e670000000000000000050000000000000011662f30312d736f757263652d666f756e6400000000000000194445434c415245445f534f555243455f4e4f545f464f554e440100000000000000000000000000000001660000000000000010662f30322d736f757263652d6b696e64000000000000001c4445434c415245445f534f555243455f4b494e445f494e56414c49440100000000000000000000000000000001660000000000000013662f30332d67726f7570696e672d76616c6964000000000000001b5445414d5f41535349474e4d454e545f4b45595f494e56414c49440100000000000000010000000000000003612e670000000000000001660000000000000013662f30342d67726f7570696e672d657175616c000000000000001c5445414d5f41535349474e4d454e545f4b45595f4d49534d415443480100000000000000010000000000000003612e670000000000000001660000000000000017662f30352d6d656d6265722d63617264696e616c697479000000000000001f5445414d5f4d454d4245525f43415244494e414c4954595f494e56414c4944020000000000000000000000000000000166000000000000000100000000000000026331000000000000000166"
 		wantRulesDigest   RulesetDigest            = "sha256:e16c076e567a8c32df9407385f83c18395bba9fa65bb73287d80d4bdc3ee73be"
-		wantInputHex                               = "00000000000000206d616964656e2d6c616e652e636f6d70696c6174696f6e2d696e7075742e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec607ec41a277a91350077c1f9e3dd0502b4d47a73f396d8be4b428077251a5231100000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631000000000000000200000000000000016301000000000000000162010000000000000001000000000000001c5445414d5f41535349474e4d454e545f4b45595f5245515549524544010000000000000003622e6700000000000000000000000000000001700100000000000000016201000000000000000200000000000000205445414d5f4147475245474154494f4e5f414e43484f525f5245515549524544010000000000000003622e78000000000000001c5445414d5f41535349474e4d454e545f4b45595f5245515549524544010000000000000003622e670000000000000001000000000000000163"
+		wantInputHex                               = "00000000000000206d616964656e2d6c616e652e636f6d70696c6174696f6e2d696e7075742e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec6e16c076e567a8c32df9407385f83c18395bba9fa65bb73287d80d4bdc3ee73be00000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631000000000000000200000000000000016301000000000000000162010000000000000001000000000000001c5445414d5f41535349474e4d454e545f4b45595f5245515549524544010000000000000003622e6700000000000000000000000000000001700100000000000000016201000000000000000200000000000000205445414d5f4147475245474154494f4e5f414e43484f525f5245515549524544010000000000000003622e78000000000000001c5445414d5f41535349474e4d454e545f4b45595f5245515549524544010000000000000003622e670000000000000001000000000000000163"
 		wantInputDigest   CompilationInputDigest   = "sha256:64f54d4c3d8d61640b3c779f20657cc82c841a5680990181d78410ae96720dce"
-		wantPlanHex                                = "00000000000000136d616964656e2d6c616e652e706c616e2e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec607ec41a277a91350077c1f9e3dd0502b4d47a73f396d8be4b428077251a5231100000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e763100000000000000010000000000000001660100000000000000010000000000000003612e6700000000000000010000000000000003622e67000000000000000001000000000000000161000000000000000200000000000000016100000000000000013100000000000000016100000000000000013200000000000000016200000000000000016f0000000000000003612e67000000000000000200000000000000010000000000000003612e670000000000000003622e6700000000000000017201010000000000000003612e670000000000000000010000000000000003612e6700000000000000010000000000000003622e6700000000000000050101000000000000000161000000000000000000000000000000000102000000000000000162000000000000000000000000000000000202000000000000000000000000000000017200000000000000000301000000000000000000000000000000000000000000000003612e670302000000000000000000000000000000000000000000000003622e670000000000000000000000000000000000000000000000050000000000000011662f30312d736f757263652d666f756e6400000000000000194445434c415245445f534f555243455f4e4f545f464f554e440100000000000000000000000000000001660000000000000010662f30322d736f757263652d6b696e64000000000000001c4445434c415245445f534f555243455f4b494e445f494e56414c49440100000000000000000000000000000001660000000000000013662f30332d67726f7570696e672d76616c6964000000000000001b5445414d5f41535349474e4d454e545f4b45595f494e56414c49440100000000000000010000000000000003612e670000000000000001660000000000000013662f30342d67726f7570696e672d657175616c000000000000001c5445414d5f41535349474e4d454e545f4b45595f4d49534d415443480100000000000000010000000000000003612e670000000000000001660000000000000017662f30352d6d656d6265722d63617264696e616c697479000000000000001f5445414d5f4d454d4245525f43415244494e414c4954595f494e56414c4944020000000000000000000000000000000166000000000000000100000000000000026331000000000000000166000000000000000a6368616e6765732e7631"
+		wantPlanHex                                = "00000000000000136d616964656e2d6c616e652e706c616e2e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec6e16c076e567a8c32df9407385f83c18395bba9fa65bb73287d80d4bdc3ee73be00000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e763100000000000000010000000000000001660100000000000000010000000000000003612e6700000000000000010000000000000003622e67000000000000000001000000000000000161000000000000000200000000000000016100000000000000013100000000000000016100000000000000013200000000000000016200000000000000016f0000000000000003612e67000000000000000200000000000000010000000000000003612e670000000000000003622e6700000000000000017201010000000000000003612e670000000000000000010000000000000003612e6700000000000000010000000000000003622e6700000000000000050101000000000000000161000000000000000000000000000000000102000000000000000162000000000000000000000000000000000202000000000000000000000000000000017200000000000000000301000000000000000000000000000000000000000000000003612e670302000000000000000000000000000000000000000000000003622e670000000000000000000000000000000000000000000000050000000000000011662f30312d736f757263652d666f756e6400000000000000194445434c415245445f534f555243455f4e4f545f464f554e440100000000000000000000000000000001660000000000000010662f30322d736f757263652d6b696e64000000000000001c4445434c415245445f534f555243455f4b494e445f494e56414c49440100000000000000000000000000000001660000000000000013662f30332d67726f7570696e672d76616c6964000000000000001b5445414d5f41535349474e4d454e545f4b45595f494e56414c49440100000000000000010000000000000003612e670000000000000001660000000000000013662f30342d67726f7570696e672d657175616c000000000000001c5445414d5f41535349474e4d454e545f4b45595f4d49534d415443480100000000000000010000000000000003612e670000000000000001660000000000000017662f30352d6d656d6265722d63617264696e616c697479000000000000001f5445414d5f4d454d4245525f43415244494e414c4954595f494e56414c4944020000000000000000000000000000000166000000000000000100000000000000026331000000000000000166000000000000000a6368616e6765732e7631"
 		wantPlanID        PlanID                   = "sha256:98687456cfa5d197f10a023a8bdf9fd8a95ef008154ba08b93b729f352c43180"
 		wantCMHex                                  = "000000000000001f6d616964656e2d6c616e652e636f6d70696c65642d70726f66696c652e763100000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec600000000000000016301000000000000000162010000000000000001000000000000001c5445414d5f41535349474e4d454e545f4b45595f5245515549524544010000000000000003622e6700000000000000000000000000000000"
 		wantCMID          ProfileID                = "sha256:4b25a6cad46e65cedcda0f4e7e37ff66cc3a303e78479904f8d9bb0c9e1668fb"
 		wantOptimizerHex                           = "000000000000001f6d616964656e2d6c616e652e636f6d70696c65642d70726f66696c652e763100000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec60000000000000001700100000000000000016201000000000000000200000000000000205445414d5f4147475245474154494f4e5f414e43484f525f5245515549524544010000000000000003622e78000000000000001c5445414d5f41535349474e4d454e545f4b45595f5245515549524544010000000000000003622e670000000000000001000000000000000163000000000000000100000000000000016301"
 		wantOptimizerID   ProfileID                = "sha256:38a503b6b92ae6d64fcacd9653f014707e10f0edf237707d1879ea9cea542271"
-		wantFailureHex                             = "00000000000000226d616964656e2d6c616e652e636f6d70696c6174696f6e2d6661696c7572652e7631ae4869a7c16059c1aa210309a458133adfcbf4d428270835142d0f644fef30d6000000000000000c494e56414c49445f504c414e0000000000000001000000000000001850524f46494c455f4f524445525f554e50524f5641424c45000000000000000170000000000000000163"
+		wantFailureHex                             = "00000000000000226d616964656e2d6c616e652e636f6d70696c6174696f6e2d6661696c7572652e7631ba98d3dc182fc4b0674a4e6b7ae1e9d6627281e9454a95c702ab0abe0e56de9a000000000000000c494e56414c49445f504c414e0000000000000001000000000000001850524f46494c455f4f524445525f554e50524f5641424c45000000000000000170000000000000000163"
 		wantFailureDigest CompilationFailureDigest = "sha256:9ee313bafdbf5646ba8bcbade241c179e8f1c070309ee90fa44c0bc295b8d756"
 	)
-	const (
-		oldRulesDigestHex        = "07ec41a277a91350077c1f9e3dd0502b4d47a73f396d8be4b428077251a52311"
-		newRulesDigestHex        = "e16c076e567a8c32df9407385f83c18395bba9fa65bb73287d80d4bdc3ee73be"
-		oldInvalidInputDigestHex = "ae4869a7c16059c1aa210309a458133adfcbf4d428270835142d0f644fef30d6"
-		newInvalidInputDigestHex = "ba98d3dc182fc4b0674a4e6b7ae1e9d6627281e9454a95c702ab0abe0e56de9a"
-	)
-	wantInputHexWithInvariants := strings.Replace(wantInputHex, oldRulesDigestHex, newRulesDigestHex, 1)
-	wantPlanHexWithInvariants := strings.Replace(wantPlanHex, oldRulesDigestHex, newRulesDigestHex, 1)
-	wantFailureHexWithInvariants := strings.Replace(wantFailureHex, oldInvalidInputDigestHex, newInvalidInputDigestHex, 1)
-
 	req, schema := compileGoldenVectorRequest(t)
 	rules, err := normalizeRuleset(req.Rules)
 	if err != nil {
@@ -445,8 +596,8 @@ func TestCompileCanonicalGoldenVectors(t *testing.T) {
 
 	assertCanonicalVector(t, "schema", schema.CanonicalBytes(), wantSchemaHex, string(schema.Digest()), string(wantSchemaDigest))
 	assertCanonicalVector(t, "ruleset", rulesBytes, wantRulesHex, string(canonicalDigest(rulesBytes)), string(wantRulesDigest))
-	assertCanonicalVector(t, "compiler input", inputBytes, wantInputHexWithInvariants, string(result.InputDigest()), string(wantInputDigest))
-	assertCanonicalVector(t, "plan", plan.CanonicalBytes(), wantPlanHexWithInvariants, string(plan.ID()), string(wantPlanID))
+	assertCanonicalVector(t, "compiler input", inputBytes, wantInputHex, string(result.InputDigest()), string(wantInputDigest))
+	assertCanonicalVector(t, "plan", plan.CanonicalBytes(), wantPlanHex, string(plan.ID()), string(wantPlanID))
 	assertCanonicalVector(t, "CM profile", compiledProfiles[0].CanonicalBytes(), wantCMHex, string(compiledProfiles[0].ID()), string(wantCMID))
 	assertCanonicalVector(t, "optimizer profile", compiledProfiles[1].CanonicalBytes(), wantOptimizerHex, string(compiledProfiles[1].ID()), string(wantOptimizerID))
 
@@ -461,7 +612,7 @@ func TestCompileCanonicalGoldenVectors(t *testing.T) {
 	if !ok {
 		t.Fatal("invalid profile compiled")
 	}
-	assertCanonicalVector(t, "compilation failure", failure.CanonicalBytes(), wantFailureHexWithInvariants, string(failure.Digest()), string(wantFailureDigest))
+	assertCanonicalVector(t, "compilation failure", failure.CanonicalBytes(), wantFailureHex, string(failure.Digest()), string(wantFailureDigest))
 }
 
 func compileGoldenVectorRequest(t *testing.T) (CompileRequest, Schema) {
