@@ -91,7 +91,6 @@ type InputID string
 type WorldID string
 type SemanticRunID string
 type ProvenancePolicyID string
-type ExecutorIdentity string
 type ExecutionID string
 type PatchDigest string
 type JournalEntryDigest string
@@ -106,6 +105,9 @@ type AssessmentDigest string
 type CompilationFailureDigest string
 type FailureReportDigest string
 type CompilerSemanticsVersion string
+
+type ExecutorIdentity struct { /* private backend token + version digest */ }
+func NewExecutorIdentity(backend string, version Digest) (ExecutorIdentity, error)
 
 type ValueKind uint8
 const (
@@ -188,6 +190,13 @@ func (r SpineResult) SemanticFailure() (semantic.FailureReport, bool)
 ```
 
 `internal/observability` implements `app.Observer`; `internal/app` never imports `internal/observability`.
+
+`ExecutorIdentity` follows the HLD's structured `backend@<digest>` model. Its
+backend token is validated canonical ASCII matching
+`[a-z0-9][a-z0-9.-]*`; its version is a valid SHA-256 digest. The canonical
+tuple is its domain tag, backend token, and raw 32-byte version digest. The
+differential tests use backend `go` with two literal version digests; they do
+not claim a second production backend.
 
 The implementation uses a package-owned `contentHasher` port whose only production implementation is the fixed standard-library `sha256.v1` adapter. Callers cannot select a different semantic hashing algorithm. Artifact APIs return the distinct digest/identity types above; they must not collapse `CheckpointArtifactID` into `CheckpointArtifactDigest` or `AssessmentID` into `AssessmentDigest` merely because all render as `sha256:<hex>`.
 

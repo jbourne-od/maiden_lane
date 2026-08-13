@@ -666,6 +666,15 @@ CompilationFailureDigest = H(
 FailureReportDigest   = H(canonical tagged execution failure report)
 ```
 
+`ExecutorIdentity` uses the HLD's structured `backend@<digest>` meaning. The
+v1 canonical tuple contains an artifact-specific domain tag, a canonical ASCII
+backend token matching `[a-z0-9][a-z0-9.-]*`, and the raw 32-byte SHA-256
+version digest. The executor identity constructor validates both components;
+callers cannot supply an arbitrary preformatted string. Differential tests in
+this slice use backend `go` with two literal version digests to prove executor
+identity exclusion from semantic artifacts without asserting that another
+production backend exists.
+
 The fixture uses an explicit canonical empty world; it does not omit the world
 from input identity. The initial provenance policy is `changes.v1`, the minimum
 publishable level in the HLD, and is pinned even though publication is outside
