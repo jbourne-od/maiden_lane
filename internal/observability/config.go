@@ -44,8 +44,9 @@ const (
 )
 
 // Config is validated operational observability configuration. Its unexported
-// fields prevent callers from constructing a configuration that authorizes
-// exporter initialization without passing this package's closed validation.
+// fields prevent callers from constructing or mutating a configuration that
+// authorizes runtime initialization without passing this package's closed
+// validation.
 type Config struct {
 	LogLevel        slog.Level
 	TracesExporter  ExporterMode
@@ -54,8 +55,20 @@ type Config struct {
 	ServiceVersion  string
 
 	validated bool
+	snapshot  validatedConfig
 	traces    otlpHTTPConfig
 	metrics   otlpHTTPConfig
+}
+
+// validatedConfig seals the caller-visible portion of Config. Config remains
+// readable to composition code, but mutation after LoadConfig cannot authorize
+// a different runtime policy than the one that was validated.
+type validatedConfig struct {
+	logLevel        slog.Level
+	tracesExporter  ExporterMode
+	metricsExporter ExporterMode
+	serviceName     string
+	serviceVersion  string
 }
 
 type otlpHTTPConfig struct {
@@ -112,8 +125,26 @@ func LoadConfig(lookup LookupEnv, readFile ReadFile, serviceVersion string) (Con
 		}
 	}
 
+	cfg.snapshot = cfg.exportedSnapshot()
 	cfg.validated = true
 	return cfg, nil
+}
+
+func (cfg Config) exportedSnapshot() validatedConfig {
+	return validatedConfig{
+		logLevel:        cfg.LogLevel,
+		tracesExporter:  cfg.TracesExporter,
+		metricsExporter: cfg.MetricsExporter,
+		serviceName:     cfg.ServiceName,
+		serviceVersion:  cfg.ServiceVersion,
+	}
+}
+
+func validateConfig(cfg Config) error {
+	if !cfg.validated || cfg.snapshot != cfg.exportedSnapshot() {
+		return invalidField("observability Config", "an unchanged value returned by LoadConfig")
+	}
+	return nil
 }
 
 func loadLogLevel(lookup LookupEnv) (slog.Level, error) {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -19,7 +20,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/exemplar"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/semconv/v1.37.0"
+	"go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 	tracenoop "go.opentelemetry.io/otel/trace/noop"
 )
@@ -47,21 +48,28 @@ type Runtime struct {
 	shutdownErr     error
 }
 
-// New constructs the logger before installing sanitized process-wide OTel
-// diagnostics and creating any exporter that might report through them.
+// New validates that Config is unchanged before constructing the logger. It
+// then installs sanitized process-wide OTel diagnostics before creating any
+// exporter that might report through them.
 func New(ctx context.Context, cfg Config, output io.Writer) (*Runtime, error) {
+	if err := validateConfig(cfg); err != nil {
+		return nil, err
+	}
 	logger := NewLogger(output, cfg.LogLevel)
 	installOTelGlobals(logger)
 	return newRuntimeWithLogger(ctx, cfg, logger, defaultFactories())
 }
 
 func newRuntime(ctx context.Context, cfg Config, output io.Writer, f factories) (*Runtime, error) {
+	if err := validateConfig(cfg); err != nil {
+		return nil, err
+	}
 	return newRuntimeWithLogger(ctx, cfg, NewLogger(output, cfg.LogLevel), f)
 }
 
 func newRuntimeWithLogger(ctx context.Context, cfg Config, logger *slog.Logger, f factories) (*Runtime, error) {
-	if !cfg.validated {
-		return nil, invalidField("observability Config", "a value returned by LoadConfig")
+	if err := validateConfig(cfg); err != nil {
+		return nil, err
 	}
 	if ambientResourcePresent() {
 		return nil, invalidField("OTEL_RESOURCE_ATTRIBUTES", "an unset value")
@@ -152,7 +160,8 @@ func rollbackRuntime(runtime *Runtime) error {
 }
 
 func ambientResourcePresent() bool {
-	return resource.Environment().Len() != 0
+	raw, present := os.LookupEnv("OTEL_RESOURCE_ATTRIBUTES")
+	return present && raw != ""
 }
 
 func defaultFactories() factories {

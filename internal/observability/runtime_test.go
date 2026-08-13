@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -92,6 +93,9 @@ func TestNewRuntimeResourceHasOnlyApprovedServiceAttributes(t *testing.T) {
 	if got := resources[0].Attributes(); !equalAttributes(got, want) {
 		t.Fatalf("resource attributes = %#v, want %#v", got, want)
 	}
+	if got, want := resources[0].SchemaURL(), "https://opentelemetry.io/schemas/1.43.0"; got != want {
+		t.Fatalf("resource schema = %q, want %q", got, want)
+	}
 }
 
 func TestNewRuntimeResourceOmitsDevelopmentVersion(t *testing.T) {
@@ -170,6 +174,114 @@ func TestNewRuntimeRejectsUnvalidatedConfig(t *testing.T) {
 	if err == nil {
 		t.Fatal("newRuntime accepted an unvalidated Config")
 	}
+}
+
+func TestNewRuntimeAllowsAmbientServiceName(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+	t.Setenv("OTEL_SERVICE_NAME", "real-process-service")
+	cfg, err := LoadConfig(mapLookup(map[string]string{
+		"OTEL_SERVICE_NAME":                     "real-process-service",
+		"OTEL_TRACES_EXPORTER":                  "otlp",
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT":    "http://127.0.0.1:4318/v1/traces",
+		"OTEL_EXPORTER_OTLP_TRACES_TIMEOUT":     "100",
+		"OTEL_EXPORTER_OTLP_TRACES_COMPRESSION": "none",
+		"OTEL_EXPORTER_OTLP_TRACES_INSECURE":    "true",
+		"OTEL_EXPORTER_OTLP_TRACES_PROTOCOL":    "http/protobuf",
+	}), rejectRead, "devel")
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	runtime, err := newRuntime(t.Context(), cfg, io.Discard, defaultFactories())
+	if err != nil {
+		t.Fatalf("newRuntime: %v", err)
+	}
+	if err := runtime.Shutdown(t.Context()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+func TestNewRuntimeRejectsExporterModeMutationToDisabled(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+	cfg := enabledConfig(t)
+	cfg.TracesExporter = ExporterNone
+	cfg.MetricsExporter = ExporterNone
+	_, err := newRuntime(t.Context(), cfg, io.Discard, factories{})
+	assertSafeFieldError(t, err, "observability Config")
+}
+
+func TestNewRuntimeRejectsMutatedValidatedConfig(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{"log level", func(cfg *Config) { cfg.LogLevel = slog.LevelDebug }},
+		{"trace mode", func(cfg *Config) { cfg.TracesExporter = ExporterMode("hostile-trace-mode") }},
+		{"metric mode", func(cfg *Config) { cfg.MetricsExporter = ExporterOTLP }},
+		{"service name", func(cfg *Config) { cfg.ServiceName = "hostile-mutated-service" }},
+		{"service version", func(cfg *Config) { cfg.ServiceVersion = "hostile-mutated-version" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg, err := LoadConfig(emptyEnv, rejectRead, "devel")
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+			test.mutate(&cfg)
+			_, err = newRuntime(t.Context(), cfg, io.Discard, factories{
+				newTrace: func(context.Context, Config, *resource.Resource) (trace.TracerProvider, providerLifecycle, error) {
+					t.Fatal("trace factory called for mutated config")
+					return nil, nil, nil
+				},
+				newMetric: func(context.Context, Config, *resource.Resource) (metric.MeterProvider, providerLifecycle, error) {
+					t.Fatal("metric factory called for mutated config")
+					return nil, nil, nil
+				},
+			})
+			assertSafeFieldError(t, err, "observability Config", "hostile-trace-mode", "hostile-mutated-service", "hostile-mutated-version")
+		})
+	}
+}
+
+func TestNewRejectsInvalidConfigBeforeInstallingGlobals(t *testing.T) {
+	if os.Getenv("MAIDEN_LANE_OTEL_REJECTED_GLOBAL_CHILD") == "1" {
+		_ = os.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+		cfg, err := LoadConfig(emptyEnv, rejectRead, "devel")
+		if err != nil {
+			t.Fatalf("LoadConfig: %v", err)
+		}
+		cfg.ServiceName = "mutated-service"
+		var rejectedOutput bytes.Buffer
+		if _, err := New(context.Background(), cfg, &rejectedOutput); err == nil {
+			t.Fatal("New accepted mutated Config")
+		}
+
+		valid, err := LoadConfig(emptyEnv, rejectRead, "devel")
+		if err != nil {
+			t.Fatalf("LoadConfig valid: %v", err)
+		}
+		var acceptedOutput bytes.Buffer
+		runtime, err := New(context.Background(), valid, &acceptedOutput)
+		if err != nil {
+			t.Fatalf("New valid: %v", err)
+		}
+		otel.Handle(errors.New("hostile-async-value"))
+		if err := runtime.Shutdown(context.Background()); err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+		if rejectedOutput.Len() != 0 {
+			t.Fatalf("rejected logger captured global diagnostics: %s", rejectedOutput.String())
+		}
+		_, _ = os.Stdout.Write(acceptedOutput.Bytes())
+		return
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestNewRejectsInvalidConfigBeforeInstallingGlobals$")
+	command.Env = append(os.Environ(), "MAIDEN_LANE_OTEL_REJECTED_GLOBAL_CHILD=1")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("child: %v\n%s", err, output)
+	}
+	assertContainsOnlyCode(t, string(output), "otel_async_error", "hostile-async-value", "mutated-service")
 }
 
 func TestNewRuntimeIgnoresAmbientSDKPolicy(t *testing.T) {
