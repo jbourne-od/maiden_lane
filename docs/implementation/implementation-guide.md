@@ -49,8 +49,9 @@ Only implemented packages appear in this map.
 4. `run` parses the explicit `serve` command and listen-address flag.
 5. `serve` binds the requested TCP address, and `serveListener` runs
    `http.Server` with the health-only chi router and a sanitized error logger.
-6. Cancellation or an unexpected serving failure enters the same bounded drain
-   path. Active handlers finish before server lifecycle returns.
+6. Cancellation or an unexpected serving failure enters the same drain path.
+   The server allows active handlers up to ten seconds to finish, then
+   force-closes on timeout while preserving the drain and close errors.
 7. `execute` creates a fresh ten-second context, flushes and shuts down OTel,
    then returns the joined command and telemetry result for the final exit
    decision.

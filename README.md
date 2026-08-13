@@ -65,17 +65,18 @@ For each suffix below, the signal-specific
 
 | Suffix | Accepted values or meaning |
 |---|---|
-| `ENDPOINT` | Absolute `http` or `https` URL without credentials, query, or fragment. A global endpoint receives `/v1/traces` or `/v1/metrics`; a signal endpoint is used as supplied. |
+| `ENDPOINT` | Absolute `http` or `https` URL without credentials, query, or fragment. Default `https://localhost:4318`; the global endpoint receives `/v1/traces` or `/v1/metrics`, while a signal endpoint is used as supplied. |
 | `PROTOCOL` | `http/protobuf` only |
 | `HEADERS` | Comma-separated `header=value` pairs with unique case-insensitive names; values may be percent encoded |
 | `TIMEOUT` | Positive integer milliseconds; default `10000` |
 | `COMPRESSION` | `none` or `gzip`; default `none` |
-| `INSECURE` | `true` for an `http` endpoint or `false` for an `https` endpoint |
-| `CERTIFICATE` | Path to a readable PEM root certificate |
-| `CLIENT_CERTIFICATE` | Path to a readable PEM client certificate; requires `CLIENT_KEY` |
-| `CLIENT_KEY` | Path to the paired readable PEM client key |
+| `INSECURE` | Optional; when present it must be `true` for an `http` endpoint or `false` for an `https` endpoint |
+| `CERTIFICATE` | Path to a readable PEM root certificate; system roots are used when absent |
+| `CLIENT_CERTIFICATE` | Path to a readable PEM client certificate; requires the effective `CLIENT_KEY` after signal-specific precedence |
+| `CLIENT_KEY` | Path to the paired readable PEM client key; requires the effective `CLIENT_CERTIFICATE` |
 
-`OTEL_RESOURCE_ATTRIBUTES` is intentionally unsupported and must be unset.
+`OTEL_RESOURCE_ATTRIBUTES` is intentionally unsupported and must be unset or
+empty.
 OTLP/gRPC, OpenTelemetry log export, baggage propagation, arbitrary resource
 attributes, and semantic transformation telemetry are not part of this
 foundation. Exporter and HTTP diagnostic text is sanitized before it reaches
