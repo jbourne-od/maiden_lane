@@ -2,6 +2,7 @@ package semantic
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -96,6 +97,42 @@ func TestNewStateRejectsWrongTypedField(t *testing.T) {
 	}, nil)
 	if err == nil {
 		t.Fatal("NewState accepted wrong field type")
+	}
+}
+
+// Production break caught: iterating invalid entity fields as a Go map would
+// make the first reported field depend on randomized map iteration order.
+func TestNewEntityReportsInvalidFieldsInCanonicalOrder(t *testing.T) {
+	fields := map[FieldName]Value{
+		"z_invalid": {},
+		"a_invalid": {},
+	}
+	for range 100 {
+		_, err := NewEntity(EntityRef{Kind: "driver", ID: testDriverAID}, fields)
+		if err == nil {
+			t.Fatal("NewEntity accepted invalid fields")
+		}
+		if !strings.Contains(err.Error(), `field "a_invalid"`) {
+			t.Fatalf("NewEntity error = %q; want canonical first field a_invalid", err)
+		}
+	}
+}
+
+// Production break caught: iterating out-of-schema entity fields as a Go map
+// would make identical invalid states return different first errors.
+func TestNewStateReportsInvalidFieldsInCanonicalOrder(t *testing.T) {
+	driver := mustEntity(t, "driver", testDriverAID, map[FieldName]Value{
+		"z_unknown": mustString(t, "Z"),
+		"a_unknown": mustString(t, "A"),
+	})
+	for range 100 {
+		_, err := NewState(fixtureSchemaForStateTests(t), testLineageID, []Entity{driver}, nil)
+		if err == nil {
+			t.Fatal("NewState accepted unknown fields")
+		}
+		if !strings.Contains(err.Error(), `field "a_unknown"`) {
+			t.Fatalf("NewState error = %q; want canonical first field a_unknown", err)
+		}
 	}
 }
 
@@ -288,8 +325,9 @@ func TestNewStateRejectsMissingRelationEndpoint(t *testing.T) {
 	}
 }
 
-// Production break caught: retaining caller maps or exposing state entity
-// slices would allow an already-created state to change beneath its identity.
+// Production break caught: shallow-copying an Entity's private field map,
+// exposing it through an entity getter, or returning live canonical bytes
+// would let a state's semantic values diverge from its cached identity.
 func TestStateDefensivelyCopiesConstructorInputsAndGetterResults(t *testing.T) {
 	fields := map[FieldName]Value{"assignment_key": mustString(t, "X")}
 	driver := mustEntity(t, "driver", testDriverAID, fields)
@@ -298,21 +336,78 @@ func TestStateDefensivelyCopiesConstructorInputsAndGetterResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewState: %v", err)
 	}
-	before := state.CanonicalBytes()
+	wantCanonical := state.CanonicalBytes()
+	wantDigest := state.Digest()
 
 	fields["assignment_key"] = mustString(t, "mutated")
+	driver.fields["assignment_key"] = mustString(t, "driver-mutated")
 	entities[0] = Entity{}
 	got := state.Entities()
-	got[0] = Entity{}
+	got[0].fields["assignment_key"] = mustString(t, "entities-getter-mutated")
 	returned, ok := state.Entity(driver.Ref())
 	if !ok {
 		t.Fatal("driver missing")
 	}
+	returned.fields["assignment_key"] = mustString(t, "entity-getter-mutated")
 	returnedFields := returned.Fields()
 	returnedFields["assignment_key"] = mustString(t, "getter-mutated")
+	canonical := state.CanonicalBytes()
+	canonical[0] ^= 0xff
 
-	if !bytes.Equal(before, state.CanonicalBytes()) {
-		t.Fatal("state mutated through caller-owned input or getter result")
+	stored, ok := state.Entity(driver.Ref())
+	if !ok {
+		t.Fatal("driver missing after mutation attempts")
+	}
+	assignment, ok := stored.Field("assignment_key")
+	if !ok {
+		t.Fatal("assignment_key missing after mutation attempts")
+	}
+	text, ok := assignment.String()
+	if !ok || text != "X" {
+		t.Fatalf("stored assignment_key = %q, %v; want X, true", text, ok)
+	}
+	if !bytes.Equal(wantCanonical, state.CanonicalBytes()) || state.Digest() != wantDigest {
+		t.Fatal("state identity changed through caller-owned input or getter result")
+	}
+}
+
+// Production break caught: retaining schema declaration input or returning
+// shallow declaration/canonical getters would mutate an accepted schema.
+func TestSchemaDefensivelyCopiesConstructorInputsAndGetterResults(t *testing.T) {
+	fields := []FieldDeclaration{{Name: "assignment_key", Kind: ValueString}}
+	entities := []EntityDeclaration{{Kind: "driver", Fields: fields}}
+	relations := []RelationDeclaration{{Kind: "member", FromKind: "driver", ToKind: "driver"}}
+	schema, err := NewSchema(entities, relations)
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+	wantCanonical := schema.CanonicalBytes()
+	wantDigest := schema.Digest()
+
+	fields[0].Name = "input-fields-mutated"
+	entities[0].Kind = "input-entities-mutated"
+	entities[0].Fields[0].Name = "input-nested-mutated"
+	relations[0].Kind = "input-relations-mutated"
+	declaration := schema.Declaration()
+	declaration.entities[0].Kind = "declaration-mutated"
+	declaration.entities[0].Fields[0].Name = "declaration-nested-mutated"
+	declaration.relations[0].Kind = "declaration-relation-mutated"
+	entityDeclarations := schema.Declaration().EntityDeclarations()
+	entityDeclarations[0].Fields[0].Name = "entity-getter-mutated"
+	relationDeclarations := schema.Declaration().RelationDeclarations()
+	relationDeclarations[0].Kind = "relation-getter-mutated"
+	canonical := schema.CanonicalBytes()
+	canonical[0] ^= 0xff
+
+	stored := schema.Declaration()
+	if stored.entities[0].Kind != "driver" || stored.entities[0].Fields[0].Name != "assignment_key" {
+		t.Fatalf("stored entity declaration mutated: %+v", stored.entities[0])
+	}
+	if stored.relations[0].Kind != "member" {
+		t.Fatalf("stored relation declaration mutated: %+v", stored.relations[0])
+	}
+	if !bytes.Equal(wantCanonical, schema.CanonicalBytes()) || schema.Digest() != wantDigest {
+		t.Fatal("schema identity changed through caller-owned input or getter result")
 	}
 }
 

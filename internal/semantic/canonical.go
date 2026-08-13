@@ -362,11 +362,7 @@ func encodeState(state State) ([]byte, error) {
 	for _, entity := range state.entities {
 		encoder.string(string(entity.ref.Kind))
 		encoder.digest(string(entity.ref.ID))
-		fieldNames := make([]FieldName, 0, len(entity.fields))
-		for name := range entity.fields {
-			fieldNames = append(fieldNames, name)
-		}
-		slices.Sort(fieldNames)
+		fieldNames := sortedFieldNames(entity.fields)
 		encoder.uint64(uint64(len(fieldNames)))
 		for _, name := range fieldNames {
 			encoder.string(string(name))
@@ -405,4 +401,13 @@ func compareRelations(a, b Relation) int {
 		return result
 	}
 	return compare(string(a.To.Kind), string(b.To.Kind))
+}
+
+func sortedFieldNames(fields map[FieldName]Value) []FieldName {
+	names := make([]FieldName, 0, len(fields))
+	for name := range fields {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
 }

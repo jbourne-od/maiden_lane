@@ -146,6 +146,33 @@ func TestWorldCanonicalBytesIgnoreReferenceInsertionOrder(t *testing.T) {
 	}
 }
 
+// Production break caught: retaining a caller world slice or returning live
+// references/canonical bytes would mutate an already-pinned world identity.
+func TestWorldDefensivelyCopiesConstructorInputsAndGetterResults(t *testing.T) {
+	reference := mustWorldReference(t, WorldReferenceSnapshot, Digest(testDriverAID))
+	input := []WorldReference{reference}
+	world, err := NewWorld(input)
+	if err != nil {
+		t.Fatalf("NewWorld: %v", err)
+	}
+	wantCanonical := world.CanonicalBytes()
+	wantID := world.ID()
+
+	input[0] = WorldReference{}
+	references := world.References()
+	references[0] = WorldReference{}
+	canonical := world.CanonicalBytes()
+	canonical[0] ^= 0xff
+
+	stored := world.References()
+	if len(stored) != 1 || stored[0] != reference {
+		t.Fatalf("stored world references mutated: %+v", stored)
+	}
+	if !bytes.Equal(wantCanonical, world.CanonicalBytes()) || world.ID() != wantID {
+		t.Fatal("world identity changed through caller-owned input or getter result")
+	}
+}
+
 // Production break caught: accepting duplicate world set members would make
 // multiplicity an undeclared part of pinned-world meaning.
 func TestNewWorldRejectsDuplicateReference(t *testing.T) {

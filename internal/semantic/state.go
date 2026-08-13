@@ -163,7 +163,8 @@ func NewEntity(ref EntityRef, fields map[FieldName]Value) (Entity, error) {
 		return Entity{}, fmt.Errorf("entity ID: %w", err)
 	}
 	cloned := make(map[FieldName]Value, len(fields))
-	for name, value := range fields {
+	for _, name := range sortedFieldNames(fields) {
+		value := fields[name]
 		if !validSemanticName(string(name)) {
 			return Entity{}, fmt.Errorf("field name is empty or invalid UTF-8")
 		}
@@ -335,7 +336,8 @@ func (s Schema) relationDeclaration(kind RelationKind) (RelationDeclaration, boo
 }
 
 func validateEntityFields(entity Entity, declaration EntityDeclaration) error {
-	for name, value := range entity.fields {
+	for _, name := range sortedFieldNames(entity.fields) {
+		value := entity.fields[name]
 		field, ok := findFieldDeclaration(declaration.Fields, name)
 		if !ok {
 			return fmt.Errorf("field %q is not declared for entity kind %q", name, entity.ref.Kind)
