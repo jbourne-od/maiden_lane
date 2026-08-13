@@ -463,7 +463,7 @@ Inspect derived access and plan canonicalization. Verify there are exactly two o
 
 **Interfaces:**
 - Consumes: immutable Task 1 state and Task 2 compiled declarations.
-- Produces: immutable `Patch`, `Insert`, `Relate`, and `Update` variants, `PatchDigest`, atomic `ApplyPatch`, `UndoPatch`, and closed operation failures.
+- Produces: immutable schema-bound `Patch`, `Insert`, `Relate`, and `Update` variants, `PatchDigest`, atomic `ApplyPatch`, accepted-application receipts, receipt-bound `UndoPatch`, closed operation failures, and ordinary errors for malformed/schema-incompatible calls.
 
 - [ ] **Step 1: Write failing staged-apply and all-or-nothing tests**
 
@@ -475,7 +475,9 @@ func TestApplyPatchStagesInsertBeforeRelationsAtomically(t *testing.T) {
 		RelateOperation(memberRelation(team.Ref(), drivers[1])),
 		RelateOperation(memberRelation(team.Ref(), drivers[0])),
 	)
-	after, failure := ApplyPatch(before, patch)
+	outcome, err := ApplyPatch(before, patch)
+	if err != nil { t.Fatalf("ApplyPatch: %v", err) }
+	after, failure := outcome.State(), outcome.Failure()
 	if failure != nil { t.Fatalf("ApplyPatch: %v", failure.Code()) }
 	if !after.HasRelation(memberRelation(team.Ref(), drivers[0])) || !after.HasRelation(memberRelation(team.Ref(), drivers[1])) {
 		t.Fatal("relations missing")
@@ -486,7 +488,9 @@ func TestApplyPatchFailureLeavesPredecessorByteIdentical(t *testing.T) {
 	for _, patch := range patchesFailingAtOperationOneTwoOrThree(t) {
 		before := patchPredecessor(t, patch)
 		canonical := before.CanonicalBytes()
-		_, failure := ApplyPatch(before, patch)
+		outcome, err := ApplyPatch(before, patch)
+		if err != nil { t.Fatalf("ApplyPatch: %v", err) }
+		failure := outcome.Failure()
 		if failure == nil { t.Fatal("invalid patch committed") }
 		if !bytes.Equal(canonical, before.CanonicalBytes()) { t.Fatal("predecessor mutated") }
 	}
@@ -511,18 +515,20 @@ const (
 	OperationUpdate
 )
 
-func NewPatch([]Operation) (Patch, error)
-func ApplyPatch(State, Patch) (State, *OperationFailure)
-func UndoPatch(State, Patch) (State, *OperationFailure)
+func NewPatch(Schema, []Operation) (Patch, error)
+func ApplyPatch(State, Patch) (PatchOutcome, error)
+func UndoPatch(State, Patch, AcceptedPatchReceipt) (PatchOutcome, error)
 ```
 
-Canonical order is operation rank `Insert < Relate < Update`, then typed key. Validate all predecessor expectations, stage operations on a deep candidate, validate final referential integrity, and return the candidate only after the whole patch passes. Undo processes the accepted sequence in reverse and verifies after-images.
+`NewPatch` validates every operation against the supplied schema and binds the patch to its digest. Canonical patch bytes include `SchemaDigest`, followed by operation rank `Insert < Relate < Update`, then typed key. `ApplyPatch` verifies the state/patch schema link, validates all predecessor expectations, stages operations on a deep candidate, validates final referential integrity, and returns the candidate only after the whole patch passes. Success is the only path that returns an `AcceptedPatchReceipt` binding patch, predecessor, and result digests. Protected failure returns the exact predecessor with no receipt; malformed/schema-incompatible calls use the Go error channel.
+
+`UndoPatch` requires the accepted receipt, verifies its patch and current-result links, processes the accepted sequence in reverse, verifies every after-image, and requires the reconstructed predecessor digest to equal the receipt. The receipt has no public arbitrary constructor. A patch by itself cannot authorize destructive inverse application.
 
 `Update` stores exact field before/after images; absence is an explicit tagged before value. Do not store a caller-owned entity map or invent Delete/Unrelate/Merge/Split.
 
 - [ ] **Step 4: Add inverse, order, immutability, and digest tests**
 
-Require `UndoPatch(ApplyPatch(S,P),P)` to reproduce canonical `S` for generated lawful Insert/Relate/Update patches. Reverse relation proposal order and require identical patch bytes/digest. Mutate source slices and getter results and require stable bytes. Freeze literal canonical hex plus digest vectors for one T1 patch and one T2 patch.
+Require receipt-bound `UndoPatch` after a successful `ApplyPatch` to reproduce canonical `S` for generated lawful Insert/Relate/Update patches. Reject a missing/mismatched receipt and prove an insert patch cannot remove an independently existing identical entity without accepted-application evidence. Add a multi-field update whose later before-image fails and prove no earlier field changes. Reject schema-invalid operations at construction and patch/state schema mismatch without panic or predecessor mutation. Reverse relation proposal order and require identical patch bytes/digest. Mutate source slices and getter results and require stable bytes. Freeze literal canonical hex plus digest vectors for one schema-bound T1 patch and one schema-bound T2 patch.
 
 - [ ] **Step 5: Verify GREEN**
 

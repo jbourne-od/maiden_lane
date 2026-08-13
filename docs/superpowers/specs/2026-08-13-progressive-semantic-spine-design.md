@@ -341,16 +341,29 @@ absent. Each relation records the authoritative expectation that the relation
 was absent. If any operation, candidate invariant, or postcondition fails, no
 operation commits and no T1 journal entry is appended.
 
+Each patch is constructed against one immutable schema and its canonical bytes
+include that `SchemaDigest`. Construction rejects operations whose inserted
+fields, relation kind or endpoint kinds, or updated fields are incompatible
+with that schema. Application verifies that the predecessor uses the same
+schema before staging any change; malformed or schema-incompatible calls use
+the Go error channel rather than an inaccurate protected-operation code.
+
 Canonical patch order uses a closed operation rank followed by each
 operation's typed canonical key. For this supported subset, `Insert` sorts
 before `Relate`, which sorts before `Update`; relations then sort by relation
 kind, source, and destination. This order both makes bytes stable and preserves
 the staged endpoint dependency needed by T1.
 
-Inverse application processes the accepted operation sequence in reverse, so
-T1 removes its relations before removing their team endpoint. Undo is defined
-only for the structural subset implemented by this slice and must verify the
-accepted after-image before changing the candidate.
+Successful application produces an immutable `AcceptedPatchReceipt` through a
+package-owned private constructor. The receipt binds `PatchDigest`,
+predecessor `StateDigest`, and result `StateDigest`; a protected rejection or
+Go error produces no receipt. Inverse application requires this receipt,
+verifies the current state and patch links, and processes the accepted
+operation sequence in reverse, so T1 removes its relations before removing
+their team endpoint. Undo is defined only for the structural subset implemented
+by this slice and must verify every accepted after-image plus the reconstructed
+predecessor digest before returning it. A patch alone is never authority to
+delete an entity.
 
 ### 5.3 C1 state and seal
 
@@ -1301,8 +1314,12 @@ Implementation is test-first and must cover the following properties.
 - Direct patch tests construct invalid values whose first, second, or third
   operation fails and prove the predecessor remains unchanged; the production
   kernel gains no failure-injection callback or hidden test semantics.
-- For the supported `Insert`, `Relate`, and `Update` subset,
-  `Undo(Apply(S, patch), patch)` reproduces canonical predecessor bytes.
+- Patches are schema-bound; schema-invalid construction and patch/state schema
+  mismatch fail through the Go error channel without mutating the predecessor.
+- For the supported `Insert`, `Relate`, and `Update` subset, undo with the
+  accepted-application receipt reproduces canonical predecessor bytes. Undo
+  without that receipt or with a mismatched patch/current-state link cannot
+  remove an entity.
 - Already-created state, patch, and journal values cannot be changed by
   mutating caller-owned maps or slices.
 - Every protected failure occurs at its declared boundary with the exact
