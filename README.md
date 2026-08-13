@@ -70,8 +70,8 @@ For each suffix below, the signal-specific
 | `HEADERS` | Comma-separated `header=value` pairs with unique case-insensitive names; values may be percent encoded |
 | `TIMEOUT` | Positive integer milliseconds; default `10000` |
 | `COMPRESSION` | `none` or `gzip`; default `none` |
-| `INSECURE` | Optional; when present it must be `true` for an `http` endpoint or `false` for an `https` endpoint |
-| `CERTIFICATE` | Path to a readable PEM root certificate; system roots are used when absent |
+| `INSECURE` | Optional; when present it must be a true form (`1`, `t`, `T`, `true`, `TRUE`, `True`) for an `http` endpoint or a false form (`0`, `f`, `F`, `false`, `FALSE`, `False`) for an `https` endpoint |
+| `CERTIFICATE` | Path to a readable PEM root certificate; system roots are used for HTTPS when absent |
 | `CLIENT_CERTIFICATE` | Path to a readable PEM client certificate; requires the effective `CLIENT_KEY` after signal-specific precedence |
 | `CLIENT_KEY` | Path to the paired readable PEM client key; requires the effective `CLIENT_CERTIFICATE` |
 
