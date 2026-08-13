@@ -10,6 +10,7 @@ tool (
 )
 
 require (
+	github.com/felixge/httpsnoop v1.1.0
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/go-logr/logr v1.4.4
 	go.opentelemetry.io/otel v1.45.0

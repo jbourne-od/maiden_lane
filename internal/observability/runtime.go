@@ -39,13 +39,16 @@ type factories struct {
 type Runtime struct {
 	Logger *slog.Logger
 
-	tracerProvider  trace.TracerProvider
-	meterProvider   metric.MeterProvider
-	propagator      propagation.TextMapPropagator
-	traceLifecycle  providerLifecycle
-	metricLifecycle providerLifecycle
-	shutdownOnce    sync.Once
-	shutdownErr     error
+	tracerProvider   trace.TracerProvider
+	meterProvider    metric.MeterProvider
+	propagator       propagation.TextMapPropagator
+	httpDuration     metric.Float64Histogram
+	httpRequestSize  metric.Int64Histogram
+	httpResponseSize metric.Int64Histogram
+	traceLifecycle   providerLifecycle
+	metricLifecycle  providerLifecycle
+	shutdownOnce     sync.Once
+	shutdownErr      error
 }
 
 // New validates that Config is unchanged before constructing the logger. It
@@ -133,6 +136,12 @@ func newRuntimeWithLogger(ctx context.Context, cfg Config, logger *slog.Logger, 
 		}
 		runtime.meterProvider = provider
 	}
+	if err := runtime.registerHTTPInstruments(); err != nil {
+		return nil, errors.Join(
+			safeCause{message: "HTTP telemetry initialization failed", cause: err},
+			rollbackRuntime(runtime),
+		)
+	}
 	return runtime, nil
 }
 
@@ -219,6 +228,7 @@ func newMetricProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 		sdkmetric.WithReader(reader),
 		sdkmetric.WithExemplarFilter(exemplar.AlwaysOffFilter),
 		sdkmetric.WithCardinalityLimit(2000),
+		sdkmetric.WithView(httpMetricViews()...),
 	)
 	return provider, provider, nil
 }

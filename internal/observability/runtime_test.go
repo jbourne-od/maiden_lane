@@ -52,6 +52,9 @@ func TestNewRuntimeDisabledDoesNotCreateExporters(t *testing.T) {
 	if runtime.tracerProvider == nil || runtime.meterProvider == nil || runtime.propagator == nil {
 		t.Fatalf("disabled runtime providers = %#v, %#v, %#v", runtime.tracerProvider, runtime.meterProvider, runtime.propagator)
 	}
+	if runtime.httpDuration == nil || runtime.httpRequestSize == nil || runtime.httpResponseSize == nil {
+		t.Fatalf("disabled HTTP instruments = %#v, %#v, %#v", runtime.httpDuration, runtime.httpRequestSize, runtime.httpResponseSize)
+	}
 	if err := runtime.Shutdown(t.Context()); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
@@ -418,6 +421,9 @@ func TestNewRuntimeIgnoresAmbientSDKPolicy(t *testing.T) {
 	}
 	if len(explicit.GetDataPoints()) != 1 || len(explicit.GetDataPoints()[0].GetExplicitBounds()) == 0 {
 		t.Fatalf("histogram points = %#v, want default explicit buckets", explicit.GetDataPoints())
+	}
+	if attributes := explicit.GetDataPoints()[0].GetAttributes(); len(attributes) != 0 {
+		t.Fatalf("metric view retained attributes outside the HTTP allowlist: %#v", attributes)
 	}
 	if exemplars := explicit.GetDataPoints()[0].GetExemplars(); len(exemplars) != 0 {
 		t.Fatalf("exemplars = %#v, want none", exemplars)
