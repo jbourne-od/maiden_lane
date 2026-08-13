@@ -56,7 +56,7 @@ func (r *Runtime) InstrumentHTTPRoute(method, pattern string, next http.Handler)
 		request = request.Clone(ctx)
 		request.Body = body
 		response := newResponseObservation(writer)
-		captured := httpsnoop.Metrics{Code: http.StatusOK}
+		var captured httpsnoop.Metrics
 		completed := false
 
 		// This one defer is the terminal ownership boundary. In Go, ordinary
@@ -69,9 +69,12 @@ func (r *Runtime) InstrumentHTTPRoute(method, pattern string, next http.Handler)
 			// recovered value is deliberately discarded to keep it out of telemetry.
 			_ = recover()
 			panicked := !completed
-			status := captured.Code
-			if panicked && !response.committed {
-				status = 0
+			status := response.status
+			if !response.committed {
+				status = http.StatusOK
+				if panicked {
+					status = 0
+				}
 			}
 			statusCode, errorType, includeStatus := classifyHTTPResult(panicked, request.Context().Err(), status)
 
@@ -244,6 +247,7 @@ func (body *countingReadCloser) Close() error {
 type responseObservation struct {
 	writer    http.ResponseWriter
 	committed bool
+	status    int
 }
 
 func newResponseObservation(writer http.ResponseWriter) *responseObservation {
@@ -257,41 +261,41 @@ func newResponseObservation(writer http.ResponseWriter) *responseObservation {
 			return func(status int) {
 				next(status)
 				if status < 100 || status > 199 {
-					observation.commit()
+					observation.commit(status)
 				}
 			}
 		},
 		Write: func(next httpsnoop.WriteFunc) httpsnoop.WriteFunc {
 			return func(body []byte) (int, error) {
 				count, err := next(body)
-				observation.commit()
+				observation.commit(http.StatusOK)
 				return count, err
 			}
 		},
 		Flush: func(next httpsnoop.FlushFunc) httpsnoop.FlushFunc {
 			return func() {
 				next()
-				observation.commit()
+				observation.commit(http.StatusOK)
 			}
 		},
 		FlushError: func(next httpsnoop.FlushErrorFunc) httpsnoop.FlushErrorFunc {
 			return func() error {
 				err := next()
-				observation.commit()
+				observation.commit(http.StatusOK)
 				return err
 			}
 		},
 		WriteString: func(next httpsnoop.WriteStringFunc) httpsnoop.WriteStringFunc {
 			return func(body string) (int, error) {
 				count, err := next(body)
-				observation.commit()
+				observation.commit(http.StatusOK)
 				return count, err
 			}
 		},
 		ReadFrom: func(next httpsnoop.ReadFromFunc) httpsnoop.ReadFromFunc {
 			return func(reader io.Reader) (int64, error) {
 				count, err := next(reader)
-				observation.commit()
+				observation.commit(http.StatusOK)
 				return count, err
 			}
 		},
@@ -299,9 +303,10 @@ func newResponseObservation(writer http.ResponseWriter) *responseObservation {
 	return observation
 }
 
-func (observation *responseObservation) commit() {
+func (observation *responseObservation) commit(status int) {
 	if observation.committed {
 		return
 	}
 	observation.committed = true
+	observation.status = status
 }

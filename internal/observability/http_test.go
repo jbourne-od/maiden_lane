@@ -475,6 +475,7 @@ func TestInstrumentHTTPRouteFlushCommitsStatusBeforePanic(t *testing.T) {
 			writer: func() http.ResponseWriter { return newOptionalResponseWriter() },
 			handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 				writer.(http.Flusher).Flush()
+				writer.WriteHeader(http.StatusNoContent)
 				panic("hostile-panic-after-flush")
 			}),
 		},
@@ -485,6 +486,7 @@ func TestInstrumentHTTPRouteFlushCommitsStatusBeforePanic(t *testing.T) {
 				if err := http.NewResponseController(writer).Flush(); err != nil {
 					t.Fatalf("ResponseController.Flush: %v", err)
 				}
+				writer.WriteHeader(http.StatusNoContent)
 				panic("hostile-panic-after-flush-error")
 			}),
 		},
@@ -515,6 +517,57 @@ func TestInstrumentHTTPRouteFlushCommitsStatusBeforePanic(t *testing.T) {
 			}
 			if got := attributes["error.type"]; got != "handler_panic" {
 				t.Fatalf("flush panic error.type = %#v", got)
+			}
+			assertFinalizedHTTPMetrics(t, collectMetrics(t, reader), http.StatusOK)
+		})
+	}
+}
+
+func TestInstrumentHTTPRouteFlushPreservesFirstStatusOnNormalReturn(t *testing.T) {
+	tests := []struct {
+		name    string
+		writer  func() http.ResponseWriter
+		handler http.Handler
+	}{
+		{
+			name:   "http flusher",
+			writer: func() http.ResponseWriter { return newOptionalResponseWriter() },
+			handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.(http.Flusher).Flush()
+				writer.WriteHeader(http.StatusNoContent)
+			}),
+		},
+		{
+			name:   "response controller flush error",
+			writer: func() http.ResponseWriter { return newFlushErrorResponseWriter() },
+			handler: http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				if err := http.NewResponseController(writer).Flush(); err != nil {
+					t.Fatalf("ResponseController.Flush: %v", err)
+				}
+				writer.WriteHeader(http.StatusNoContent)
+			}),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, _, spans, reader := newHTTPFixture(t, test.handler)
+			handler := runtime.InstrumentHTTPRoute(http.MethodPost, fixturePattern, test.handler)
+			handler.ServeHTTP(test.writer(), httptest.NewRequest(http.MethodPost, "/fixtures/fixture-1", nil))
+
+			ended := spans.Ended()
+			if len(ended) != 1 {
+				t.Fatalf("ended spans = %d, want 1", len(ended))
+			}
+			span := ended[0]
+			if span.Status().Code != codes.Ok || span.Status().Description != "" {
+				t.Fatalf("normal flush span status = %v, want OK", span.Status())
+			}
+			attributes := spanAttributeMap(span)
+			if got := attributes["http.response.status_code"]; got != int64(http.StatusOK) {
+				t.Fatalf("normal flush status = %#v, want %d", got, http.StatusOK)
+			}
+			if _, ok := attributes["error.type"]; ok {
+				t.Fatalf("normal flush span has error.type: %#v", attributes)
 			}
 			assertFinalizedHTTPMetrics(t, collectMetrics(t, reader), http.StatusOK)
 		})
