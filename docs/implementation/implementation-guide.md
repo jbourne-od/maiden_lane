@@ -36,9 +36,17 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
   synthetic entities, accepted journal entries and prefixes, invariant-result
   sets, and protected/integrity failure reports. Executor build identity affects
   only `ExecutionID`; accepted semantic artifacts remain backend-independent.
+- Pure checkpoint sealing at exact compiled plan prefixes. A sealed immutable
+  manifest binds its declared checkpoint identity, plan/run/input/world/policy
+  replay links, accepted journal-prefix digest, complete applicable protected
+  invariant-result digest, and canonical state digest. Claim identity remains
+  distinct from full-manifest content identity.
+- Replay-verified refusal for incomplete or corrupt prefixes, state divergence,
+  incomplete protected evidence, and one-claim/two-manifest conflicts. These
+  established-run defects are typed integrity results and produce no checkpoint.
 
-There is no sealed-checkpoint model, readiness assessment, worker, persistence
-adapter, promotion gate, semantic telemetry, or stable typed application error.
+There is no readiness assessment, worker, persistence adapter, promotion gate,
+semantic telemetry, or stable typed application error.
 
 ## Current repository map
 
@@ -113,6 +121,13 @@ cardinality boundary.
   and semantic link inconsistency with the implicated entry content digest.
   Protected failure evidence references are sorted and deduplicated separately
   from the truthful runtime result sequence.
+- Checkpoint sealing independently replays the accepted journal from pinned S0,
+  requires the caller's state and complete passing invariant evidence to match
+  that exact declared prefix, then derives `CheckpointID`,
+  `CheckpointArtifactID`, and `CheckpointArtifactDigest` as separate layered
+  values. Executor identity is verified as part of the execution contract but
+  excluded from checkpoint meaning. The in-memory `KnownArtifacts` input only
+  detects an identity/content conflict; it is not a registry or persistence.
 - `context.Context` carries cancellation across call boundaries. It is passed
   explicitly rather than discovered globally. Here it carries cancellation and
   trace context, never Maiden Lane transformation semantics.
@@ -183,10 +198,10 @@ plus Docker for the container targets.
 
 ## Known gaps
 
-Checkpoint sealing, readiness, application orchestration, and AWS runtime
-layers described by the HLD are not implemented. The current patch kernel
-intentionally supports no delete, unrelate, merge, split, sealing, or
-publication behavior. There are no
+Readiness, application orchestration, and AWS runtime layers described by the
+HLD are not implemented. The current patch kernel intentionally supports no
+delete, unrelate, merge, or split, and checkpoint sealing does not implement
+promotion or publication behavior. There are no
 application-operation spans, worker or adapter spans, OTel log export,
 collector deployment, or wrapped non-health production routes. Their eventual
 package boundaries will be documented here only after the corresponding code

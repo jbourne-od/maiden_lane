@@ -151,6 +151,12 @@ func (f ArtifactIntegrityFailureReport) LastVerifiedStateDigest() (StateDigest, 
 	}
 	return *f.lastState, true
 }
+func (f ArtifactIntegrityFailureReport) LastVerifiedCheckpointArtifactID() (CheckpointArtifactID, bool) {
+	if f.lastCheckpoint == nil {
+		return "", false
+	}
+	return *f.lastCheckpoint, true
+}
 func (f ArtifactIntegrityFailureReport) ExpectedDigest() (Digest, bool) {
 	if f.expected == nil {
 		return "", false

@@ -75,6 +75,17 @@ import (
 //                       kind/ref, optional verified-prefix/expected/observed
 //                       links, sorted artifact references
 //
+// Checkpoint artifact encoding table (v1):
+//
+//   checkpoint ID:       tag, plan ID, canonical checkpoint declaration key
+//   checkpoint claim:    tag, semantic-run ID, checkpoint ID, state digest,
+//                       journal-prefix digest, invariant-result-set digest,
+//                       provenance-policy ID
+//   checkpoint manifest: tag, plan ID, checkpoint ID, declaration key and
+//                       boundary, semantic-run/input/initial-state/world/policy
+//                       replay links, state/journal-prefix/invariant-result-set
+//                       claim links
+//
 // Tags and semantic strings are uint64-big-endian length-prefixed exact UTF-8
 // bytes. Counts are uint64 big endian. Int64 values use big-endian two's
 // complement. Digests are 32 raw bytes decoded from validated lowercase
@@ -103,6 +114,9 @@ const (
 	journalPrefixDomainTag      = "maiden-lane.journal-prefix.v1"
 	protectedFailureDomainTag   = "maiden-lane.protected-invariant-failure.v1"
 	artifactFailureDomainTag    = "maiden-lane.artifact-integrity-failure.v1"
+	checkpointIDDomainTag       = "maiden-lane.checkpoint-id.v1"
+	checkpointClaimDomainTag    = "maiden-lane.checkpoint-artifact-id.v1"
+	checkpointArtifactDomainTag = "maiden-lane.checkpoint-artifact.v1"
 )
 
 // contentHasher hashes bytes whose semantic meaning and canonical order have
@@ -880,6 +894,44 @@ func encodeJournalPrefix(run SemanticRunID, policy ProvenancePolicyID, entries [
 	for _, entry := range entries {
 		encoder.digest(string(entry.digest))
 	}
+	return encoder.bytes()
+}
+
+func encodeCheckpointID(plan PlanID, checkpoint CheckpointKey) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(checkpointIDDomainTag)
+	encoder.digest(string(plan))
+	encoder.string(string(checkpoint))
+	return encoder.bytes()
+}
+
+func encodeCheckpointArtifactID(run SemanticRunID, checkpoint CheckpointID, state StateDigest, journal JournalPrefixDigest, invariants InvariantResultDigest, policy ProvenancePolicyID) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(checkpointClaimDomainTag)
+	encoder.digest(string(run))
+	encoder.digest(string(checkpoint))
+	encoder.digest(string(state))
+	encoder.digest(string(journal))
+	encoder.digest(string(invariants))
+	encoder.digest(string(policy))
+	return encoder.bytes()
+}
+
+func encodeCheckpointArtifact(artifact CheckpointArtifact) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(checkpointArtifactDomainTag)
+	encoder.digest(string(artifact.planID))
+	encoder.digest(string(artifact.checkpointID))
+	encoder.string(string(artifact.checkpoint.Key))
+	encoder.string(string(artifact.checkpoint.After))
+	encoder.digest(string(artifact.semanticRunID))
+	encoder.digest(string(artifact.inputID))
+	encoder.digest(string(artifact.initialStateDigest))
+	encoder.digest(string(artifact.worldID))
+	encoder.digest(string(artifact.policyID))
+	encoder.digest(string(artifact.stateDigest))
+	encoder.digest(string(artifact.journalPrefixDigest))
+	encoder.digest(string(artifact.invariantResultDigest))
 	return encoder.bytes()
 }
 
