@@ -9,7 +9,7 @@ container support; the transformation engine has not been implemented.
 
 ## Requirements
 
-- Go 1.26 or newer; the repository currently selects Go 1.26.5.
+- Go 1.26 or newer; the repository currently selects Go 1.26.6.
 - POSIX `/bin/sh`, `make`, and ordinary userland tools used by the recipes:
   `find`, `grep`, `sed`, `mkdir`, `sleep`, and `curl`.
 - Docker for container checks; `curl` sends the health request from the host.
