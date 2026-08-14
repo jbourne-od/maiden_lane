@@ -86,6 +86,19 @@ import (
 //                       replay links, state/journal-prefix/invariant-result-set
 //                       claim links
 //
+// Assessment artifact encoding table (v1):
+//
+//   assessment ID:      tag, checkpoint artifact ID, profile ID
+//   assessment:         tag, assessment-semantics version, checkpoint artifact
+//                       ID, profile ID, verdict token ("ready"/"needs_input"),
+//                       selected entities in canonical (kind, ID) order; each
+//                       entity contains its ref and every normalized
+//                       requirement result in canonical requirement order
+//                       (code, one-byte satisfied(1)/missing(2) marker, sorted
+//                       fact references(entity ref, field)); trailing count of
+//                       assessment-level safe evidence references (always zero
+//                       in v1; the field is part of the ratified record shape)
+//
 // Tags and semantic strings are uint64-big-endian length-prefixed exact UTF-8
 // bytes. Counts are uint64 big endian. Int64 values use big-endian two's
 // complement. Digests are 32 raw bytes decoded from validated lowercase
@@ -117,7 +130,15 @@ const (
 	checkpointIDDomainTag       = "maiden-lane.checkpoint-id.v1"
 	checkpointClaimDomainTag    = "maiden-lane.checkpoint-artifact-id.v1"
 	checkpointArtifactDomainTag = "maiden-lane.checkpoint-artifact.v1"
+	assessmentIDDomainTag       = "maiden-lane.assessment-id.v1"
+	assessmentDomainTag         = "maiden-lane.readiness-assessment.v1"
 )
+
+// assessmentSemanticsVersion pins the meaning of readiness evaluation (closed
+// scope selection, universal aggregation, field-presence atoms, vacuous-empty
+// readiness) independently of the byte-format version carried by the domain
+// tag. Changing evaluation semantics must change this token.
+const assessmentSemanticsVersion = "maiden-lane.assessment-semantics.v1"
 
 // contentHasher hashes bytes whose semantic meaning and canonical order have
 // already been fixed by this package.
@@ -932,6 +953,48 @@ func encodeCheckpointArtifact(artifact CheckpointArtifact) ([]byte, error) {
 	encoder.digest(string(artifact.stateDigest))
 	encoder.digest(string(artifact.journalPrefixDigest))
 	encoder.digest(string(artifact.invariantResultDigest))
+	return encoder.bytes()
+}
+
+func encodeAssessmentID(checkpoint CheckpointArtifactID, profile ProfileID) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(assessmentIDDomainTag)
+	encoder.digest(string(checkpoint))
+	encoder.digest(string(profile))
+	return encoder.bytes()
+}
+
+func encodeAssessment(assessment Assessment) ([]byte, error) {
+	if !validReadinessVerdict(assessment.verdict) {
+		return nil, fmt.Errorf("unknown readiness verdict %q", assessment.verdict)
+	}
+	var encoder canonicalEncoder
+	encoder.tag(assessmentDomainTag)
+	encoder.string(assessmentSemanticsVersion)
+	encoder.digest(string(assessment.checkpointArtifactID))
+	encoder.digest(string(assessment.profileID))
+	encoder.string(string(assessment.verdict))
+	encoder.uint64(uint64(len(assessment.entities)))
+	for _, entity := range assessment.entities {
+		encodeEntityRef(&encoder, entity.entity)
+		encoder.uint64(uint64(len(entity.results)))
+		for _, result := range entity.results {
+			if !validRequirementResultKind(result.result) {
+				return nil, fmt.Errorf("unknown requirement result kind %d", result.result)
+			}
+			encoder.string(string(result.code))
+			encoder.byte(byte(result.result))
+			encoder.uint64(uint64(len(result.facts)))
+			for _, fact := range result.facts {
+				encodeEntityRef(&encoder, fact.entity)
+				encoder.string(string(fact.field))
+			}
+		}
+	}
+	// Assessment-level safe evidence references are part of the ratified v1
+	// record shape but no v1 evaluation produces any, so the count is always
+	// zero. A future producer would fill this list without a format change.
+	encoder.uint64(0)
 	return encoder.bytes()
 }
 
