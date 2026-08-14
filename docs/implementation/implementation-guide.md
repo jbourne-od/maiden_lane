@@ -19,10 +19,34 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
 - Tracked Staticcheck and govulncheck tools.
 - Local verification and a non-root container build.
 - GitHub Actions verification and ECR image publication.
+- A pure, standard-library semantic kernel with immutable typed schemas,
+  values, entity-graph states, pinned worlds, and canonical content identities.
+- Deterministic compilation of the walking skeleton's two closed
+  transformation declarations, checkpoint boundaries, invariant obligations,
+  and completeness-profile declarations.
+- An immutable, schema-bound, content-addressed atomic patch subset containing
+  exactly `Insert`, `Relate`, and `Update`, with closed operation failures,
+  explicit update before-images, success-only accepted-application receipts,
+  and receipt-authorized verified inverse application.
+- A deterministic reference executor for the compiled walking-skeleton plan,
+  including verified run binding, the closed related-entity and related-field
+  aggregate operators, compiler-derived protected invariant results, typed
+  semantic failure reports, and immutable accepted-only journals.
+- Versioned identities for provenance policy, semantic input/run/execution,
+  synthetic entities, accepted journal entries and prefixes, invariant-result
+  sets, and protected/integrity failure reports. Executor build identity affects
+  only `ExecutionID`; accepted semantic artifacts remain backend-independent.
+- Pure checkpoint sealing at exact compiled plan prefixes. A sealed immutable
+  manifest binds its declared checkpoint identity, plan/run/input/world/policy
+  replay links, accepted journal-prefix digest, complete applicable protected
+  invariant-result digest, and canonical state digest. Claim identity remains
+  distinct from full-manifest content identity.
+- Replay-verified refusal for incomplete or corrupt prefixes, state divergence,
+  incomplete protected evidence, and one-claim/two-manifest conflicts. These
+  established-run defects are typed integrity results and produce no checkpoint.
 
-There is no transformation model, compiler, executor, sealed-checkpoint model,
-completeness profile, readiness assessment, worker, persistence adapter,
-promotion gate, semantic telemetry, or stable typed application error.
+There is no readiness assessment, worker, persistence adapter, promotion gate,
+semantic telemetry, or stable typed application error.
 
 ## Current repository map
 
@@ -31,6 +55,7 @@ api/openapi.yaml                 current health wire contract
 cmd/maiden-lane/main.go          CLI, process composition, server lifecycle
 internal/httpapi/router.go       HTTP transport routes and handlers
 internal/observability/          operational config, slog, OTel runtime and HTTP instrumentation
+internal/semantic/               pure typed state, compiler, atomic patches, reference executor, invariants, and journal
 Dockerfile                       non-root application image
 Makefile                         explicit local verification commands
 .github/workflows/pipeline.yml   CI and ECR publication
@@ -76,6 +101,33 @@ cardinality boundary.
   transport details from becoming a public library contract.
 - `internal/observability` is also an infrastructure-only package. Semantic
   packages must not import it or make decisions from telemetry state.
+- `internal/semantic` is pure and standard-library-only. Its constructors clone
+  caller-owned maps and slices, its getters return defensive copies, and its
+  canonical patch order stages inserts before relations before updates. Patch
+  construction validates every operation against its pinned schema; malformed
+  or schema-incompatible calls are ordinary errors rather than protected
+  semantic failures.
+- The executor selects only transformations already present in a verified
+  compiled plan. It validates the state/journal frontier, resolves T2's team
+  through T1's accepted typed output patch, and appends history only after a
+  complete patch and every applicable protected check pass. Deterministic
+  protected rejection returns the predecessor plus typed failure with nil Go
+  error; malformed or inconsistent machinery remains on the error channel.
+- Formed-entity identity uses the compiled common-source output-key field,
+  independently of the grouping field. Aggregate execution requires a
+  present, non-empty atom anchor at both the source and emitted boundaries.
+- Established-run journal verification retains only the independently replayed
+  prefix and distinguishes entry content-digest mismatch, replay divergence,
+  and semantic link inconsistency with the implicated entry content digest.
+  Protected failure evidence references are sorted and deduplicated separately
+  from the truthful runtime result sequence.
+- Checkpoint sealing independently replays the accepted journal from pinned S0,
+  requires the caller's state and complete passing invariant evidence to match
+  that exact declared prefix, then derives `CheckpointID`,
+  `CheckpointArtifactID`, and `CheckpointArtifactDigest` as separate layered
+  values. Executor identity is verified as part of the execution contract but
+  excluded from checkpoint meaning. The in-memory `KnownArtifacts` input only
+  detects an identity/content conflict; it is not a registry or persistence.
 - `context.Context` carries cancellation across call boundaries. It is passed
   explicitly rather than discovered globally. Here it carries cancellation and
   trace context, never Maiden Lane transformation semantics.
@@ -146,8 +198,11 @@ plus Docker for the container targets.
 
 ## Known gaps
 
-The semantic transformation system and AWS runtime adapters described by the
-HLD are not implemented. There are no application-operation spans, worker or
-adapter spans, OTel log export, collector deployment, or wrapped non-health
-production routes. Their eventual package boundaries will be documented here
-only after the corresponding code exists.
+Readiness, application orchestration, and AWS runtime layers described by the
+HLD are not implemented. The current patch kernel intentionally supports no
+delete, unrelate, merge, or split, and checkpoint sealing does not implement
+promotion or publication behavior. There are no
+application-operation spans, worker or adapter spans, OTel log export,
+collector deployment, or wrapped non-health production routes. Their eventual
+package boundaries will be documented here only after the corresponding code
+exists.

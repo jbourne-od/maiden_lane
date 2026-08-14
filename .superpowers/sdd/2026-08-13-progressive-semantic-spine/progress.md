@@ -1,0 +1,26 @@
+# SDD ledger — plan: docs/superpowers/plans/2026-08-13-progressive-semantic-spine.md
+Setup: isolated worktree `codex/progressive-semantic-spine` at planning commit `5c75f7f`; baseline `go test ./...` passed.
+Task 1 clarification: no leaf encoding table existed; authorized the first narrow v1 table with exact domain tags and fixed fields under the ratified canonical rules. This is an implementation-format decision, not new team-HOS semantics.
+Task 1: minor (deferred): add explicit acceptance tests that state construction does not enforce assignment equality or team member cardinality; final review must triage.
+Task 1: fix round 1/5 (2 addressed, 0 open — deterministic invalid-field priority; alias-proof state/schema/world immutability tests; commits 4208d8b..fb304ee).
+Task 1: complete (commits 5c75f7f..fb304ee, review clean).
+Task 2: fix round 1 paused before edits — unresolved write/write conflict must fail closed, but the ratified diagnostic vocabulary has no truthful code; owner decision required before changing the canonical format contract.
+Task 2: owner approved `WRITE_CONFLICT_UNRESOLVED`; design/plan amended in local commit `b9e280f`. Fix round 1 resumed.
+Task 2: fix round 1/5 (4 addressed, 0 open — unresolved write conflicts; target entity access; ambiguous normalized declarations; frozen literals; commits b9e280f..4197396).
+Task 2: complete (commits fb304ee..4197396, review clean; contract amendment b9e280f).
+Task 3: owner approved schema-bound patches and receipt-bound inverse after review exposed unsafe destructive undo; design/plan amended in local commit `4c5cde5`. Fix round 1 started.
+Task 3: fix round 1/5 (3 addressed, 0 open — receipt-authorized inverse; schema fail-closed errors; multi-field rollback; schema-bound vectors; commits 4c5cde5..0dca950).
+Task 3: complete (commits 4197396..0dca950, review clean; contract amendment 4c5cde5).
+Task 4 clarification: executor identity follows HLD structured `backend@<digest>` syntax (validated canonical backend token plus version digest); cross-executor exclusion uses two `go` version digests, not a speculative backend. Provenance policy remains sole `changes.v1`.
+Task 4 clarification: ratified the full slice's closed ArtifactKind rank (`plan`, `compiled_profile`, `state`, `world`, `patch`, `journal_entry`, `journal_prefix`, `invariant_result_set`, `checkpoint_artifact`, `readiness_assessment`); ArtifactRef is kind plus content digest. FactRef is EntityRef plus FieldName; InvariantEvidenceRef is compiler-derived declaration key. Reference fields are private and semantic-only, never telemetry.
+Task 4: structured HLD executor identity clarification recorded in design/plan commit `068ce00` (canonical backend token plus version digest; tests use two `go` version digests).
+Task 4: implementation commit `51295fa`; independent review Ready=no. Fix round 1/5 opened for four confirmed findings: reject empty HOS anchors before patch materialization; execute the compiled typed output-key field; return truthful per-artifact integrity code/kind/digest evidence for journal verification failures; canonicalize invariant evidence refs independently of evaluation order.
+Task 4: fix round 1/5 (4 addressed, 0 open — empty-anchor rejection; compiled output-key execution; truthful journal integrity evidence/frontier; canonical invariant refs; commits 51295fa..d8c61c2).
+Task 4: complete (commits 068ce00..d8c61c2, review clean; fresh `make verify` passed).
+Task 4: fix round 1/5 (4 addressed, 0 open — non-empty source/emitted anchors; compiled output-key identity; structured journal integrity classification with exact verified-prefix evidence; sorted/deduplicated invariant evidence refs).
+Task 5: implementation in progress; strict RED observed for absent seal API, established-run link defects escaping as Go errors, omitted explicit checkpoint-ID manifest link, stale cached failure refs, and incorrect known-artifact conflict attribution.
+Task 5: fix round 1/5 (4 review findings addressed — supplied-content artifact refs; candidate conflict attribution with known-prefix evidence; typed policy/execution link defects; full replayed checkpoint equality). Fresh verification pending.
+Task 5: fix round 2/5 (2 addressed — rebuild-based cached-ID versus supplied-byte evidence; malformed policy-link typed failure). Final re-review and fresh verification pending.
+Task 5: fresh `make verify` passed after fix round 2; final re-review/diff pending.
+Task 5: final independent review complete (Ready=yes; full diff d8c61c2..WORKING in final-review-d8c61c2..WORKING.diff). C1/C2 checkpoint-ID/claim/manifest vectors independently re-verified by hashing the frozen literal bytes outside the production encoder; claim fields confirmed present in manifest; executor identity confirmed absent. Semantic suite + race pass in reviewer sandbox (Go 1.24.7 — pinned 1.26.5 unavailable there; workstation make verify remains the authoritative pass).
+Task 1 deferred minor triaged: partially addressed — TestNewStateDoesNotEnforceTeamHOSRuleSemantics covers HOS-value semantics and empty assignment presence; explicit construction-acceptance tests for cross-driver assignment inequality and team member-cardinality remain open (minor, non-blocking).
