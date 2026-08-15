@@ -45,10 +45,20 @@ type Runtime struct {
 	httpDuration     metric.Float64Histogram
 	httpRequestSize  metric.Int64Histogram
 	httpResponseSize metric.Int64Histogram
-	traceLifecycle   providerLifecycle
-	metricLifecycle  providerLifecycle
-	shutdownOnce     sync.Once
-	shutdownErr      error
+
+	// Semantic instruments back the app-owned observer contract. They are
+	// registered because the internal use case exists; with no public caller
+	// the production process records no semantic points yet.
+	semanticPhaseDuration     metric.Float64Histogram
+	semanticOperations        metric.Int64Counter
+	semanticCheckpoints       metric.Int64Counter
+	semanticInvariantFailures metric.Int64Counter
+	semanticAssessments       metric.Int64Counter
+
+	traceLifecycle  providerLifecycle
+	metricLifecycle providerLifecycle
+	shutdownOnce    sync.Once
+	shutdownErr     error
 }
 
 // New validates that Config is unchanged before constructing the logger. It
@@ -145,6 +155,12 @@ func newRuntimeWithLogger(ctx context.Context, cfg Config, logger *slog.Logger, 
 	if err := runtime.registerHTTPInstruments(); err != nil {
 		return nil, errors.Join(
 			safeCause{message: "HTTP telemetry initialization failed", cause: err},
+			rollbackRuntime(runtime),
+		)
+	}
+	if err := runtime.registerSemanticInstruments(); err != nil {
+		return nil, errors.Join(
+			safeCause{message: "semantic telemetry initialization failed", cause: err},
 			rollbackRuntime(runtime),
 		)
 	}
@@ -246,7 +262,7 @@ func newMetricProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 		sdkmetric.WithReader(reader),
 		sdkmetric.WithExemplarFilter(exemplar.AlwaysOffFilter),
 		sdkmetric.WithCardinalityLimit(2000),
-		sdkmetric.WithView(httpMetricViews()...),
+		sdkmetric.WithView(append(httpMetricViews(), semanticMetricViews()...)...),
 	)
 	return provider, provider, nil
 }

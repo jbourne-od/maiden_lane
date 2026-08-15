@@ -483,6 +483,12 @@ func TestDirectKernelLifecycleAnchorMismatch(t *testing.T) {
 
 // Production break caught: a production binary importing the fixture would
 // smuggle the non-production max-reduction policy toward runtime meaning.
+//
+// The walk covers every production file of the operational packages and skips
+// _test.go files, which Go never links into a binary. Test-only use is
+// required: internal/observability proves its app.Observer adapter against the
+// real spine, and the ratified fixture is the only sanctioned source of those
+// inputs.
 func TestProductionPackagesDoNotImportFixture(t *testing.T) {
 	const fixtureImport = "github.com/optimaldynamics/maiden-lane/internal/fixtures/teamhos"
 	root := filepath.Join("..", "..", "..")
@@ -495,7 +501,7 @@ func TestProductionPackagesDoNotImportFixture(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if entry.IsDir() || !strings.HasSuffix(file, ".go") {
+			if entry.IsDir() || !strings.HasSuffix(file, ".go") || strings.HasSuffix(file, "_test.go") {
 				return nil
 			}
 			parsed, parseErr := parser.ParseFile(token.NewFileSet(), file, nil, parser.ImportsOnly)
