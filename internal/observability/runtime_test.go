@@ -55,8 +55,46 @@ func TestNewRuntimeDisabledDoesNotCreateExporters(t *testing.T) {
 	if runtime.httpDuration == nil || runtime.httpRequestSize == nil || runtime.httpResponseSize == nil {
 		t.Fatalf("disabled HTTP instruments = %#v, %#v, %#v", runtime.httpDuration, runtime.httpRequestSize, runtime.httpResponseSize)
 	}
+	assertSemanticInstrumentsRegistered(t, runtime)
 	if err := runtime.Shutdown(t.Context()); err != nil {
 		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+// Production break caught: leaving the semantic instruments unregistered would
+// make SemanticObserver dereference a nil instrument the first time the
+// internal use case ran, turning telemetry into a crash.
+func TestNewRuntimeRegistersSemanticInstruments(t *testing.T) {
+	t.Setenv("OTEL_RESOURCE_ATTRIBUTES", "")
+	cfg, err := LoadConfig(emptyEnv, rejectRead, "devel")
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	runtime, err := newRuntime(t.Context(), cfg, io.Discard, factories{})
+	if err != nil {
+		t.Fatalf("newRuntime: %v", err)
+	}
+	assertSemanticInstrumentsRegistered(t, runtime)
+
+	// Each call yields an independent adapter and the runtime holds no run
+	// state, so observers cannot share or outlive a run's span stack.
+	first, second := runtime.SemanticObserver(), runtime.SemanticObserver()
+	if first == second {
+		t.Fatal("SemanticObserver returned a shared adapter")
+	}
+	if got := first.(*semanticObserver).activeRuns(); got != 0 {
+		t.Fatalf("fresh observer has %d run stacks", got)
+	}
+}
+
+func assertSemanticInstrumentsRegistered(t *testing.T, runtime *Runtime) {
+	t.Helper()
+	if runtime.semanticPhaseDuration == nil || runtime.semanticOperations == nil ||
+		runtime.semanticCheckpoints == nil || runtime.semanticInvariantFailures == nil ||
+		runtime.semanticAssessments == nil {
+		t.Fatalf("semantic instruments = %#v, %#v, %#v, %#v, %#v",
+			runtime.semanticPhaseDuration, runtime.semanticOperations, runtime.semanticCheckpoints,
+			runtime.semanticInvariantFailures, runtime.semanticAssessments)
 	}
 }
 
