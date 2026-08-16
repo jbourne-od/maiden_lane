@@ -3,9 +3,22 @@
 ![Maiden Lane deterministic transformation engine](docs/images/cover_image.png)
 
 Maiden Lane is a deterministic transformation system for compiling, executing,
-explaining, comparing, and gating mapper transformations. The repository
-currently contains the runnable HTTP application shell plus local build and
-container support; the transformation engine has not been implemented.
+explaining, comparing, and gating mapper transformations.
+
+The repository contains the runnable HTTP application shell, local build and
+container support, and an internal pure in-memory walking skeleton of the
+semantic engine: a standard-library-only kernel that compiles a closed rule
+declaration into an immutable plan, executes it through atomic structural
+patches, records an accepted-only journal, seals content-addressed checkpoints,
+and assesses consumer readiness over them. Identical semantic inputs produce
+identical artifact identities, and a failed protected invariant leaves the last
+verified checkpoint byte-identical.
+
+That engine is deliberately not reachable from outside the process. There is
+still **no public transformation API, HTTP route, CLI command, persistence,
+promotion, publication, or production hours-of-service policy**. The spine is
+an internal operation exercised by tests, and the sanitized team-HOS fixture it
+runs is a walking-skeleton fixture rather than a real rule.
 
 ## Requirements
 
@@ -82,10 +95,16 @@ empty. The upstream Go SDK's experimental `OTEL_GO_X_OBSERVABILITY`,
 `OTEL_GO_X_CARDINALITY_LIMIT`, and `OTEL_GO_X_EXEMPLAR` variables must also be
 unset or empty; Maiden Lane fixes those policies explicitly instead of
 inheriting experimental ambient behavior.
-OTLP/gRPC, OpenTelemetry log export, baggage propagation, arbitrary resource
-attributes, and semantic transformation telemetry are not part of this
-foundation. Exporter and HTTP diagnostic text is sanitized before it reaches
-ordinary logs.
+OTLP/gRPC, OpenTelemetry log export, baggage propagation, and arbitrary
+resource attributes are not part of this foundation. Exporter and HTTP
+diagnostic text is sanitized before it reaches ordinary logs.
+
+The observability runtime also registers the five semantic instruments in
+[METRICS.md](METRICS.md) and can supply an observer for the internal semantic
+spine. Because no public caller reaches that spine, the running process records
+no semantic points and emits no semantic spans. Telemetry is strictly
+non-authoritative: the semantic result is byte-identical whether the observer
+is absent, recording, or backed by a failing exporter.
 
 ## Common commands
 
