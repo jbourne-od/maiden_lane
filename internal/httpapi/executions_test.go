@@ -1,10 +1,13 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"slices"
 	"testing"
 
+	"github.com/optimaldynamics/maiden-lane/internal/adapters/memory"
+	"github.com/optimaldynamics/maiden-lane/internal/app"
 	"github.com/optimaldynamics/maiden-lane/internal/fixtures/teamhos"
 	openapiv1 "github.com/optimaldynamics/maiden-lane/internal/httpapi/openapiv1"
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
@@ -289,3 +292,189 @@ func executionRequest(t *testing.T, planID openapiv1.Digest, variant teamhos.Var
 }
 
 func stringPtr(s string) *string { return &s }
+
+// stubRunner returns a fixed result so the handler's own integrity checks can
+// be driven without corrupting stored artifacts.
+type stubRunner struct {
+	result app.SpineResult
+	err    error
+}
+
+func (s stubRunner) Run(context.Context, app.Request, app.Observer) (app.SpineResult, error) {
+	return s.result, s.err
+}
+
+// Production break caught: if the retained compiler input ever stopped
+// reproducing an accepted plan, app.Run reports invalid_plan with no plan and
+// a nil error. Returning that verbatim would tell a client that a plan they
+// had already created and had accepted is invalid, when the fault is entirely
+// on this side of the boundary.
+func TestExecutionRefusesWhenTheStoredPlanCannotBeReproduced(t *testing.T) {
+	store := memory.NewStore()
+	router := NewRouter(Dependencies{Plans: store, Runner: ProductionRunner()})
+	plan := createPlan(t, router, "acme", fixtureDeclarations(t))
+
+	// A run that reports invalid_plan carries no plan at all, which is the case
+	// the mismatch comparison alone would sail straight past.
+	invalidPlanRouter := NewRouter(Dependencies{
+		Plans:  store,
+		Runner: stubRunner{result: app.SpineResult{}},
+	})
+	recorder := postJSON(t, invalidPlanRouter, "/v1/executions", "acme",
+		executionRequest(t, plan.PlanID, teamhos.Passing))
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500: %s", recorder.Code, recorder.Body.String())
+	}
+	var problem openapiv1.Problem
+	decodeBody(t, recorder, &problem)
+	if problem.Type != problemBaseURI+"internal-error" {
+		t.Fatalf("problem type = %s, want internal-error", problem.Type)
+	}
+	// It must not be reported as a verdict about the caller's request.
+	if problem.Status == http.StatusUnprocessableEntity {
+		t.Fatal("an internal integrity failure was reported as invalid client input")
+	}
+}
+
+// Production break caught: the compiler request is rebuilt from the stored
+// compilation rather than retained, because retaining it would hand callers a
+// mutable alias into the store. The rebuild must reproduce the same plan and
+// profile identities, or execution would silently run a different program than
+// the one that was created.
+func TestRebuiltCompilerRequestReproducesTheStoredIdentities(t *testing.T) {
+	store := memory.NewStore()
+	router := NewRouter(Dependencies{Plans: store, Runner: ProductionRunner()})
+	created := createPlan(t, router, "acme", fixtureDeclarations(t))
+
+	record, found, err := store.GetPlan(t.Context(), "acme", semantic.PlanID(created.PlanID))
+	if err != nil || !found {
+		t.Fatalf("GetPlan: found=%t err=%v", found, err)
+	}
+	request, ok := compileRequestFor(record)
+	if !ok {
+		t.Fatal("stored record produced no compiler request")
+	}
+
+	recompiled, err := semantic.Compile(request)
+	if err != nil {
+		t.Fatalf("recompile: %v", err)
+	}
+	plan, ok := recompiled.Plan()
+	if !ok {
+		failure, _ := recompiled.Failure()
+		t.Fatalf("rebuilt request did not compile: %+v", failure.Diagnostics())
+	}
+	if plan.ID() != semantic.PlanID(created.PlanID) {
+		t.Fatalf("rebuilt planID = %s, want %s", plan.ID(), created.PlanID)
+	}
+	for i, profile := range recompiled.Profiles() {
+		if openapiv1.Digest(profile.ID()) != created.Profiles[i].ProfileID {
+			t.Errorf("rebuilt profile %d = %s, want %s", i, profile.ID(), created.Profiles[i].ProfileID)
+		}
+	}
+}
+
+// Production break caught: a stored record must not be reachable for mutation
+// through anything a caller holds. This is the property that lets the adapter
+// store and return records by ordinary assignment, and it silently stopped
+// being true once a compiler request was retained alongside the immutable
+// kernel values.
+func TestStoredPlanCannotBeMutatedThroughAnythingACallerHolds(t *testing.T) {
+	store := memory.NewStore()
+	router := NewRouter(Dependencies{Plans: store, Runner: ProductionRunner()})
+	created := createPlan(t, router, "acme", fixtureDeclarations(t))
+
+	record, _, err := store.GetPlan(t.Context(), "acme", semantic.PlanID(created.PlanID))
+	if err != nil {
+		t.Fatalf("GetPlan: %v", err)
+	}
+
+	// Reach as deeply as the public surface allows and corrupt everything.
+	plan, _ := record.Compilation.Plan()
+	for _, transformation := range plan.Transformations() {
+		declaration := transformation.Declaration()
+		declaration.ID = "corrupted"
+		for i := range declaration.DeclaredReads {
+			declaration.DeclaredReads[i] = "corrupted.field"
+		}
+		if declaration.Form != nil {
+			declaration.Form.OutputSlot = "corrupted"
+			for i := range declaration.Form.Sources {
+				declaration.Form.Sources[i].CanonicalSourceKey = "corrupted"
+			}
+		}
+		if declaration.Aggregate != nil {
+			declaration.Aggregate.Target.Slot = "corrupted"
+		}
+	}
+	for _, profile := range record.Compilation.Profiles() {
+		declaration := profile.Declaration()
+		declaration.Key = "corrupted"
+		for i := range declaration.Requirements {
+			declaration.Requirements[i].Code = "CORRUPTED"
+		}
+	}
+	schemaDeclaration := record.Schema.Declaration()
+	for _, entity := range schemaDeclaration.EntityDeclarations() {
+		for i := range entity.Fields {
+			entity.Fields[i].Name = "corrupted"
+		}
+	}
+
+	// The stored plan must be untouched, and must still execute to the same
+	// artifacts as before the attempted corruption.
+	after := mustExecute(t, router, "acme", executionRequest(t, created.PlanID, teamhos.Passing))
+	if after.SpineStatus != openapiv1.ExecutionSpineStatusSucceeded {
+		t.Fatalf("spineStatus = %s after mutation attempts", after.SpineStatus)
+	}
+	if after.PlanID != created.PlanID {
+		t.Fatalf("planID = %s, want %s", after.PlanID, created.PlanID)
+	}
+	if len(after.Checkpoints) != 2 {
+		t.Fatalf("checkpoints = %d, want 2", len(after.Checkpoints))
+	}
+}
+
+// Production break caught: the contract advertises the pinned input, world,
+// and accepted-history identities. Advertising a field that is never populated
+// is a false promise to every generated client, so each one must actually be
+// filled for a run that established a binding.
+func TestExecutionReportsEveryAdvertisedIdentity(t *testing.T) {
+	router := newTestRouter(t)
+	plan := createPlan(t, router, "acme", fixtureDeclarations(t))
+
+	for _, variant := range []teamhos.Variant{teamhos.Passing, teamhos.AnchorMismatch} {
+		execution := mustExecute(t, router, "acme", executionRequest(t, plan.PlanID, variant))
+
+		// A rejected run still established a binding, so it names its run just
+		// as a successful one does: a caller diagnosing a refusal needs to.
+		for name, value := range map[string]*openapiv1.Digest{
+			"semanticRunID":       execution.SemanticRunID,
+			"executionID":         execution.ExecutionID,
+			"inputID":             execution.InputID,
+			"worldID":             execution.WorldID,
+			"journalPrefixDigest": execution.JournalPrefixDigest,
+			"finalStateDigest":    execution.FinalStateDigest,
+		} {
+			if value == nil || *value == "" {
+				t.Errorf("variant %v: %s was advertised but not populated", variant, name)
+			}
+		}
+	}
+}
+
+// Production break caught: the accepted-history identity must reflect what
+// actually committed. If a rejected run reported the same prefix as a
+// successful one, the digest would not be identifying history at all.
+func TestJournalPrefixDistinguishesCommittedHistory(t *testing.T) {
+	router := newTestRouter(t)
+	plan := createPlan(t, router, "acme", fixtureDeclarations(t))
+
+	passing := mustExecute(t, router, "acme", executionRequest(t, plan.PlanID, teamhos.Passing))
+	rejected := mustExecute(t, router, "acme", executionRequest(t, plan.PlanID, teamhos.AnchorMismatch))
+
+	if *passing.JournalPrefixDigest == *rejected.JournalPrefixDigest {
+		t.Fatal("a one-transition history and a two-transition history share a prefix digest")
+	}
+}

@@ -70,8 +70,16 @@ func (s *server) CreateExecution(w http.ResponseWriter, r *http.Request, params 
 		return
 	}
 
+	request, ok := compileRequestFor(record)
+	if !ok {
+		// A stored record whose compilation carries no plan is an internal
+		// contradiction: nothing accepts a plan into storage without one.
+		writeProblem(w, problemInternalError, nil)
+		return
+	}
+
 	result, err := s.deps.Runner.Run(r.Context(), app.Request{
-		Compilation:      record.Request,
+		Compilation:      request,
 		InitialState:     state,
 		World:            world,
 		ExecutorIdentity: executor,
@@ -83,9 +91,17 @@ func (s *server) CreateExecution(w http.ResponseWriter, r *http.Request, params 
 	}
 
 	// Compilation is deterministic, so re-running it inside the use case must
-	// reproduce the plan that was stored. Verifying rather than assuming turns
-	// a silent identity fork into a refused request.
-	if plan, present := result.Plan(); present && plan.ID() != record.PlanID {
+	// reproduce the plan that was stored.
+	//
+	// The absent case matters as much as the mismatched one. If the retained
+	// input ever stopped compiling, app.Run would legitimately report
+	// invalid_plan with no plan and a nil error, and returning that verbatim
+	// would tell a client that a plan they had already created and had accepted
+	// is invalid. Once /v1/plans has established a PlanID, an execution that
+	// cannot reproduce it is an integrity failure on this side of the boundary,
+	// never a verdict about the caller's request.
+	plan, present := result.Plan()
+	if !present || plan.ID() != record.PlanID {
 		writeProblem(w, problemInternalError, nil)
 		return
 	}
@@ -125,6 +141,18 @@ func executionToWire(planID semantic.PlanID, result app.SpineResult) openapiv1.E
 	if executionID, present := result.ExecutionID(); present {
 		digest := openapiv1.Digest(executionID)
 		projected.ExecutionID = &digest
+	}
+	if inputID, present := result.InputID(); present {
+		digest := openapiv1.Digest(inputID)
+		projected.InputID = &digest
+	}
+	if worldID, present := result.WorldID(); present {
+		digest := openapiv1.Digest(worldID)
+		projected.WorldID = &digest
+	}
+	if prefix, present := result.JournalPrefixDigest(); present {
+		digest := openapiv1.Digest(prefix)
+		projected.JournalPrefixDigest = &digest
 	}
 	if status, present := result.ExecutionStatus(); present {
 		executionStatus := executionStatusToWire(status)

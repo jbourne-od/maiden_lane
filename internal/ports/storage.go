@@ -30,18 +30,20 @@ type TenantID string
 // pins only its schema digest, while binding a later run needs the schema
 // itself to construct the initial state. Storing it here keeps the client from
 // re-supplying a schema that could disagree with the one that was compiled.
+// Every field is an immutable kernel value whose accessors return deep copies.
+// That is a load-bearing property, not an incidental one: it is what allows an
+// adapter to store and return a record by ordinary assignment without any
+// defensive copying of its own.
+//
+// A compiler request was briefly retained here and had to be removed. Unlike a
+// Schema or a Compilation it is an ordinary authoring structure of exported
+// slices and pointers, so storing it handed every caller a mutable alias into
+// the store. Do not reintroduce it, or any other value whose interior can be
+// reached and changed after it is stored: the caller that needs a compiler
+// request can rebuild one from the Compilation, whose accessors clone.
 type PlanRecord struct {
 	TenantID TenantID
 	PlanID   semantic.PlanID
-
-	// Request is the exact compiler input that produced this plan.
-	//
-	// It is retained because the application use case owns the whole
-	// compile-bind-execute sequence and therefore takes a compiler request
-	// rather than an already-compiled plan. Compilation is deterministic, so
-	// re-running it reproduces this same PlanID; executing verifies that
-	// equality rather than assuming it.
-	Request semantic.CompileRequest
 
 	// Schema is the compiled schema, retained so an initial state can be
 	// constructed without re-deriving it. A plan pins only its schema digest.

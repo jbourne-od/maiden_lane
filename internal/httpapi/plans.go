@@ -98,7 +98,6 @@ func (s *server) CreatePlan(w http.ResponseWriter, r *http.Request, params opena
 	record := ports.PlanRecord{
 		TenantID:    tenant,
 		PlanID:      plan.ID(),
-		Request:     request,
 		Schema:      schema,
 		Compilation: compilation,
 	}
@@ -137,7 +136,7 @@ func (s *server) GetPlan(w http.ResponseWriter, r *http.Request, planID openapiv
 	}
 
 	writeJSON(w, http.StatusOK, planToWire(plan, record.Compilation.Profiles(),
-		record.Schema, record.Request.CompilerSemanticsVersion, true))
+		record.Schema, plan.CompilerVersion(), true))
 }
 
 // scope validates the tenant header and answers the request when it is

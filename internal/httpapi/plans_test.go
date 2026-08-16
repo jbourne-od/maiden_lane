@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/optimaldynamics/maiden-lane/internal/adapters/memory"
 	"github.com/optimaldynamics/maiden-lane/internal/fixtures/teamhos"
@@ -143,45 +147,63 @@ func TestGetPlanHidesOtherTenantsPlans(t *testing.T) {
 
 // Production break caught: this is the route-level scoping assertion deferred
 // from the task that added the tenant validator, now that real routes exist.
-// It walks the registered routes rather than naming them, so an operation
-// added later is covered without anyone remembering to extend this test.
+//
+// The routes are enumerated from the router itself rather than listed here, so
+// an operation added later is covered without anyone remembering to extend
+// this test. That is the whole point: a hand-written table proves only that
+// nobody edited the table.
 func TestEveryVersionedRouteRejectsAMalformedTenant(t *testing.T) {
 	router := newTestRouter(t)
 
-	// Each registered versioned operation, with a body where one is required.
-	operations := []struct {
-		method string
-		path   string
-		body   any
-	}{
-		{http.MethodPost, "/v1/plans", fixtureDeclarations(t)},
-		{http.MethodGet, "/v1/plans/sha256:" +
-			"0000000000000000000000000000000000000000000000000000000000000000", nil},
-		{http.MethodPost, "/v1/executions", map[string]any{}},
-	}
-	if len(operations) != 3 {
-		t.Fatalf("operations under test = %d; extend this table when routes change", len(operations))
+	routes, ok := router.(chi.Routes)
+	if !ok {
+		t.Fatal("router does not expose its registered routes; this test cannot enumerate them")
 	}
 
-	for _, operation := range operations {
-		for _, tenant := range []string{"", "ACME", "acme_corp", "../etc", "acme\x00"} {
+	type operation struct{ method, path string }
+	var versioned []operation
+	err := chi.Walk(routes, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		if !strings.HasPrefix(route, "/v1/") {
+			return nil
+		}
+		// Substitute any path parameter with a well-formed value, so the only
+		// thing wrong with the request is its tenant.
+		path := pathParameterPattern.ReplaceAllString(route, placeholderDigest)
+		versioned = append(versioned, operation{method: method, path: path})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk routes: %v", err)
+	}
+	if len(versioned) == 0 {
+		t.Fatal("no versioned routes were discovered; the walk found nothing to check")
+	}
+
+	for _, op := range versioned {
+		for _, tenant := range []string{"", "ACME", "acme_corp", "../etc", "acme\x00", strings.Repeat("a", 129)} {
 			var recorder *httptest.ResponseRecorder
-			if operation.body == nil {
-				recorder = get(t, router, operation.path, tenant)
+			if op.method == http.MethodGet {
+				recorder = get(t, router, op.path, tenant)
 			} else {
-				recorder = postJSON(t, router, operation.path, tenant, operation.body)
+				// An empty object is enough: scoping is enforced before a body
+				// is read, so no route should get as far as parsing it.
+				recorder = postJSON(t, router, op.path, tenant, map[string]any{})
 			}
 			if recorder.Code != http.StatusBadRequest {
 				t.Errorf("%s %s with tenant %q = %d, want 400",
-					operation.method, operation.path, tenant, recorder.Code)
+					op.method, op.path, tenant, recorder.Code)
 			}
 			if got := recorder.Header().Get("Content-Type"); got != "application/problem+json" {
-				t.Errorf("%s %s with tenant %q: Content-Type = %q",
-					operation.method, operation.path, tenant, got)
+				t.Errorf("%s %s with tenant %q: Content-Type = %q", op.method, op.path, tenant, got)
 			}
 		}
 	}
 }
+
+// pathParameterPattern matches a chi path parameter such as {planID}.
+var pathParameterPattern = regexp.MustCompile(`\{[^}]+\}`)
+
+const placeholderDigest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 // Production break caught: a body this operation cannot accept must be
 // refused, and a non-JSON body must be distinguishable from an invalid one.

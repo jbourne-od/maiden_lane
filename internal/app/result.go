@@ -82,6 +82,9 @@ type SpineResult struct {
 	executionStatus    ExecutionStatus
 	semanticRunID      semantic.SemanticRunID
 	executionID        semantic.ExecutionID
+	inputID            semantic.InputID
+	worldID            semantic.WorldID
+	journalPrefix      semantic.JournalPrefixDigest
 	plan               *semantic.Plan
 	profiles           []semantic.CompiledProfile
 	compilationFailure *semantic.CompilationFailure
@@ -116,6 +119,25 @@ func (r SpineResult) SemanticRunID() (semantic.SemanticRunID, bool) {
 // request reproduces both.
 func (r SpineResult) ExecutionID() (semantic.ExecutionID, bool) {
 	return r.executionID, r.executionID != ""
+}
+
+// InputID returns the identity of the pinned input, present once binding
+// established one. With WorldID it names everything the run was pinned to, so
+// a caller holding these can reconstruct which inputs produced an artifact.
+func (r SpineResult) InputID() (semantic.InputID, bool) {
+	return r.inputID, r.inputID != ""
+}
+
+// WorldID returns the identity of the pinned execution world.
+func (r SpineResult) WorldID() (semantic.WorldID, bool) {
+	return r.worldID, r.worldID != ""
+}
+
+// JournalPrefixDigest returns the accepted history's content identity at the
+// point the run finished, whether it succeeded or retained a prefix. It covers
+// committed transitions only; rejections never entered it.
+func (r SpineResult) JournalPrefixDigest() (semantic.JournalPrefixDigest, bool) {
+	return r.journalPrefix, r.journalPrefix != ""
 }
 
 // Plan returns the compiled plan when compilation succeeded.

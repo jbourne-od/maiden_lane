@@ -98,6 +98,8 @@ func runWithOperations(ctx context.Context, request Request, observer Observer, 
 		return run.machinery(PhaseObservation{}, false, err, true)
 	}
 	run.runID, run.execID = binding.SemanticRunID(), binding.ExecutionID()
+	run.inputID, run.worldID = binding.InputID(), binding.WorldID()
+	run.binding = &binding
 	run.executionEstablished = true
 	initial := request.InitialState
 	run.state, run.journal = &initial, semantic.NewJournal()
@@ -136,7 +138,8 @@ func runWithOperations(ctx context.Context, request Request, observer Observer, 
 
 	run.dispatch.end(run.observation(PhaseExecuteSpine), ResultSuccess)
 	return SpineResult{status: SpineSucceeded, executionStatus: ExecutionSucceeded, plan: run.plan,
-		semanticRunID: run.runID, executionID: run.execID,
+		semanticRunID: run.runID, executionID: run.execID, inputID: run.inputID,
+		worldID: run.worldID, journalPrefix: run.acceptedPrefixDigest(),
 		profiles: run.retainedProfiles(), state: run.state, journal: run.journal,
 		checkpoints: slices.Clone(run.checkpoints), assessments: slices.Clone(run.assessments)}, nil
 }
@@ -148,9 +151,16 @@ type spineRun struct {
 	dispatch dispatcher
 	ops      operations
 
-	planID semantic.PlanID
-	runID  semantic.SemanticRunID
-	execID semantic.ExecutionID
+	planID  semantic.PlanID
+	runID   semantic.SemanticRunID
+	execID  semantic.ExecutionID
+	inputID semantic.InputID
+	worldID semantic.WorldID
+
+	// binding is retained so the accepted history's prefix digest can be
+	// reported alongside the result. The digest is bound to the run, so it
+	// cannot be computed without it.
+	binding *semantic.RunBinding
 
 	executionEstablished bool
 	plan                 *semantic.Plan
@@ -292,8 +302,20 @@ func (r *spineRun) frontierResult() SpineResult {
 		// frontier: a caller diagnosing a failure needs to name the run that
 		// produced it.
 		result.semanticRunID, result.executionID = r.runID, r.execID
+		result.inputID, result.worldID = r.inputID, r.worldID
+		result.journalPrefix = r.acceptedPrefixDigest()
 	}
 	return result
+}
+
+// acceptedPrefixDigest identifies the accepted history at the point the run
+// finished. It is empty before a binding exists, because the digest is bound
+// to the run and cannot be computed without one.
+func (r *spineRun) acceptedPrefixDigest() semantic.JournalPrefixDigest {
+	if r.binding == nil {
+		return ""
+	}
+	return r.journal.PrefixDigest(*r.binding)
 }
 
 // retainedProfiles keeps every compiled profile referenced by a retained
