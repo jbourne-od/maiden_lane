@@ -44,9 +44,29 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
 - Replay-verified refusal for incomplete or corrupt prefixes, state divergence,
   incomplete protected evidence, and one-claim/two-manifest conflicts. These
   established-run defects are typed integrity results and produce no checkpoint.
+- Immutable readiness assessment over sealed checkpoints with explicit
+  entity-kind scope, universal aggregation, documented vacuous-empty semantics,
+  and profile ordering proved from normalized implication rather than names.
+  Assessment identity is derived from the checkpoint artifact and profile, and
+  assessing mutates no state or journal.
+- A data-only ratified team-HOS fixture package holding the sanitized
+  declarations and the two initial-state variants. It implements no
+  transformer, evaluator, or alternate canonicalizer, and no production binary
+  imports it.
+- An application spine that orchestrates compile, bind, transition, seal, and
+  assess generically over the compiled plan, advancing an independently
+  verified dependency-closed frontier. Semantic rejection returns a typed
+  result with a nil Go error; machinery inability returns the retained prefix
+  with a non-nil error.
+- A closed, non-authoritative observation contract owned by the application,
+  and an OpenTelemetry adapter that implements it with five spans and the five
+  registered semantic instruments in `METRICS.md`.
+- Stable typed application machinery errors with fixed safe text and preserved
+  cause chains, registered in `ERRORS.md`.
 
-There is no readiness assessment, worker, persistence adapter, promotion gate,
-semantic telemetry, or stable typed application error.
+There is no public transformation API, worker, persistence adapter, promotion
+gate, publication path, or production team-HOS policy. The spine is an internal
+operation exercised by tests only.
 
 ## Current repository map
 
@@ -54,8 +74,10 @@ semantic telemetry, or stable typed application error.
 api/openapi.yaml                 current health wire contract
 cmd/maiden-lane/main.go          CLI, process composition, server lifecycle
 internal/httpapi/router.go       HTTP transport routes and handlers
-internal/observability/          operational config, slog, OTel runtime and HTTP instrumentation
-internal/semantic/               pure typed state, compiler, atomic patches, reference executor, invariants, and journal
+internal/observability/          operational config, slog, OTel runtime, HTTP instrumentation, and the semantic observer adapter
+internal/semantic/               pure typed state, compiler, atomic patches, reference executor, invariants, journal, checkpoints, and readiness
+internal/fixtures/teamhos/       data-only ratified team-HOS declarations and initial-state variants
+internal/app/                    spine orchestration, verified frontier, closed observation contract, typed machinery errors
 Dockerfile                       non-root application image
 Makefile                         explicit local verification commands
 .github/workflows/pipeline.yml   CI and ECR publication
@@ -94,6 +116,33 @@ Standard OTel HTTP server middleware is not used because it captures raw
 request-derived attributes before Maiden Lane can enforce its privacy and
 cardinality boundary.
 
+## Semantic spine flow
+
+`app.Run` is an internal use case with no HTTP route, CLI command, worker, or
+scheduler. Nothing in the running process invokes it; tests are its only
+callers. It executes:
+
+1. compile the plan and profiles;
+2. bind the run over the pinned initial state, world, executor identity, and
+   provenance policy;
+3. for every compiled transformation in plan order, execute the transition;
+4. seal every checkpoint declared at that boundary; and
+5. assess each sealed checkpoint under every compiled profile.
+
+After each artifact verifies, the run advances a private dependency-closed
+frontier. That frontier is what a machinery failure returns, so a caller never
+receives an artifact whose dependencies were not themselves verified.
+
+The application reinterprets no rule, patch, invariant, canonical byte, or
+readiness answer. It invokes the kernel and observes typed results.
+
+`internal/observability` implements the application's observer interface. The
+dependency points one way: observability imports app, and app never imports
+observability, so telemetry cannot reach into semantic meaning. Each
+`SemanticObserver()` call returns a fresh adapter holding its own per-run span
+stacks, which is why one runtime can serve concurrent runs without cross-
+parenting their traces.
+
 ## Go orientation for Python-oriented contributors
 
 - `cmd/maiden-lane` is a `package main`; building it creates the executable.
@@ -128,9 +177,32 @@ cardinality boundary.
   values. Executor identity is verified as part of the execution contract but
   excluded from checkpoint meaning. The in-memory `KnownArtifacts` input only
   detects an identity/content conflict; it is not a registry or persistence.
+- Readiness assessment selects every entity of the compiled kind in canonical
+  order and evaluates every normalized atom for each one, so an incomplete
+  second team cannot be dropped from an answer. An empty selection is
+  vacuously ready. Assessment appends no journal entry and never infers its
+  scope from a caller-supplied entity.
+- `ExecutionStatus` is application-owned control-plane state and is excluded
+  from canonical semantic identity and artifact encoding. The semantic layer
+  answers what the computation meant; the application and control plane answer
+  what happened while it ran. Equivalent semantic executions remain equivalent
+  regardless of application lifecycle representation: new lifecycle vocabulary
+  such as queued, retrying, timed out, or cancelled must never force a semantic
+  schema or version change, and new semantic outcomes must never require the
+  execution controller to own semantic vocabulary.
+- Telemetry dimensions fail closed. `internal/observability` re-declares the
+  whole closed vocabulary rather than reusing the application's, so widening an
+  application enum cannot widen telemetry without a deliberate edit at the
+  boundary. An optional dimension whose value is not admitted is omitted rather
+  than relabeled, because a placeholder would assert a classification the spine
+  never made; the always-required phase and result fall back to
+  `internal_error` as a visible tripwire. Telemetry may drop a point it cannot
+  truthfully label, but it may never invent or widen a bounded dimension value.
 - `context.Context` carries cancellation across call boundaries. It is passed
   explicitly rather than discovered globally. Here it carries cancellation and
-  trace context, never Maiden Lane transformation semantics.
+  trace context, never Maiden Lane transformation semantics. The observer
+  receives a separate derived context created per run; semantic functions
+  always receive the caller's original context.
 - `%w` preserves an error's causal value so callers can use `errors.Is` and
   `errors.As`; do not inspect error-message strings for behavior.
 - Goroutines do not propagate errors automatically. The server lifecycle uses a
@@ -198,11 +270,25 @@ plus Docker for the container targets.
 
 ## Known gaps
 
-Readiness, application orchestration, and AWS runtime layers described by the
-HLD are not implemented. The current patch kernel intentionally supports no
-delete, unrelate, merge, or split, and checkpoint sealing does not implement
-promotion or publication behavior. There are no
-application-operation spans, worker or adapter spans, OTel log export,
-collector deployment, or wrapped non-health production routes. Their eventual
-package boundaries will be documented here only after the corresponding code
-exists.
+The AWS runtime, persistence, and publication layers described by the HLD are
+not implemented. There is no public transformation API, HTTP route, or CLI
+command that reaches the semantic spine, so the spine runs only under test.
+
+The patch kernel intentionally supports no delete, unrelate, merge, or split.
+Checkpoint sealing implements no promotion or publication behavior, and
+comparison, full patch algebra, SQL/dbt backends, and parallel execution are
+absent by design at this stage.
+
+The team-HOS rule is a sanitized fixture, not production policy. Its
+componentwise-maximum reduction is chosen for determinism in the walking
+skeleton and must not be mistaken for a real hours-of-service rule.
+
+`ProvenancePolicy` currently has exactly one valid value, `changes.v1`, so the
+policy dimension of the identity matrix is proved by construction rather than
+by a differential test. `AttemptID` does not exist in this slice; its exclusion
+from canonical identity is therefore vacuous today and is pinned only as the
+absence of the concept.
+
+There are no worker or adapter spans, OTel log export, collector deployment, or
+wrapped non-health production routes. Eventual package boundaries will be
+documented here only after the corresponding code exists.

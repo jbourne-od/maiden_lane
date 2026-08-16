@@ -28,6 +28,11 @@ must conform to Inviolate 17.
 | `http.server.request.duration` | `Float64Histogram` | `s` | `http.request.method`, `http.route`, optional `http.response.status_code` | Duration of a matched non-health HTTP server request |
 | `http.server.request.body.size` | `Int64Histogram` | `By` | `http.request.method`, `http.route`, optional `http.response.status_code` | Request body bytes actually observed by the server wrapper |
 | `http.server.response.body.size` | `Int64Histogram` | `By` | `http.request.method`, `http.route`, optional `http.response.status_code` | Response body bytes written by the server wrapper |
+| `maiden_lane.semantic.phase.duration` | `Float64Histogram` | `s` | `phase`, `result` | Duration of one completed semantic spine phase |
+| `maiden_lane.semantic.structural.operations` | `Int64Counter` | `operations` | `operation_kind`, `result` | Structural operations of a committed patch, or of a materialized patch that was atomically refused |
+| `maiden_lane.semantic.checkpoints` | `Int64Counter` | `checkpoints` | `result` | Checkpoints whose seal committed, and seal requests actually refused |
+| `maiden_lane.semantic.invariant.failures` | `Int64Counter` | `failures` | `invariant_code` | Failing protected invariant results produced by the spine |
+| `maiden_lane.semantic.readiness.assessments` | `Int64Counter` | `assessments` | `profile_kind`, `verdict` | Completed immutable readiness assessments |
 
 The permitted values are deliberately closed or bounded:
 
@@ -38,11 +43,66 @@ The permitted values are deliberately closed or bounded:
 - `http.response.status_code` is present only for a valid observed terminal
   status from 100 through 599. It is omitted when no valid status exists.
 
-The three instruments are registered when the observability runtime starts.
-They record only for handlers explicitly wrapped at registration. Health,
-readiness, unmatched, and method-not-allowed requests are excluded. The current
-production router contains only health and readiness routes, so it exports no
-HTTP request points yet.
+The three HTTP instruments are registered when the observability runtime
+starts. They record only for handlers explicitly wrapped at registration.
+Health, readiness, unmatched, and method-not-allowed requests are excluded. The
+current production router contains only health and readiness routes, so it
+exports no HTTP request points yet.
 
-Exemplars are disabled. Metric points cannot carry trace attributes outside
-the label allowlist above.
+### Semantic dimension values
+
+The five semantic instruments admit exactly these values:
+
+- `phase`: `compile`, `execute_transition`, `seal_checkpoint`,
+  `assess_readiness`, `execute_spine`.
+- `result` on `phase.duration`: `success`, `ready`, `needs_input`,
+  `invalid_plan`, `protected_invariant_failed`, `artifact_integrity_failed`,
+  `invalid_input`, `cancelled`, `infrastructure_unavailable`,
+  `internal_error`.
+- `result` on `structural.operations`: `accepted` or `rejected`.
+- `result` on `checkpoints`: `sealed` or `rejected`.
+- `operation_kind`: `insert`, `relate`, `update`.
+- `profile_kind`: `cm.v1` or `optimizer.v1`. This is a bounded operational
+  category and is never a `ProfileID`.
+- `verdict`: `ready` or `needs_input`.
+- `invariant_code`: the closed operation-invariant and rule-invariant codes.
+  Compilation diagnostics and integrity codes are deliberately excluded, since
+  neither is a protected invariant failure.
+
+### Semantic recording rules
+
+- Phase duration records once when each started phase completes, carrying its
+  exact terminal result. Readiness phases use `ready` or `needs_input`; other
+  successful phases use `success`. The outer `execute_spine` duration always
+  receives the terminal result of the whole use case, even when a nested phase
+  rejects.
+- Structural operations count accepted operations only after the whole patch
+  commits, so a transition that forms a team records one insert and two
+  relates. If a materialized patch is atomically refused, every operation it
+  proposed counts once as `rejected`. A rejection that happens before any patch
+  is materialized records no operation at all.
+- Checkpoints count `sealed` only after a seal commits and `rejected` only when
+  an actual seal request is refused. A checkpoint the run never reached is not
+  a rejected checkpoint, and machinery failure during sealing is not a refusal.
+- Invariant failures increment once per failing protected invariant result,
+  including a pre-patch rejection.
+- Readiness assessments increment once per completed immutable assessment. No
+  assessment is recorded for a checkpoint that does not exist.
+
+These rules exist so telemetry can never imply that an unmaterialized patch, an
+unreached checkpoint, or an absent assessment existed.
+
+Unadmitted values fail closed rather than being relabeled. An optional
+dimension is omitted when its value is not one of the closed tokens above,
+because emitting a placeholder would assert a classification the spine never
+made; the always-required `phase` and `result` instead fall back to
+`internal_error`, which is a deliberate tripwire rather than a category.
+
+The semantic instruments are registered because the corresponding internal use
+case exists. There is no public caller yet, so the production process records
+no semantic points; package tests exercise recording without introducing an
+HTTP or CLI surface.
+
+Exemplars are disabled. OTel views repeat each instrument's attribute
+allowlist inside the SDK, so a future recording call cannot add a dimension.
+Metric points cannot carry trace attributes outside the label allowlist above.
