@@ -496,6 +496,13 @@ func (runtime *fakeObservabilityRuntime) SemanticObserver() app.Observer {
 	return app.DiscardObserver()
 }
 
+// InstrumentHTTPRoute passes the handler through unchanged. Telemetry is
+// non-authoritative, so a fake that measures nothing cannot change any
+// behavior these tests assert.
+func (runtime *fakeObservabilityRuntime) InstrumentHTTPRoute(_, _ string, next http.Handler) http.Handler {
+	return next
+}
+
 func (runtime *fakeObservabilityRuntime) Shutdown(ctx context.Context) error {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()

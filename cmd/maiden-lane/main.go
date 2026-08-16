@@ -41,6 +41,7 @@ var version = "devel"
 // lifecycle shutdown.
 type observabilityRuntime interface {
 	SemanticObserver() app.Observer
+	InstrumentHTTPRoute(method, pattern string, next http.Handler) http.Handler
 	Shutdown(context.Context) error
 }
 
@@ -119,9 +120,10 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, deps 
 	// interfaces live in internal/ports so a durable adapter can replace this
 	// one without touching the application or the semantic kernel.
 	apiDependencies := httpapi.Dependencies{
-		Plans:    memory.NewStore(),
-		Runner:   httpapi.ProductionRunner(),
-		Observer: runtime.SemanticObserver(),
+		Plans:        memory.NewStore(),
+		Runner:       httpapi.ProductionRunner(),
+		Observer:     runtime.SemanticObserver(),
+		Instrumenter: runtime,
 	}
 	commandErr := run(ctx, args, stderr, logger, func(ctx context.Context, address string, logger *slog.Logger) error {
 		return deps.serve(ctx, address, logger, httpapi.NewRouter(apiDependencies), errorLogger)

@@ -14,6 +14,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	openapiv1 "github.com/optimaldynamics/maiden-lane/internal/httpapi/openapiv1"
@@ -36,6 +37,7 @@ func NewRouter(deps Dependencies) http.Handler {
 	return openapiv1.HandlerWithOptions(&server{deps: deps}, openapiv1.ChiServerOptions{
 		BaseRouter:       base,
 		ErrorHandlerFunc: writeParameterProblem,
+		Middlewares:      []openapiv1.MiddlewareFunc{instrumentVersionedRoutes(deps.Instrumenter)},
 	})
 }
 
@@ -55,5 +57,37 @@ func writeParameterProblem(w http.ResponseWriter, _ *http.Request, err error) {
 		writeProblem(w, problemTenantRequired, nil)
 	default:
 		writeProblem(w, problemInvalidRequest, nil)
+	}
+}
+
+// instrumentVersionedRoutes wraps each matched versioned route in HTTP
+// telemetry.
+//
+// The dimension is the registered route pattern, never the request path. That
+// distinction is the whole cardinality boundary: /v1/plans/{planID} is one
+// bounded series, while the path it matched carries a content digest and would
+// mint a new series per plan. The pattern comes from chi's route context, which
+// is registration metadata this process controls, rather than from anything the
+// caller sent.
+//
+// Health probes are deliberately excluded, matching the existing contract that
+// only matched non-health handlers are instrumented.
+func instrumentVersionedRoutes(instrumenter RouteInstrumenter) openapiv1.MiddlewareFunc {
+	return func(next http.Handler) http.Handler {
+		if instrumenter == nil {
+			return next
+		}
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			pattern := chi.RouteContext(r.Context()).RoutePattern()
+			if !strings.HasPrefix(pattern, "/v1/") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// The wrapped handler is built per request and deliberately not
+			// cached: the generated wrapper binds this request's decoded
+			// parameters into next, so a handler reused across requests would
+			// serve one request's parameters to another.
+			instrumenter.InstrumentHTTPRoute(r.Method, pattern, next).ServeHTTP(w, r)
+		})
 	}
 }

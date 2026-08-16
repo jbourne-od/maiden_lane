@@ -19,6 +19,19 @@ type Dependencies struct {
 	Plans    ports.PlanStore
 	Runner   SpineRunner
 	Observer app.Observer
+
+	// Instrumenter wraps versioned routes in HTTP telemetry. It is optional:
+	// a nil instrumenter serves the same routes untelemetered, which is what
+	// handler tests use. Health probes are never wrapped.
+	Instrumenter RouteInstrumenter
+}
+
+// RouteInstrumenter is the consumer-owned narrow view of the telemetry runtime.
+// Declaring it here keeps the dependency pointing one way: this package never
+// imports internal/observability, so telemetry cannot reach into transport
+// decisions.
+type RouteInstrumenter interface {
+	InstrumentHTTPRoute(method, pattern string, next http.Handler) http.Handler
 }
 
 // SpineRunner is the consumer-owned narrow interface over the application use

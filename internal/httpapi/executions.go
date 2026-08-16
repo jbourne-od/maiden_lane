@@ -37,6 +37,15 @@ func (s *server) CreateExecution(w http.ResponseWriter, r *http.Request, params 
 		return
 	}
 
+	if body.PlanID == "" {
+		// A document with no plan reference is structurally incomplete, not a
+		// lookup that missed. Answering 404 here would imply a search happened
+		// and would tell the caller their plan is gone rather than that their
+		// request is malformed.
+		writeProblem(w, problemInvalidRequest, nil)
+		return
+	}
+
 	record, found, err := s.deps.Plans.GetPlan(r.Context(), tenant, semantic.PlanID(body.PlanID))
 	if err != nil {
 		writeStorageProblem(w, err)
