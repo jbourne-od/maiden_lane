@@ -1,20 +1,754 @@
 openapi: 3.1.0
 info:
   title: Maiden Lane API
-  version: 0.0.0
-  description: The HTTP surface currently implemented by Maiden Lane.
+  version: 0.1.0
+  description: |
+    The HTTP surface currently implemented by Maiden Lane.
+
+    This document is the authoritative wire contract. Go server types are
+    generated from it; it is never generated from Go. Clients may be generated
+    from this document directly.
+
+    Every `/v1` operation is tenant scoped and requires the `X-Maiden-Lane-Tenant`
+    header. Authentication is delegated to the deployment gateway. An artifact
+    belonging to another tenant is reported as `404`, never `403`, so that
+    possession of an identifier reveals nothing about its existence.
+
+    All errors use RFC 9457 `application/problem+json`, including responses the
+    router itself produces: an unmatched path returns a `not-found` problem and
+    an unsupported method returns a `method-not-allowed` problem, so a generated
+    client can decode every failure with one type.
+
+    A deterministic semantic outcome is not an error: a failed protected
+    invariant and a `needs_input` readiness verdict are successful responses
+    that report what the computation meant.
+servers:
+  - url: /
+    description: The Maiden Lane service root.
+
+tags:
+  - name: health
+    description: Process liveness and readiness.
+  - name: plans
+    description: Compiled semantic plans.
+  - name: executions
+    description: Semantic plan execution.
+
 paths:
   /healthz:
     get:
       operationId: getHealth
+      tags: [health]
       summary: Report process liveness
       responses:
         "204":
           description: The Maiden Lane process is alive.
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+
   /readyz:
     get:
       operationId: getReadiness
+      tags: [health]
       summary: Report process readiness
       responses:
         "204":
           description: The Maiden Lane process can accept requests.
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+
+  /v1/plans:
+    post:
+      operationId: createPlan
+      tags: [plans]
+      summary: Compile declarations into a semantic plan
+      description: |
+        Compiles a schema, ruleset, and completeness profiles into an immutable
+        plan. Plan identity is content derived, so compiling identical
+        declarations always yields the same `planID`.
+
+        Invalid declarations produce a `422` problem carrying the closed
+        compiler diagnostic codes and no `planID`.
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlanDeclarations"
+      responses:
+        "201":
+          description: The declarations compiled into a plan.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/plans/{planID}:
+    get:
+      operationId: getPlan
+      tags: [plans]
+      summary: Retrieve a compiled plan
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+        - name: planID
+          in: path
+          required: true
+          description: The content-derived plan identity.
+          schema:
+            $ref: "#/components/schemas/Digest"
+      responses:
+        "200":
+          description: The compiled plan.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Plan"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/executions:
+    post:
+      operationId: createExecution
+      tags: [executions]
+      summary: Execute a compiled plan
+      description: |
+        Executes a previously compiled plan over a pinned initial state and
+        world, sealing every declared checkpoint and assessing readiness under
+        every compiled profile.
+
+        INTERIM DEVIATION: the High-Level Design specifies that this operation
+        returns `202 Accepted` and that results are retrieved separately. That
+        shape requires a worker mode and durable storage, neither of which
+        exists yet, so this implementation executes synchronously and returns
+        `200 OK` with the complete result. The response body is the same
+        projection the future asynchronous read will return, so clients written
+        against this operation keep working when the asynchronous shape lands.
+
+        A deterministic semantic rejection is a `200` response carrying a typed
+        failure and the retained verified prefix. It is not a problem document,
+        because the run produced a real answer.
+
+        Execution identity is derived, not allocated: repeating an identical
+        request reproduces the same `semanticRunID` and `executionID`, and
+        changing only the executor identity preserves `semanticRunID` while
+        producing a different `executionID`.
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateExecutionRequest"
+      responses:
+        "200":
+          description: |
+            The execution completed and produced a result. This status covers
+            both a successful spine and a deterministic semantic rejection;
+            inspect `spineStatus` and `failure`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Execution"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+
+components:
+  parameters:
+    TenantHeader:
+      name: X-Maiden-Lane-Tenant
+      in: header
+      required: true
+      description: |
+        The tenant that owns every artifact touched by this request. Scoping is
+        mandatory; an identifier from another tenant is reported as absent.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: "^[a-z0-9][a-z0-9-]*$"
+
+  responses:
+    BadRequest:
+      description: The request was malformed or the tenant header was absent.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    NotFound:
+      description: No such artifact exists for this tenant.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    MethodNotAllowed:
+      description: The resource does not support the requested method.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    UnsupportedMediaType:
+      description: The request body was not application/json.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    UnprocessableEntity:
+      description: |
+        The request was well formed but the declarations or canonical inputs
+        were rejected. Compilation failures carry their diagnostic codes.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    InternalError:
+      description: An internal machinery inconsistency occurred.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    DependencyUnavailable:
+      description: A required dependency was unavailable. The request may be retried.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    Problem:
+      type: object
+      description: An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: A stable problem-type URI from the closed Maiden Lane vocabulary.
+          example: https://maiden-lane.optimaldynamics.com/problems/invalid-plan
+        title:
+          type: string
+          description: A short, stable, human-readable summary. Not a diagnostic payload.
+        status:
+          type: integer
+          format: int32
+          minimum: 100
+          maximum: 599
+        detail:
+          type: string
+          description: Fixed safe text. Never contains request payloads or dependency errors.
+        code:
+          type: string
+          description: A stable closed code token, when one classifies the problem.
+        diagnostics:
+          type: array
+          description: Closed compiler diagnostic codes, present only for a compilation failure.
+          items: { $ref: "#/components/schemas/CompilerDiagnostic" }
+      additionalProperties: false
+
+    CompilerDiagnostic:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: A closed compilation diagnostic code.
+          enum:
+            - UNKNOWN_FIELD
+            - UNSUPPORTED_OPERATOR
+            - DECLARED_ACCESS_MISMATCH
+            - WRITE_CONFLICT_UNRESOLVED
+            - DEPENDENCY_CYCLE
+            - PROFILE_ORDER_UNPROVABLE
+      additionalProperties: false
+
+    Digest:
+      type: string
+      description: A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+      pattern: "^sha256:[0-9a-f]{64}$"
+      example: sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+    ValueKind:
+      type: string
+      description: The closed typed-value vocabulary.
+      enum: [string, atom, int64]
+
+    Value:
+      type: object
+      description: One typed scalar value. Exactly one of the payload fields must match `kind`.
+      required: [kind]
+      properties:
+        kind: { $ref: "#/components/schemas/ValueKind" }
+        string:
+          type: string
+          description: Present when kind is string. Exact UTF-8 bytes, never normalized.
+        atom:
+          type: string
+          description: Present when kind is atom.
+        int64:
+          type: integer
+          format: int64
+          description: Present when kind is int64.
+      additionalProperties: false
+
+    FieldDeclaration:
+      type: object
+      required: [name, kind]
+      properties:
+        name: { type: string }
+        kind: { $ref: "#/components/schemas/ValueKind" }
+        requiredAtConstruction:
+          type: boolean
+          default: false
+          description: |
+            Whether state construction rejects an entity of this kind that omits
+            the field. This is a representation obligation, independent of the
+            value type; rule-level presence obligations are enforced by the
+            transformations that read the field, not here.
+      additionalProperties: false
+
+    EntityDeclaration:
+      type: object
+      required: [kind, fields]
+      properties:
+        kind: { type: string }
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/FieldDeclaration" }
+      additionalProperties: false
+
+    RelationDeclaration:
+      type: object
+      required: [kind, fromKind, toKind]
+      properties:
+        kind: { type: string }
+        fromKind: { type: string }
+        toKind: { type: string }
+      additionalProperties: false
+
+    SchemaDeclaration:
+      type: object
+      description: Declaration order is not semantic; the compiler canonicalizes it.
+      required: [entities]
+      properties:
+        entities:
+          type: array
+          items: { $ref: "#/components/schemas/EntityDeclaration" }
+        relations:
+          type: array
+          items: { $ref: "#/components/schemas/RelationDeclaration" }
+      additionalProperties: false
+
+    SourceReference:
+      type: object
+      required: [kind, canonicalSourceKey]
+      properties:
+        kind: { type: string }
+        canonicalSourceKey: { type: string }
+      additionalProperties: false
+
+    FieldCopy:
+      type: object
+      required: [source, destination]
+      properties:
+        source: { type: string, description: "A field path of the form kind.field." }
+        destination: { type: string, description: "A field path of the form kind.field." }
+      additionalProperties: false
+
+    OutputKeyExpression:
+      type: object
+      required: [kind, field]
+      properties:
+        kind:
+          type: string
+          enum: [common_source_field]
+        field: { type: string }
+      additionalProperties: false
+
+    FormRelatedEntity:
+      type: object
+      description: The closed related-entity transformation payload.
+      required: [sourceKind, sources, outputKind, outputSlot, groupingField, sourceCount, relationKind]
+      properties:
+        sourceKind: { type: string }
+        sources:
+          type: array
+          items: { $ref: "#/components/schemas/SourceReference" }
+        outputKind: { type: string }
+        outputSlot: { type: string }
+        groupingField: { type: string }
+        sourceCount: { type: integer, format: int64, minimum: 0 }
+        copiedFields:
+          type: array
+          items: { $ref: "#/components/schemas/FieldCopy" }
+        relationKind: { type: string }
+        outputKey: { $ref: "#/components/schemas/OutputKeyExpression" }
+      additionalProperties: false
+
+    AggregatePredicate:
+      type: object
+      required: [kind, fields]
+      properties:
+        kind:
+          type: string
+          enum: [complete_tuple, non_negative_int, equal_field_across_sources, less_or_equal_fields]
+        fields:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    FieldReduction:
+      type: object
+      required: [kind, source, destination]
+      properties:
+        kind:
+          type: string
+          enum: [reduce_int64_max]
+        source: { type: string }
+        destination: { type: string }
+      additionalProperties: false
+
+    OutputSlotReference:
+      type: object
+      required: [rule, slot]
+      properties:
+        rule: { type: string }
+        slot: { type: string }
+      additionalProperties: false
+
+    AggregateRelatedFields:
+      type: object
+      description: The closed related-field aggregation payload.
+      required: [target, relationKind, sourceKind, requiredSourceTuple, anchor]
+      properties:
+        target: { $ref: "#/components/schemas/OutputSlotReference" }
+        relationKind: { type: string }
+        sourceKind: { type: string }
+        requiredSourceTuple:
+          type: array
+          items: { type: string }
+        predicates:
+          type: array
+          items: { $ref: "#/components/schemas/AggregatePredicate" }
+        anchor: { $ref: "#/components/schemas/FieldCopy" }
+        reductions:
+          type: array
+          items: { $ref: "#/components/schemas/FieldReduction" }
+        resultPredicates:
+          type: array
+          items: { $ref: "#/components/schemas/AggregatePredicate" }
+      additionalProperties: false
+
+    TransformationDeclaration:
+      type: object
+      description: A closed tagged union. Exactly one payload must be present and must agree with `operator`.
+      required: [id, operator]
+      properties:
+        id: { type: string }
+        operator:
+          type: string
+          enum: [form_related_entity, aggregate_related_fields]
+        declaredReads:
+          type: array
+          items: { type: string }
+        declaredWrites:
+          type: array
+          items: { type: string }
+        after:
+          type: array
+          items: { type: string }
+        form: { $ref: "#/components/schemas/FormRelatedEntity" }
+        aggregate: { $ref: "#/components/schemas/AggregateRelatedFields" }
+      additionalProperties: false
+
+    CheckpointDeclaration:
+      type: object
+      required: [key, after]
+      properties:
+        key: { type: string }
+        after: { type: string, description: "The rule whose completion this checkpoint follows." }
+      additionalProperties: false
+
+    RulesetDeclaration:
+      type: object
+      required: [transformations]
+      properties:
+        transformations:
+          type: array
+          items: { $ref: "#/components/schemas/TransformationDeclaration" }
+        checkpoints:
+          type: array
+          items: { $ref: "#/components/schemas/CheckpointDeclaration" }
+      additionalProperties: false
+
+    RequirementAtom:
+      type: object
+      required: [code, kind, field]
+      properties:
+        code:
+          type: string
+          description: A closed readiness requirement code.
+        kind:
+          type: string
+          enum: [field_present]
+        field: { type: string }
+      additionalProperties: false
+
+    ProfileDeclaration:
+      type: object
+      description: A closed consumer-completeness declaration. Ordering between profiles is proved from normalized implication, never from names.
+      required: [key, scope, aggregation, requirements]
+      properties:
+        key: { type: string }
+        scope:
+          type: object
+          required: [kind, entityKind]
+          properties:
+            kind:
+              type: string
+              enum: [all_entities_of_kind]
+            entityKind: { type: string }
+          additionalProperties: false
+        aggregation:
+          type: string
+          enum: [all_selected]
+        requirements:
+          type: array
+          items: { $ref: "#/components/schemas/RequirementAtom" }
+        implies:
+          type: array
+          items: { type: string }
+      additionalProperties: false
+
+    PlanDeclarations:
+      type: object
+      required: [compilerSemanticsVersion, schema, rules]
+      properties:
+        compilerSemanticsVersion:
+          type: string
+          description: The pinned compiler semantics version. Compilation is reproducible only against a fixed version.
+        schema: { $ref: "#/components/schemas/SchemaDeclaration" }
+        rules: { $ref: "#/components/schemas/RulesetDeclaration" }
+        profiles:
+          type: array
+          items: { $ref: "#/components/schemas/ProfileDeclaration" }
+      additionalProperties: false
+
+    CompiledProfile:
+      type: object
+      required: [key, profileID]
+      properties:
+        key: { type: string }
+        profileID: { $ref: "#/components/schemas/Digest" }
+      additionalProperties: false
+
+    Plan:
+      type: object
+      required: [planID, rules, checkpoints, profiles]
+      properties:
+        planID: { $ref: "#/components/schemas/Digest" }
+        declarations:
+          $ref: "#/components/schemas/PlanDeclarations"
+          description: |
+            The declarations as the compiler accepted them, in canonical order.
+
+            Present on retrieval and omitted on creation, because a client that
+            just submitted declarations already holds them. This is projected
+            from the compiled plan rather than from a stored copy of the
+            request, so it shows what was compiled rather than what was sent;
+            where the two differ, the difference is the compiler's
+            canonicalization and is usually the answer being looked for.
+
+            Operational telemetry cannot carry declarations: trace attributes
+            are limited to three identities plus closed tokens, and metrics to
+            bounded enums. This projection is therefore the only way to resolve
+            a PlanID observed in a trace back to what the plan actually says.
+        rules:
+          type: array
+          description: Compiled rule identities in dependency order.
+          items: { type: string }
+        checkpoints:
+          type: array
+          items: { $ref: "#/components/schemas/CheckpointDeclaration" }
+        profiles:
+          type: array
+          items: { $ref: "#/components/schemas/CompiledProfile" }
+      additionalProperties: false
+
+    InputLineage:
+      type: object
+      description: Pins the observation load that produced the initial state. Entity identities are derived from it, so a different lineage is a different input.
+      required: [namespace, rootKey]
+      properties:
+        namespace: { type: string }
+        rootKey: { type: string }
+      additionalProperties: false
+
+    EntityInput:
+      type: object
+      description: |
+        One initial-state entity. The client supplies its canonical source key,
+        not an entity identity: identities are derived by the kernel from the
+        lineage so that a client cannot invent or collide one.
+      required: [kind, canonicalSourceKey, fields]
+      properties:
+        kind: { type: string }
+        canonicalSourceKey: { type: string }
+        fields:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/Value" }
+      additionalProperties: false
+
+    RelationInput:
+      type: object
+      required: [kind, fromKind, fromSourceKey, toKind, toSourceKey]
+      properties:
+        kind: { type: string }
+        fromKind: { type: string }
+        fromSourceKey: { type: string }
+        toKind: { type: string }
+        toSourceKey: { type: string }
+      additionalProperties: false
+
+    StateInput:
+      type: object
+      required: [lineage, entities]
+      properties:
+        lineage: { $ref: "#/components/schemas/InputLineage" }
+        entities:
+          type: array
+          items: { $ref: "#/components/schemas/EntityInput" }
+        relations:
+          type: array
+          items: { $ref: "#/components/schemas/RelationInput" }
+      additionalProperties: false
+
+    WorldReference:
+      type: object
+      required: [kind, contentDigest]
+      properties:
+        kind:
+          type: string
+          enum: [snapshot, configuration]
+        contentDigest: { $ref: "#/components/schemas/Digest" }
+      additionalProperties: false
+
+    WorldInput:
+      type: object
+      description: The pinned execution world. An empty reference list is a real, versioned empty world, not a missing value.
+      properties:
+        references:
+          type: array
+          items: { $ref: "#/components/schemas/WorldReference" }
+      additionalProperties: false
+
+    ExecutorIdentity:
+      type: object
+      description: The executing backend. It affects only `executionID` and never enters checkpoint or journal identity.
+      required: [backend, version]
+      properties:
+        backend:
+          type: string
+          pattern: "^[a-z0-9][a-z0-9.-]*$"
+        version: { $ref: "#/components/schemas/Digest" }
+      additionalProperties: false
+
+    CreateExecutionRequest:
+      type: object
+      required: [planID, initialState, executorIdentity, provenancePolicy]
+      properties:
+        planID: { $ref: "#/components/schemas/Digest" }
+        initialState: { $ref: "#/components/schemas/StateInput" }
+        world: { $ref: "#/components/schemas/WorldInput" }
+        executorIdentity: { $ref: "#/components/schemas/ExecutorIdentity" }
+        provenancePolicy:
+          type: string
+          enum: [changes.v1]
+      additionalProperties: false
+
+    ReadinessVerdict:
+      type: string
+      description: A readiness answer. `needs_input` is a successful assessment, not a failure.
+      enum: [ready, needs_input]
+
+    Assessment:
+      type: object
+      required: [assessmentID, digest, checkpointArtifactID, profileID, profileKey, verdict]
+      properties:
+        assessmentID: { $ref: "#/components/schemas/Digest" }
+        digest: { $ref: "#/components/schemas/Digest" }
+        checkpointArtifactID: { $ref: "#/components/schemas/Digest" }
+        profileID: { $ref: "#/components/schemas/Digest" }
+        profileKey: { type: string }
+        verdict: { $ref: "#/components/schemas/ReadinessVerdict" }
+        missingRequirements:
+          type: array
+          description: Closed requirement codes that were not satisfied. Empty when ready.
+          items: { type: string }
+      additionalProperties: false
+
+    Checkpoint:
+      type: object
+      required: [checkpointKey, checkpointID, checkpointArtifactID, digest, stateDigest]
+      properties:
+        checkpointKey: { type: string }
+        checkpointID: { $ref: "#/components/schemas/Digest" }
+        checkpointArtifactID: { $ref: "#/components/schemas/Digest" }
+        digest: { $ref: "#/components/schemas/Digest" }
+        stateDigest: { $ref: "#/components/schemas/Digest" }
+      additionalProperties: false
+
+    SemanticFailure:
+      type: object
+      description: |
+        A deterministic semantic rejection. Its presence does not make the HTTP
+        response an error: the run produced a real answer, and every artifact
+        verified before the rejection is retained.
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [protected_invariant_failed, artifact_integrity_failed]
+        code:
+          type: string
+          description: The closed invariant, operation-invariant, or integrity code.
+        rule:
+          type: string
+          description: The rule whose execution was rejected, when applicable.
+      additionalProperties: false
+
+    Execution:
+      type: object
+      required: [planID, spineStatus, checkpoints, assessments]
+      properties:
+        planID: { $ref: "#/components/schemas/Digest" }
+        spineStatus:
+          type: string
+          enum: [succeeded, failed, invalid_plan]
+        executionStatus:
+          type: string
+          description: Application control-plane lifecycle state. It is deliberately excluded from canonical semantic identity.
+          enum: [pending, running, succeeded, failed]
+        semanticRunID: { $ref: "#/components/schemas/Digest" }
+        executionID: { $ref: "#/components/schemas/Digest" }
+        inputID: { $ref: "#/components/schemas/Digest" }
+        worldID: { $ref: "#/components/schemas/Digest" }
+        finalStateDigest: { $ref: "#/components/schemas/Digest" }
+        journalPrefixDigest: { $ref: "#/components/schemas/Digest" }
+        acceptedRules:
+          type: array
+          description: Committed transitions in accepted order. Rejections never appear here.
+          items: { type: string }
+        checkpoints:
+          type: array
+          description: Sealed checkpoints in the independently verified dependency-closed frontier.
+          items: { $ref: "#/components/schemas/Checkpoint" }
+        assessments:
+          type: array
+          items: { $ref: "#/components/schemas/Assessment" }
+        failure: { $ref: "#/components/schemas/SemanticFailure" }
+      additionalProperties: false
