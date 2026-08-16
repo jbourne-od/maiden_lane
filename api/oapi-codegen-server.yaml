@@ -1,0 +1,21 @@
+# Authoritative source: api/openapi.yaml. Regenerate with `make openapi`.
+#
+# Generated code lives in its own package so that the "never hand-edit"
+# boundary is structural: internal/httpapi/openapiv1 contains nothing but
+# generated output, which is why the Makefile can exclude exactly that package
+# from Staticcheck without weakening any check over hand-written code.
+package: openapiv1
+output: ../internal/httpapi/openapiv1/openapi_gen.go
+generate:
+  chi-server: true
+  strict-server: true
+  models: true
+  embedded-spec: true
+output-options:
+  skip-prune: false
+compatibility:
+  # Prefix enum constants with their type name. Without this the contract's
+  # value kinds generate as bare `String`, `Int64`, and `Atom`, which pollute
+  # the package namespace and would collide the moment a second enum reuses a
+  # value name such as `Ready`.
+  always-prefix-enum-values: true

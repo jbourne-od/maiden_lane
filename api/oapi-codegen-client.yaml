@@ -1,0 +1,14 @@
+# Authoritative source: api/openapi.yaml. Regenerate with `make openapi`.
+# This client exists so tests exercise the published contract rather than
+# hand-written request construction. It is not a supported product artifact.
+package: httpapiclient
+output: ../internal/httpapiclient/client_gen.go
+generate:
+  client: true
+  models: true
+compatibility:
+  # Prefix enum constants with their type name. Without this the contract's
+  # value kinds generate as bare `String`, `Int64`, and `Atom`, which pollute
+  # the package namespace and would collide the moment a second enum reuses a
+  # value name such as `Ready`.
+  always-prefix-enum-values: true

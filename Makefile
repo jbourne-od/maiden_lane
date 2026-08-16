@@ -5,12 +5,14 @@ BINARY_DIR ?= bin
 BINARY ?= $(BINARY_DIR)/maiden-lane
 IMAGE ?= maiden-lane:local
 
-.PHONY: help fmt fmt-check mod-check tool-versions vet staticcheck test test-race vulncheck build verify container-build container-smoke container-check
+.PHONY: help fmt fmt-check mod-check tool-versions openapi openapi-check vet staticcheck test test-race vulncheck build verify container-build container-smoke container-check
 
 help:
 	@echo "fmt              format Go source"
 	@echo "fmt-check        fail if Go source is not formatted"
 	@echo "mod-check        fail if go.mod or go.sum is not tidy"
+	@echo "openapi          regenerate Go code from api/openapi.yaml"
+	@echo "openapi-check    fail if generated code has drifted from api/openapi.yaml"
 	@echo "tool-versions    verify pinned analysis tool versions"
 	@echo "vet              run go vet"
 	@echo "staticcheck      run the pinned Staticcheck"
@@ -52,11 +54,47 @@ tool-versions:
 		exit 1; \
 	}
 
+# api/openapi.yaml is the authoritative wire contract. These targets generate
+# Go from it and never the reverse; the generated files are not hand-edited.
+openapi:
+	cd api && $(GO) tool oapi-codegen -config oapi-codegen-server.yaml openapi.yaml
+	cd api && $(GO) tool oapi-codegen -config oapi-codegen-client.yaml openapi.yaml
+
+# Regenerate into a scratch directory and compare. This fails both when the
+# contract changed without regenerating and when a generated file was edited by
+# hand, which are the two ways a published contract silently stops being true.
+openapi-check:
+	@tmp="$$(mktemp -d)"; \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	sed "s|^output: .*|output: $$tmp/server.go|" api/oapi-codegen-server.yaml > "$$tmp/server.yaml"; \
+	sed "s|^output: .*|output: $$tmp/client.go|" api/oapi-codegen-client.yaml > "$$tmp/client.yaml"; \
+	( cd api && $(GO) tool oapi-codegen -config "$$tmp/server.yaml" openapi.yaml ) && \
+	( cd api && $(GO) tool oapi-codegen -config "$$tmp/client.yaml" openapi.yaml ) && \
+	if ! diff -u internal/httpapi/openapiv1/openapi_gen.go "$$tmp/server.go" >/dev/null 2>&1; then \
+		echo "generated server code is stale or hand-edited; run: make openapi"; \
+		diff -u internal/httpapi/openapiv1/openapi_gen.go "$$tmp/server.go" | head -40; \
+		exit 1; \
+	fi; \
+	if ! diff -u internal/httpapiclient/client_gen.go "$$tmp/client.go" >/dev/null 2>&1; then \
+		echo "generated client code is stale or hand-edited; run: make openapi"; \
+		diff -u internal/httpapiclient/client_gen.go "$$tmp/client.go" | head -40; \
+		exit 1; \
+	fi
+
 vet:
 	$(GO) vet ./...
 
+# Generated packages are excluded because their findings are not actionable:
+# the files are reproduced from api/openapi.yaml and must never be hand-edited.
+# The exclusion is by package and named explicitly, so no check is weakened for
+# any hand-written code.
+GENERATED_PACKAGES := \
+	github.com/optimaldynamics/maiden-lane/internal/httpapi/openapiv1 \
+	github.com/optimaldynamics/maiden-lane/internal/httpapiclient
+
 staticcheck:
-	$(GO) tool staticcheck ./...
+	@packages="$$( $(GO) list ./... | grep -v -x -F -e '$(word 1,$(GENERATED_PACKAGES))' -e '$(word 2,$(GENERATED_PACKAGES))' )"; \
+	$(GO) tool staticcheck $$packages
 
 test:
 	$(GO) test ./...
@@ -71,7 +109,7 @@ build:
 	mkdir -p $(BINARY_DIR)
 	$(GO) build -trimpath -o $(BINARY) ./cmd/maiden-lane
 
-verify: fmt-check mod-check tool-versions vet staticcheck test test-race vulncheck build
+verify: fmt-check mod-check tool-versions openapi-check vet staticcheck test test-race vulncheck build
 
 container-build:
 	docker build --tag $(IMAGE) .

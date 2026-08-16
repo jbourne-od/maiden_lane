@@ -492,7 +492,13 @@ func TestDirectKernelLifecycleAnchorMismatch(t *testing.T) {
 func TestProductionPackagesDoNotImportFixture(t *testing.T) {
 	const fixtureImport = "github.com/optimaldynamics/maiden-lane/internal/fixtures/teamhos"
 	root := filepath.Join("..", "..", "..")
-	for _, dir := range []string{"cmd", filepath.Join("internal", "httpapi"), filepath.Join("internal", "observability")} {
+	for _, dir := range []string{
+		"cmd",
+		filepath.Join("internal", "httpapi"),
+		filepath.Join("internal", "observability"),
+		filepath.Join("internal", "ports"),
+		filepath.Join("internal", "adapters"),
+	} {
 		path := filepath.Join(root, dir)
 		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 			continue

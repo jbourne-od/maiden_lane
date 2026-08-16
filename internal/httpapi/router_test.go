@@ -73,3 +73,42 @@ func TestOpenAPIRecordsImplementedHealthSurface(t *testing.T) {
 		t.Errorf("204 response count = %d, want 2", count)
 	}
 }
+
+// Production break caught: requiring a tenant on the health endpoints would
+// make a load balancer probe fail closed, because a probe carries no headers.
+//
+// The complementary property, that every registered /v1 route rejects a
+// missing tenant, is asserted against the real routes in the task that adds
+// them. It is deliberately not asserted here: no /v1 route exists yet, and a
+// test that enumerates an empty set passes without proving anything. The
+// middleware itself is covered in isolation by TestVersionedRoutesRequireATenant.
+func TestHealthEndpointsNeedNoTenant(t *testing.T) {
+	t.Parallel()
+	router := httpapi.NewRouter()
+
+	for _, path := range []string{"/healthz", "/readyz"} {
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
+		if recorder.Code != http.StatusNoContent {
+			t.Errorf("%s without a tenant = %d, want 204", path, recorder.Code)
+		}
+	}
+}
+
+// Production break caught: a router-default 404 is text/plain, which is the one
+// response a generated client cannot decode with the contract's problem type.
+func TestUnmatchedRoutesStillAnswerAsProblems(t *testing.T) {
+	t.Parallel()
+	recorder := httptest.NewRecorder()
+	httpapi.NewRouter().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/no-such-route", nil))
+
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", recorder.Code)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Fatalf("Content-Type = %q, want application/problem+json", got)
+	}
+	if !strings.Contains(recorder.Body.String(), "/problems/not-found") {
+		t.Fatalf("body is not a ratified problem: %s", recorder.Body.String())
+	}
+}
