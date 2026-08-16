@@ -14,11 +14,17 @@ and assesses consumer readiness over them. Identical semantic inputs produce
 identical artifact identities, and a failed protected invariant leaves the last
 verified checkpoint byte-identical.
 
-That engine is deliberately not reachable from outside the process. There is
-still **no public transformation API, HTTP route, CLI command, persistence,
-promotion, publication, or production hours-of-service policy**. The spine is
-an internal operation exercised by tests, and the sanitized team-HOS fixture it
-runs is a walking-skeleton fixture rather than a real rule.
+That engine is now reachable over HTTP. A tenant-scoped `/v1` surface compiles
+declarations into a plan and executes it, with `api/openapi.yaml` as the
+authoritative contract that Go server code and clients are generated from.
+
+There is still **no persistence, promotion, publication, worker mode, or
+production hours-of-service policy**. Artifacts are held in process memory and
+are lost on restart, the sanitized team-HOS fixture is a walking-skeleton
+fixture rather than a real rule, and execution is synchronous rather than the
+asynchronous shape the High-Level Design specifies. Authentication is delegated
+to a deployment gateway; this process enforces tenant scoping but verifies no
+credentials.
 
 ## Requirements
 
@@ -39,8 +45,46 @@ go run ./cmd/maiden-lane serve --listen-address=127.0.0.1:8080
 
 The current HTTP surface is:
 
-- `GET /healthz` — process liveness, returning `204 No Content`.
-- `GET /readyz` — process readiness, returning `204 No Content`.
+| Operation | Meaning |
+|---|---|
+| `GET /healthz` | Process liveness, returning `204 No Content`. |
+| `GET /readyz` | Process readiness, returning `204 No Content`. |
+| `POST /v1/plans` | Compile declarations into an immutable plan. |
+| `GET /v1/plans/{planID}` | Retrieve a plan, including the declarations the compiler accepted. |
+| `POST /v1/executions` | Execute a plan over pinned inputs and return the complete result. |
+
+Every `/v1` operation requires the `X-Maiden-Lane-Tenant` header and is scoped
+by it. An artifact belonging to another tenant is reported as `404`, never
+`403`, so possession of an identifier reveals nothing about its existence.
+
+### Reading a result
+
+Two response conventions are worth knowing before writing a client.
+
+**A deterministic semantic outcome is a success, not an error.** A failed
+protected invariant means the computation correctly refused to commit, so
+`POST /v1/executions` answers `200` carrying a typed `failure` alongside every
+artifact that verified before the refusal. Retrying reproduces it exactly.
+Only the service's inability to reach an answer becomes an RFC 9457
+`application/problem+json` document. A readiness verdict of `needs_input` is
+likewise a successful assessment.
+
+**Execution identity is derived, not allocated.** Repeating an identical
+request reproduces the same `semanticRunID` and `executionID`; changing only
+the executor identity preserves the semantic run, changes the execution, and
+leaves sealed checkpoint digests untouched. Idempotency therefore needs no
+request keys, no deduplication store, and no expiry policy.
+
+### Generating a client
+
+`api/openapi.yaml` is authoritative. Server code is generated from it and never
+the reverse, and `make openapi-check` fails the build if the two disagree, so a
+client generated from the document matches what the service actually serves.
+
+```bash
+make openapi        # regenerate Go server and test client
+make openapi-check  # fail if generated code has drifted
+```
 
 ## Observability
 
