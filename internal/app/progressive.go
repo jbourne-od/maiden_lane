@@ -136,6 +136,7 @@ func runWithOperations(ctx context.Context, request Request, observer Observer, 
 
 	run.dispatch.end(run.observation(PhaseExecuteSpine), ResultSuccess)
 	return SpineResult{status: SpineSucceeded, executionStatus: ExecutionSucceeded, plan: run.plan,
+		semanticRunID: run.runID, executionID: run.execID,
 		profiles: run.retainedProfiles(), state: run.state, journal: run.journal,
 		checkpoints: slices.Clone(run.checkpoints), assessments: slices.Clone(run.assessments)}, nil
 }
@@ -287,6 +288,10 @@ func (r *spineRun) frontierResult() SpineResult {
 		checkpoints: slices.Clone(r.checkpoints), assessments: slices.Clone(r.assessments)}
 	if r.executionEstablished {
 		result.executionStatus = ExecutionFailed
+		// The run and execution identities are reported alongside the retained
+		// frontier: a caller diagnosing a failure needs to name the run that
+		// produced it.
+		result.semanticRunID, result.executionID = r.runID, r.execID
 	}
 	return result
 }

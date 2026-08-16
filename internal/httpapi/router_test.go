@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/optimaldynamics/maiden-lane/internal/adapters/memory"
 	"github.com/optimaldynamics/maiden-lane/internal/httpapi"
 )
 
@@ -19,7 +20,7 @@ func TestHealthEndpoints(t *testing.T) {
 
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, path, nil)
-			httpapi.NewRouter().ServeHTTP(recorder, request)
+			httpapi.NewRouter(testDependencies()).ServeHTTP(recorder, request)
 
 			if recorder.Code != http.StatusNoContent {
 				t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNoContent)
@@ -36,7 +37,7 @@ func TestRouterRejectsUnsupportedMethod(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/healthz", nil)
-	httpapi.NewRouter().ServeHTTP(recorder, request)
+	httpapi.NewRouter(testDependencies()).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
@@ -48,7 +49,7 @@ func TestRouterReturnsNotFoundForUnknownPath(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/unknown", nil)
-	httpapi.NewRouter().ServeHTTP(recorder, request)
+	httpapi.NewRouter(testDependencies()).ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusNotFound)
@@ -84,7 +85,7 @@ func TestOpenAPIRecordsImplementedHealthSurface(t *testing.T) {
 // middleware itself is covered in isolation by TestVersionedRoutesRequireATenant.
 func TestHealthEndpointsNeedNoTenant(t *testing.T) {
 	t.Parallel()
-	router := httpapi.NewRouter()
+	router := httpapi.NewRouter(testDependencies())
 
 	for _, path := range []string{"/healthz", "/readyz"} {
 		recorder := httptest.NewRecorder()
@@ -100,7 +101,7 @@ func TestHealthEndpointsNeedNoTenant(t *testing.T) {
 func TestUnmatchedRoutesStillAnswerAsProblems(t *testing.T) {
 	t.Parallel()
 	recorder := httptest.NewRecorder()
-	httpapi.NewRouter().ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/no-such-route", nil))
+	httpapi.NewRouter(testDependencies()).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/no-such-route", nil))
 
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", recorder.Code)
@@ -110,5 +111,15 @@ func TestUnmatchedRoutesStillAnswerAsProblems(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "/problems/not-found") {
 		t.Fatalf("body is not a ratified problem: %s", recorder.Body.String())
+	}
+}
+
+// testDependencies builds a router whose dependencies are real: an in-process
+// store and the production use case. Routing and problem rendering are what
+// these tests exercise, and a stub would not exercise the same wiring.
+func testDependencies() httpapi.Dependencies {
+	return httpapi.Dependencies{
+		Plans:  memory.NewStore(),
+		Runner: httpapi.ProductionRunner(),
 	}
 }

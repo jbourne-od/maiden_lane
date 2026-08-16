@@ -31,9 +31,24 @@ type TenantID string
 // itself to construct the initial state. Storing it here keeps the client from
 // re-supplying a schema that could disagree with the one that was compiled.
 type PlanRecord struct {
-	TenantID    TenantID
-	PlanID      semantic.PlanID
-	Schema      semantic.Schema
+	TenantID TenantID
+	PlanID   semantic.PlanID
+
+	// Request is the exact compiler input that produced this plan.
+	//
+	// It is retained because the application use case owns the whole
+	// compile-bind-execute sequence and therefore takes a compiler request
+	// rather than an already-compiled plan. Compilation is deterministic, so
+	// re-running it reproduces this same PlanID; executing verifies that
+	// equality rather than assuming it.
+	Request semantic.CompileRequest
+
+	// Schema is the compiled schema, retained so an initial state can be
+	// constructed without re-deriving it. A plan pins only its schema digest.
+	Schema semantic.Schema
+
+	// Compilation is the accepted artifact, retained so a read can project the
+	// plan without recompiling.
 	Compilation semantic.Compilation
 }
 

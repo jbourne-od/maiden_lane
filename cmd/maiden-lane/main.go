@@ -20,6 +20,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/optimaldynamics/maiden-lane/internal/adapters/memory"
+	"github.com/optimaldynamics/maiden-lane/internal/app"
 	"github.com/optimaldynamics/maiden-lane/internal/httpapi"
 	"github.com/optimaldynamics/maiden-lane/internal/observability"
 )
@@ -34,7 +36,11 @@ const (
 
 var version = "devel"
 
+// observabilityRuntime is the consumer-owned narrow view of the telemetry
+// runtime this process needs: an observer for the semantic use case, and
+// lifecycle shutdown.
 type observabilityRuntime interface {
+	SemanticObserver() app.Observer
 	Shutdown(context.Context) error
 }
 
@@ -105,8 +111,20 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, deps 
 	)
 
 	errorLogger := log.New(safeHTTPErrorWriter{logger: logger}, "", 0)
+
+	// Composition happens here, near the entry point, rather than through any
+	// package-level state. The store is in-process: artifacts do not survive a
+	// restart and are not shared between replicas. That is a real limitation of
+	// this revision, stated rather than hidden, and it is why the storage
+	// interfaces live in internal/ports so a durable adapter can replace this
+	// one without touching the application or the semantic kernel.
+	apiDependencies := httpapi.Dependencies{
+		Plans:    memory.NewStore(),
+		Runner:   httpapi.ProductionRunner(),
+		Observer: runtime.SemanticObserver(),
+	}
 	commandErr := run(ctx, args, stderr, logger, func(ctx context.Context, address string, logger *slog.Logger) error {
-		return deps.serve(ctx, address, logger, httpapi.NewRouter(), errorLogger)
+		return deps.serve(ctx, address, logger, httpapi.NewRouter(apiDependencies), errorLogger)
 	})
 
 	// The process context may already be canceled. A fresh bounded context lets

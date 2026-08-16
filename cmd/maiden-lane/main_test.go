@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/optimaldynamics/maiden-lane/internal/app"
 	"github.com/optimaldynamics/maiden-lane/internal/observability"
 )
 
@@ -486,6 +487,13 @@ type fakeObservabilityRuntime struct {
 	mu       sync.Mutex
 	shutdown func(context.Context) error
 	calls    int
+}
+
+// SemanticObserver returns the discarding observer. Telemetry is
+// non-authoritative, so a fake that records nothing cannot change any result
+// these tests assert.
+func (runtime *fakeObservabilityRuntime) SemanticObserver() app.Observer {
+	return app.DiscardObserver()
 }
 
 func (runtime *fakeObservabilityRuntime) Shutdown(ctx context.Context) error {
