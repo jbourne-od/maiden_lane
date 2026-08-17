@@ -104,8 +104,11 @@ made; the always-required `phase` and `result` instead fall back to
 `internal_error`, which is a deliberate tripwire rather than a category.
 
 The semantic instruments are registered because the corresponding use case
-exists, and `POST /v1/executions` is now a public caller of it, so the
-production process does record semantic points. Nothing about the recording
+exists, and the worker is now a caller of it, so the production process does
+record semantic points. They are recorded where the spine actually runs, which
+is the worker rather than the request that queued it: a submission returns
+before any phase begins, so attributing phase durations to it would measure the
+wrong thing. Nothing about the recording
 rules changes: an execution driven over HTTP produces exactly the phases,
 structural operations, checkpoints, invariant failures, and readiness
 assessments described above, because the observer is the same non-authoritative
