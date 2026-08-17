@@ -60,9 +60,22 @@ CREATE TABLE IF NOT EXISTS executions (
 
     status text NOT NULL,
 
+    -- The adapter's encoding version, for the same reason plans carry one.
+    -- This codec persists raw enum ordinals, so a renumbered kernel constant
+    -- would make an old row decode into a DIFFERENT value while its content
+    -- hash still matched, because the bytes never changed. Unlike a plan, an
+    -- execution is not recompiled on read, so nothing else would catch it. A
+    -- row written by a format this build does not understand is refused.
+    format integer NOT NULL,
+
     -- The pinned semantic input, byte exact and self-describing: it carries the
     -- schema alongside the state so a worker can rehydrate it without consulting
     -- another table. bytea, never jsonb, for the reason given on plans.
+    --
+    -- The identity columns above are also covered by request_hash. Leaving them
+    -- outside it would let an UPDATE alter execution_id or run_id while both
+    -- hashes stayed valid, so a worker would execute a request bound to an
+    -- identity the kernel never derived for that input.
     request      bytea NOT NULL,
     request_hash text  NOT NULL,
 

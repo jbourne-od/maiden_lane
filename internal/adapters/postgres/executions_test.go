@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -90,13 +92,36 @@ func TestConcurrentWorkersPartitionTheQueue(t *testing.T) {
 	}
 
 	// Each worker uses its own store, as separate processes would.
-	claimed := make(chan string, executions*2)
-	done := make(chan struct{})
+	//
+	// The loop is bounded and the channel is not relied on for capacity. An
+	// earlier version of this test buffered exactly twice the work and looped
+	// until found was false, which reintroduced precisely the hang the shared
+	// contract was fixed to eliminate: a store that re-hands leased work fills
+	// the buffer, every worker blocks on the send, and CI reports a bare
+	// timeout instead of naming the defect.
+	const maxClaims = executions * 2
+	var (
+		attempts atomic.Int64
+		mutex    sync.Mutex
+		counts   = map[string]int{}
+		group    sync.WaitGroup
+	)
 	for range 5 {
-		go func() {
-			defer func() { done <- struct{}{} }()
-			worker := freshConnection(t, url)
+		group.Go(func() {
+			// t.Fatalf from a non-test goroutine is documented misuse, so
+			// failures are reported with t.Errorf and the goroutine returns.
+			worker, err := Open(context.Background(), url)
+			if err != nil {
+				t.Errorf("Open: %v", err)
+				return
+			}
+			defer worker.Close()
 			for {
+				if attempts.Add(1) > maxClaims {
+					t.Errorf("claims exceeded %d for %d executions; the queue is re-handing work",
+						maxClaims, executions)
+					return
+				}
 				request, found, err := worker.Claim(context.Background(), time.Minute)
 				if err != nil {
 					t.Errorf("Claim: %v", err)
@@ -105,19 +130,14 @@ func TestConcurrentWorkersPartitionTheQueue(t *testing.T) {
 				if !found {
 					return
 				}
-				claimed <- string(request.ExecutionID)
+				mutex.Lock()
+				counts[string(request.ExecutionID)]++
+				mutex.Unlock()
 			}
-		}()
+		})
 	}
-	for range 5 {
-		<-done
-	}
-	close(claimed)
+	group.Wait()
 
-	counts := map[string]int{}
-	for id := range claimed {
-		counts[id]++
-	}
 	if len(counts) != executions {
 		t.Fatalf("distinct executions claimed = %d, want %d", len(counts), executions)
 	}
@@ -140,14 +160,52 @@ func freshExecutionStore(t *testing.T, url string) *Store {
 	return store
 }
 
-// freshConnection returns an additional store over the same database without
-// truncating, so a test can model several worker processes.
-func freshConnection(t *testing.T, url string) *Store {
-	t.Helper()
-	store, err := Open(context.Background(), url)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
+// Production break caught: the identity columns sit outside the request blob, so
+// covering only the blob would let an UPDATE alter execution_id or run_id while
+// both hashes stayed valid. A worker would then execute a request bound to an
+// identity the kernel never derived for that input, and would seal artifacts
+// under it. This is the review finding that the plan's own constraint —
+// identities are re-derived and compared, never read and trusted — had not been
+// honoured for executions.
+func TestTamperedIdentityColumnsFailClosed(t *testing.T) {
+	url := requireDatabase(t)
+
+	tests := []struct {
+		name    string
+		corrupt string
+	}{
+		{"run identity altered", `UPDATE executions SET run_id = 'sha256:` + repeatByte('1', 64) + `'`},
+		{"plan identity altered", `UPDATE executions SET plan_id = 'sha256:` + repeatByte('2', 64) + `'`},
+		{"unknown storage format", `UPDATE executions SET format = 99`},
 	}
-	t.Cleanup(store.Close)
-	return store
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := freshExecutionStore(t, url)
+			request := storagecontract.ExecutionRequestFixture(t, "acme", "tamper-a")
+			if _, err := store.Enqueue(t.Context(), request); err != nil {
+				t.Fatalf("Enqueue: %v", err)
+			}
+			execute(t, url, test.corrupt, nil)
+
+			if _, found, err := store.Get(t.Context(), "acme", request.ExecutionID); !errors.Is(err, ErrIntegrity) {
+				t.Fatalf("Get err = %v found = %t, want an integrity failure", err, found)
+			}
+			// Claiming must also refuse, and must retire the row rather than
+			// leaving it to be re-selected every lease interval.
+			if _, found, err := store.Claim(t.Context(), time.Minute); !errors.Is(err, ErrIntegrity) || found {
+				t.Fatalf("Claim err = %v found = %t, want an integrity failure", err, found)
+			}
+			if _, found, err := store.Claim(t.Context(), time.Minute); err != nil || found {
+				t.Fatalf("the poisoned row was offered again: found=%t err=%v", found, err)
+			}
+		})
+	}
+}
+
+func repeatByte(c byte, n int) string {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = c
+	}
+	return string(out)
 }

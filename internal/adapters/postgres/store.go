@@ -48,9 +48,18 @@ const storedFormat = 1
 // claims. It is deliberately distinct from "absent": absence is a normal
 // answer, while this means the database holds something untrustworthy and a
 // human needs to know.
-var ErrIntegrity = errors.New("postgres: stored plan does not reproduce its own identity")
+// ErrIntegrity reports a stored row that cannot be trusted: a plan that does not
+// reproduce its own identity when recompiled, or an execution that does not match
+// its content hash. It is deliberately distinct from absence, which is a normal
+// answer; this means the database holds something untrustworthy and a human needs
+// to know. Callers wrap it with the specific reason.
+var ErrIntegrity = errors.New("postgres: stored row cannot be trusted")
 
 // ErrIncompleteRecord reports a record missing its tenant or artifact identity.
+// ErrIncompleteRecord reports a malformed argument: a record missing its tenant
+// or artifact identity, or a status that is not a valid outcome. It means the
+// caller passed something unusable, not that a row was absent — see ErrNotQueued
+// for that, because a caller needs to tell the two apart.
 var ErrIncompleteRecord = errors.New("postgres: record is missing its tenant or artifact identity")
 
 // Store is a PostgreSQL-backed implementation of the storage ports.
