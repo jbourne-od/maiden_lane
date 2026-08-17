@@ -36,6 +36,12 @@ jobs:
       - name: Verify application
         run: make verify
 
+      # Runs separately from verify because it needs a database. The target
+      # supplies the connection itself and fails if the adapter tests skip, so a
+      # missing database cannot masquerade as a pass.
+      - name: Verify storage adapter
+        run: make store-check
+
   container:
     name: Verify pull-request image
     if: github.event_name == 'pull_request'
