@@ -44,6 +44,7 @@ var version = "devel"
 // lifecycle shutdown.
 type observabilityRuntime interface {
 	SemanticObserver() app.Observer
+	WorkerTracer() worker.ExecutionTracer
 	InstrumentHTTPRoute(method, pattern string, next http.Handler) http.Handler
 	Shutdown(context.Context) error
 }
@@ -192,6 +193,7 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, deps 
 		Executions: planStore,
 		Runner:     productionSpineRunner{},
 		Observer:   runtime.SemanticObserver(),
+		Tracer:     runtime.WorkerTracer(),
 		Logger:     logger,
 	})
 	commandErr := run(ctx, args, stderr, logger,

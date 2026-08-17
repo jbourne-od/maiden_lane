@@ -17,6 +17,7 @@ import (
 
 	"github.com/optimaldynamics/maiden-lane/internal/app"
 	"github.com/optimaldynamics/maiden-lane/internal/observability"
+	"github.com/optimaldynamics/maiden-lane/internal/worker"
 )
 
 func TestExecuteDrainsApplicationBeforeTelemetryShutdown(t *testing.T) {
@@ -496,6 +497,13 @@ type fakeObservabilityRuntime struct {
 // these tests assert.
 func (runtime *fakeObservabilityRuntime) SemanticObserver() app.Observer {
 	return app.DiscardObserver()
+}
+
+// WorkerTracer returns nil, which the worker supports. Returning a fake that
+// opened spans would test this file's fake rather than the process, and an
+// untraced worker must reach exactly the same outcomes anyway.
+func (runtime *fakeObservabilityRuntime) WorkerTracer() worker.ExecutionTracer {
+	return nil
 }
 
 // InstrumentHTTPRoute passes the handler through unchanged. Telemetry is
