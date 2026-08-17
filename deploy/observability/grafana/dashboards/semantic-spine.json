@@ -1,40 +1,71 @@
 {
   "uid": "maiden-lane-semantic-spine",
-  "title": "Maiden Lane — Semantic Spine",
+  "title": "Maiden Lane \u2014 Semantic Spine",
   "description": "The five semantic instruments and the HTTP surface. Every query here was written against metric and label names read back out of Prometheus, not inferred from the instrument definitions: OTLP rewrites both on the way in, and guessing the result is how a dashboard ends up silently querying nothing.",
-  "tags": ["maiden-lane"],
+  "tags": [
+    "maiden-lane"
+  ],
   "timezone": "browser",
   "editable": false,
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
-  "time": { "from": "now-1h", "to": "now" },
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
   "panels": [
     {
       "type": "text",
       "title": "Reading this dashboard",
-      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "options": {
         "mode": "markdown",
-        "content": "Rate-based panels go blank when nothing is running: a local process is idle most of the time, and an empty graph here means no traffic, not a broken pipeline. **Telemetry delivery** at the bottom is the panel that separates those two cases — it is scraped from the collector itself and keeps reporting whether or not the application is busy.\n\nThe **totals over the selected range** panels count whole events instead of rates, which is usually what you want after driving a handful of requests by hand."
+        "content": "Rate-based panels go blank when nothing is running: a local process is idle most of the time, and an empty graph here means no traffic, not a broken pipeline. **Telemetry delivery** at the bottom is the panel that separates those two cases \u2014 it is scraped from the collector itself and keeps reporting whether or not the application is busy.\n\nThe **totals over the selected range** panels count whole events instead of rates, which is usually what you want after driving a handful of requests by hand."
       }
     },
     {
       "type": "timeseries",
       "title": "Spine phase latency",
-      "description": "Percentiles over maiden_lane.semantic.phase.duration. These boundaries are tuned to what the instrument measures — phases run in tens to hundreds of microseconds — because the SDK's default boundaries are shaped for milliseconds and collapse every real observation into one bucket. With the defaults in place this panel reported a p95 of 4.75 seconds against a true mean of 104 microseconds.",
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "maiden-lane-prometheus" },
+      "description": "Percentiles over maiden_lane.semantic.phase.duration. These boundaries are tuned to what the instrument measures \u2014 phases run in tens to hundreds of microseconds \u2014 because the SDK's default boundaries are shaped for milliseconds and collapse every real observation into one bucket. With the defaults in place this panel reported a p95 of 4.75 seconds against a true mean of 104 microseconds.",
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "maiden-lane-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "custom": { "lineWidth": 2, "fillOpacity": 5, "showPoints": "auto" }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "auto"
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
@@ -67,18 +98,38 @@
       "type": "timeseries",
       "title": "Phase latency by phase (p95)",
       "description": "Which phase is slow, rather than whether something is. The phase dimension is a closed vocabulary, so this legend cannot grow unboundedly.",
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
-      "datasource": { "type": "prometheus", "uid": "maiden-lane-prometheus" },
+      "gridPos": {
+        "h": 9,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "maiden-lane-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "custom": { "lineWidth": 2, "fillOpacity": 5 }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
@@ -92,22 +143,38 @@
     {
       "type": "barchart",
       "title": "Readiness verdicts over the selected range",
-      "description": "The product question: for each consumer profile, how often was a sealed checkpoint judged ready. needs_input is a finding rather than an error — a checkpoint that legitimately lacks what a consumer requires.",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "maiden-lane-prometheus" },
+      "description": "The product question: for each consumer profile, how often was a sealed checkpoint judged ready. needs_input is a finding rather than an error \u2014 a checkpoint that legitimately lacks what a consumer requires.",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "maiden-lane-prometheus"
+      },
       "fieldConfig": {
-        "defaults": { "unit": "short", "custom": { "fillOpacity": 80 } },
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 80
+          }
+        },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom" },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
         "xTickLabelRotation": 0,
         "stacking": "normal"
       },
       "targets": [
         {
           "refId": "A",
-          "legendFormat": "{{profile_kind}} · {{verdict}}",
+          "legendFormat": "{{profile_kind}} \u00b7 {{verdict}}",
           "editorMode": "code",
           "instant": true,
           "expr": "sum by (profile_kind, verdict) (increase(maiden_lane_semantic_readiness_assessments_total[$__range]))"
@@ -118,14 +185,30 @@
       "type": "barchart",
       "title": "Protected invariant failures by code",
       "description": "A failing protected invariant means the computation correctly refused to commit. These are expected in normal operation; an empty panel is not automatically good news, and a new code appearing here is the signal worth reading.",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "maiden-lane-prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "maiden-lane-prometheus"
+      },
       "fieldConfig": {
-        "defaults": { "unit": "short", "custom": { "fillOpacity": 80 } },
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 80
+          }
+        },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom" },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
         "xTickLabelRotation": 0
       },
       "targets": [
@@ -142,14 +225,30 @@
       "type": "barchart",
       "title": "Checkpoint seals and refusals",
       "description": "Sealed checkpoints against seal requests that were refused. A refusal is the spine declining to make an untrue claim durable.",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 13 },
-      "datasource": { "type": "prometheus", "uid": "maiden-lane-prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 13
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "maiden-lane-prometheus"
+      },
       "fieldConfig": {
-        "defaults": { "unit": "short", "custom": { "fillOpacity": 80 } },
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 80
+          }
+        },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "list", "placement": "bottom" },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
         "xTickLabelRotation": 0
       },
       "targets": [
@@ -166,23 +265,46 @@
       "type": "timeseries",
       "title": "Structural operations",
       "description": "Operations belonging to committed patches, and to materialized patches that were atomically refused. The result dimension is what distinguishes the two; an operation counted as refused was never applied to state.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
-      "datasource": { "type": "prometheus", "uid": "maiden-lane-prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "maiden-lane-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "ops",
-          "custom": { "lineWidth": 2, "fillOpacity": 10, "stacking": { "mode": "normal" } }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "legendFormat": "{{operation_kind}} · {{result}}",
+          "legendFormat": "{{operation_kind}} \u00b7 {{result}}",
           "editorMode": "code",
           "expr": "sum by (operation_kind, result) (rate(maiden_lane_semantic_structural_operations_total[$__rate_interval]))"
         }
@@ -192,18 +314,38 @@
       "type": "timeseries",
       "title": "HTTP request latency by route (p95)",
       "description": "These boundaries are the ones the HTTP semantic conventions recommend, used verbatim so the series matches what dashboards and managed backends expect. They are coarse for an in-memory response and appropriate once a network and a database are in the path.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
-      "datasource": { "type": "prometheus", "uid": "maiden-lane-prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "maiden-lane-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
-          "custom": { "lineWidth": 2, "fillOpacity": 5 }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
@@ -218,23 +360,46 @@
       "type": "timeseries",
       "title": "HTTP responses by route and status",
       "description": "Health endpoints are deliberately not instrumented, so probe traffic never appears here.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 29 },
-      "datasource": { "type": "prometheus", "uid": "maiden-lane-prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 29
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "maiden-lane-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "reqps",
-          "custom": { "lineWidth": 2, "fillOpacity": 10, "stacking": { "mode": "normal" } }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
         },
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
           "refId": "A",
-          "legendFormat": "{{http_response_status_code}} · {{http_request_method}} {{http_route}}",
+          "legendFormat": "{{http_response_status_code}} \u00b7 {{http_request_method}} {{http_route}}",
           "editorMode": "code",
           "expr": "sum by (http_route, http_request_method, http_response_status_code) (rate(http_server_request_duration_seconds_count[$__rate_interval]))"
         }
@@ -244,23 +409,54 @@
       "type": "timeseries",
       "title": "Telemetry delivery",
       "description": "Scraped from the collector, not the application, which is what makes it trustworthy when the application looks silent. Points accepted but not sent means the problem is the exporter or its destination; nothing accepted means the application is not exporting at all. This panel is how the bucket-boundary defect above was diagnosed rather than guessed at.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 29 },
-      "datasource": { "type": "prometheus", "uid": "maiden-lane-prometheus" },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 29
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "maiden-lane-prometheus"
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": { "lineWidth": 2, "fillOpacity": 5 }
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
         },
         "overrides": [
           {
-            "matcher": { "id": "byRegexp", "options": ".*failed.*" },
-            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*failed.*"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
           }
         ]
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["max"] },
-        "tooltip": { "mode": "multi", "sort": "desc" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
       },
       "targets": [
         {
@@ -292,6 +488,99 @@
           "legendFormat": "spans failed",
           "editorMode": "code",
           "expr": "sum(rate(otelcol_exporter_send_failed_spans_total[$__rate_interval]))"
+        }
+      ]
+    },
+    {
+      "type": "barchart",
+      "title": "Execution outcomes over the selected range",
+      "description": "What the worker recorded for each claimed execution. These describe what was written, not what was attempted: an execution the worker decided to fail but could not write reports abandoned, because it is still claimable. abandoned is not an error -- an expired lease brings the work back -- so a steady trickle of it during deploys is expected and only a rising, non-clearing level is a signal. A deterministic semantic refusal counts as answered, because the computation reached a real conclusion.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 37
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "maiden-lane-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 80
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "xTickLabelRotation": 0,
+        "stacking": "normal"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "{{result}}{{failure_reason}}",
+          "editorMode": "code",
+          "instant": true,
+          "expr": "sum by (result, failure_reason) (increase(maiden_lane_execution_outcomes_total[$__range]))"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Execution handling latency",
+      "description": "The worker's whole handling of one claimed execution: reading the plan, recompiling it, re-deriving its identity, running the spine, and storing the result. It is always larger than the sum of the phase durations inside it, and the gap between the two is where storage latency lives.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 37
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "maiden-lane-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "P95",
+          "legendFormat": "p95",
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(maiden_lane_execution_duration_seconds_bucket[$__rate_interval])))"
+        },
+        {
+          "refId": "MEAN",
+          "legendFormat": "mean",
+          "editorMode": "code",
+          "expr": "sum(rate(maiden_lane_execution_duration_seconds_sum[$__rate_interval])) / sum(rate(maiden_lane_execution_duration_seconds_count[$__rate_interval]))"
         }
       ]
     }

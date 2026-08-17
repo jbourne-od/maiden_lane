@@ -33,6 +33,8 @@ must conform to Inviolate 17.
 | `maiden_lane.semantic.checkpoints` | `Int64Counter` | `checkpoints` | `result` | Checkpoints whose seal committed, and seal requests actually refused |
 | `maiden_lane.semantic.invariant.failures` | `Int64Counter` | `failures` | `invariant_code` | Failing protected invariant results produced by the spine |
 | `maiden_lane.semantic.readiness.assessments` | `Int64Counter` | `assessments` | `profile_kind`, `verdict` | Completed immutable readiness assessments |
+| `maiden_lane.execution.outcomes` | `Int64Counter` | `{execution}` | `result`, optional `failure_reason` | Claimed executions the worker finished with, by the outcome actually recorded |
+| `maiden_lane.execution.duration` | `Float64Histogram` | `s` | `result` | Duration of the worker's whole handling of one claimed execution |
 
 The permitted values are deliberately closed or bounded:
 
@@ -53,6 +55,36 @@ pattern, never the request path: `/v1/plans/{planID}` is one bounded series,
 while the path it matched carries a content digest and would mint a new series
 per plan. Because plan identities are caller-influenced, using the path would
 make metric cardinality growable by anyone able to call the API.
+
+### Execution dimension values
+
+`result` is closed:
+
+| Value | Meaning |
+|---|---|
+| `answered` | The spine produced a result and it was stored. A deterministic semantic refusal is answered, not failed: the computation reached a real conclusion. |
+| `abandoned` | The execution was left claimable and an expired lease brings it back. Not an error state, and not something to alert on by itself. |
+| `failed` | A terminal failure was actually recorded. The execution will not be retried. |
+
+`failure_reason` is present only when `result` is `failed`, and is closed to
+`plan_absent`, `identity_mismatch`, `invalid_semantic_input`, and
+`internal_error`.
+
+These describe what was **recorded**, not what was attempted. A worker that
+decided to fail an execution and could not write that decision reports
+`abandoned`, because the execution is still claimable and reporting `failed`
+would describe a state no reader can observe. The same value drives the span and
+the counter, so a trace and a graph cannot disagree about one execution.
+
+An unadmitted `result` records no metric point at all rather than inventing a
+bucket. An unadmitted `failure_reason` still counts the failure but omits the
+dimension: the execution did fail, and dropping the point because of a labelling
+problem would understate failures.
+
+`maiden_lane.execution.duration` covers the worker's whole handling of one
+claimed execution -- reading the plan, recompiling it, re-deriving its identity,
+running the spine, and storing the result -- so it is always larger than the sum
+of the phase durations inside it.
 
 ### Semantic dimension values
 
@@ -92,6 +124,7 @@ enough that an operator would act on it.
 |---|---|---|
 | `maiden_lane.semantic.phase.duration` | `0.0001` … `10` s, sixteen boundaries concentrated below 100 ms | Phases are in-process transformations over loaded state; observed p50 is around 150 µs. |
 | `http.server.request.duration` | The HTTP semantic conventions' recommended set, verbatim | This is semantic-convention surface, so dashboards, alert libraries, and managed backends expect that distribution. Coarse for an in-memory response, correct once a network and a database are in the path. |
+| `maiden_lane.execution.duration` | `0.005` … `60` s | One execution spans storage reads, a recompile, the spine, and a result write. That is milliseconds locally and plausibly seconds against a loaded database; past a minute the useful question is whether the lease held rather than which percentile. |
 | `http.server.request.body.size`, `http.server.response.body.size` | `64` B … `4` MiB | The conventions recommend no distribution and the default one stops at 10000, which a plan declaration for the ratified fixture already exceeds at 7225 bytes. |
 
 Changing a boundary set changes every stored series and silently invalidates
@@ -112,6 +145,8 @@ against a guessed name returns no data and looks exactly like an idle system.
 | `maiden_lane.semantic.checkpoints` | `maiden_lane_semantic_checkpoints_total` |
 | `maiden_lane.semantic.invariant.failures` | `maiden_lane_semantic_invariant_failures_total` |
 | `maiden_lane.semantic.readiness.assessments` | `maiden_lane_semantic_readiness_assessments_total` |
+| `maiden_lane.execution.outcomes` | `maiden_lane_execution_outcomes_total` |
+| `maiden_lane.execution.duration` | `maiden_lane_execution_duration_seconds_{bucket,sum,count}` |
 | `http.server.request.duration` | `http_server_request_duration_seconds_{bucket,sum,count}` |
 | `http.server.request.body.size` | `http_server_request_body_size_bytes_{bucket,sum,count}` |
 | `http.server.response.body.size` | `http_server_response_body_size_bytes_{bucket,sum,count}` |
@@ -125,6 +160,13 @@ with unit `checkpoints` yields `maiden_lane_semantic_checkpoints_total`, not
 `..._checkpoints_checkpoints_total`. Renaming one of these instruments without
 also changing its unit to a braced UCUM annotation would start duplicating the
 suffix.
+
+`maiden_lane.execution.outcomes` is the case that needs the annotation: its name
+does not end in a unit word, so an unbraced `executions` would have produced
+`maiden_lane_execution_outcomes_executions_total`. Declaring `{execution}` yields
+`maiden_lane_execution_outcomes_total`, confirmed by reading the series back out
+of Prometheus. New counters should follow it rather than the four above, whose
+clean names depend on a coincidence.
 
 Application metrics reach Prometheus by remote write on the SDK's periodic
 export cycle of **60 seconds**, not on Prometheus's scrape interval. Any
