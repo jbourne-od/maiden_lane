@@ -74,6 +74,63 @@ The five semantic instruments admit exactly these values:
   Compilation diagnostics and integrity codes are deliberately excluded, since
   neither is a protected invariant failure.
 
+### Histogram bucket boundaries
+
+Every histogram here declares explicit boundaries through an OTel view. Leaving
+the aggregation unset inherits the SDK's default boundaries, which begin
+`[0, 5, 10, 25, ...]` and are shaped for milliseconds. Both duration
+instruments are measured in **seconds**, so the defaults put every real
+observation in one bucket.
+
+This is recorded because it is not a theoretical concern. With the defaults in
+place, a measured run had a mean phase duration of 104 microseconds, all 17
+observations fell below `le=5`, and `histogram_quantile(0.95, ...)` reported
+**4.75 seconds** — wrong by roughly four orders of magnitude, and plausible
+enough that an operator would act on it.
+
+| Instrument | Boundaries | Why |
+|---|---|---|
+| `maiden_lane.semantic.phase.duration` | `0.0001` … `10` s, sixteen boundaries concentrated below 100 ms | Phases are in-process transformations over loaded state; observed p50 is around 150 µs. |
+| `http.server.request.duration` | The HTTP semantic conventions' recommended set, verbatim | This is semantic-convention surface, so dashboards, alert libraries, and managed backends expect that distribution. Coarse for an in-memory response, correct once a network and a database are in the path. |
+| `http.server.request.body.size`, `http.server.response.body.size` | `64` B … `4` MiB | The conventions recommend no distribution and the default one stops at 10000, which a plan declaration for the ratified fixture already exceeds at 7225 bytes. |
+
+Changing a boundary set changes every stored series and silently invalidates
+recorded history, so treat it as a breaking change to this catalog.
+
+### Prometheus names
+
+The names above are OTel instrument names. An operator writing queries needs
+the translated Prometheus names, which differ: dots become underscores, the unit
+is appended as a suffix, and counters gain `_total`. The names below were read
+back out of Prometheus rather than derived on paper, because a query written
+against a guessed name returns no data and looks exactly like an idle system.
+
+| OTel instrument | Prometheus series |
+|---|---|
+| `maiden_lane.semantic.phase.duration` | `maiden_lane_semantic_phase_duration_seconds_{bucket,sum,count}` |
+| `maiden_lane.semantic.structural.operations` | `maiden_lane_semantic_structural_operations_total` |
+| `maiden_lane.semantic.checkpoints` | `maiden_lane_semantic_checkpoints_total` |
+| `maiden_lane.semantic.invariant.failures` | `maiden_lane_semantic_invariant_failures_total` |
+| `maiden_lane.semantic.readiness.assessments` | `maiden_lane_semantic_readiness_assessments_total` |
+| `http.server.request.duration` | `http_server_request_duration_seconds_{bucket,sum,count}` |
+| `http.server.request.body.size` | `http_server_request_body_size_bytes_{bucket,sum,count}` |
+| `http.server.response.body.size` | `http_server_response_body_size_bytes_{bucket,sum,count}` |
+
+Attribute keys are translated the same way: `operation_kind` and `result` keep
+their names, while `http.request.method` becomes `http_request_method`.
+
+The four counters escape having their unit appended twice only because each
+instrument name already ends in its own unit word — `maiden_lane.semantic.checkpoints`
+with unit `checkpoints` yields `maiden_lane_semantic_checkpoints_total`, not
+`..._checkpoints_checkpoints_total`. Renaming one of these instruments without
+also changing its unit to a braced UCUM annotation would start duplicating the
+suffix.
+
+Application metrics reach Prometheus by remote write on the SDK's periodic
+export cycle of **60 seconds**, not on Prometheus's scrape interval. Any
+`rate()` or `increase()` window must therefore span at least two minutes;
+a shorter window contains at most one sample and returns nothing.
+
 ### Semantic recording rules
 
 - Phase duration records once when each started phase completes, carrying its

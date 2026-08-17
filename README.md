@@ -163,11 +163,29 @@ resource attributes are not part of this foundation. Exporter and HTTP
 diagnostic text is sanitized before it reaches ordinary logs.
 
 The observability runtime also registers the five semantic instruments in
-[METRICS.md](METRICS.md) and can supply an observer for the internal semantic
-spine. Because no public caller reaches that spine, the running process records
-no semantic points and emits no semantic spans. Telemetry is strictly
+[METRICS.md](METRICS.md) and supplies an observer to the semantic spine.
+`POST /v1/executions` is a public caller of that spine, so a running process
+does record semantic points and emit semantic spans: one execution produces the
+HTTP server span plus `compile`, `execute_spine`, `execute_transition`,
+`seal_checkpoint`, and `assess_readiness`. Telemetry is strictly
 non-authoritative: the semantic result is byte-identical whether the observer
 is absent, recording, or backed by a failing exporter.
+
+### Rendering it locally
+
+[`deploy/observability`](deploy/observability/README.md) has a development stack
+— collector, Tempo, Prometheus, and Grafana with a provisioned dashboard — that
+displays the above without any cloud account:
+
+```bash
+make observe-up
+```
+
+It publishes loopback-only ports, refuses to start if another process already
+holds one, and prints the exporter variables to copy. `make observe-down`
+discards it and its data. The stack is a development aid and is deliberately not
+part of `make verify`: it needs Docker, and what it produces is something to
+look at rather than an assertion.
 
 ## Common commands
 
@@ -177,11 +195,13 @@ make fmt
 make verify
 make store-check
 make container-check
+make observe-up
 ```
 
 `make verify` needs no Docker and no database. `make store-check` runs the
-PostgreSQL adapter against a throwaway container, and `make container-check`
-builds and smoke-tests the image.
+PostgreSQL adapter against a throwaway container, `make container-check`
+builds and smoke-tests the image, and `make observe-up` starts the local
+observability stack.
 
 `make verify` is the authoritative complete local verification command. Its
 `Makefile` recipe enforces formatting and module tidiness, verifies the pinned
