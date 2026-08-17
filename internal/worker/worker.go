@@ -349,6 +349,12 @@ func projectResult(request ports.ExecutionRequest, result app.SpineResult) ports
 			Digest:               artifact.Digest(),
 			StateDigest:          artifact.StateDigest(),
 			CanonicalBytes:       artifact.CanonicalBytes(),
+			// The commitment and the witness travel together with the artifact
+			// that binds them, so no later reader has to work out which evidence
+			// belongs to which seal, and the witness is never stored somewhere
+			// the digest that validates it cannot be found.
+			InvariantResultDigest:         artifact.InvariantResultDigest(),
+			InvariantResultCanonicalBytes: artifact.InvariantResultCanonicalBytes(),
 		})
 	}
 

@@ -244,6 +244,12 @@ type checkpointDocument struct {
 	Digest               string `json:"digest"`
 	StateDigest          string `json:"state_digest"`
 	CanonicalBytes       []byte `json:"canonical_bytes"`
+
+	// The invariant-result commitment, and the witness it commits to. Opaque to
+	// this codec, which neither reads nor validates either: their only defined
+	// relationship is checked in the kernel.
+	InvariantResultDigest         string `json:"invariant_result_digest"`
+	InvariantResultCanonicalBytes []byte `json:"invariant_result_canonical_bytes"`
 }
 
 type assessmentDocument struct {
@@ -270,12 +276,14 @@ func storedResult(result ports.ExecutionResult) resultDocument {
 	}
 	for _, checkpoint := range result.Checkpoints {
 		document.Checkpoints = append(document.Checkpoints, checkpointDocument{
-			CheckpointKey:        string(checkpoint.CheckpointKey),
-			CheckpointID:         string(checkpoint.CheckpointID),
-			CheckpointArtifactID: string(checkpoint.CheckpointArtifactID),
-			Digest:               string(checkpoint.Digest),
-			StateDigest:          string(checkpoint.StateDigest),
-			CanonicalBytes:       checkpoint.CanonicalBytes,
+			CheckpointKey:                 string(checkpoint.CheckpointKey),
+			CheckpointID:                  string(checkpoint.CheckpointID),
+			CheckpointArtifactID:          string(checkpoint.CheckpointArtifactID),
+			Digest:                        string(checkpoint.Digest),
+			StateDigest:                   string(checkpoint.StateDigest),
+			CanonicalBytes:                checkpoint.CanonicalBytes,
+			InvariantResultDigest:         string(checkpoint.InvariantResultDigest),
+			InvariantResultCanonicalBytes: checkpoint.InvariantResultCanonicalBytes,
 		})
 	}
 	for _, assessment := range result.Assessments {
@@ -317,12 +325,14 @@ func (d resultDocument) toResult(tenant ports.TenantID, executionID semantic.Exe
 	}
 	for _, stored := range d.Checkpoints {
 		result.Checkpoints = append(result.Checkpoints, ports.SealedCheckpoint{
-			CheckpointKey:        semantic.CheckpointKey(stored.CheckpointKey),
-			CheckpointID:         semantic.CheckpointID(stored.CheckpointID),
-			CheckpointArtifactID: semantic.CheckpointArtifactID(stored.CheckpointArtifactID),
-			Digest:               semantic.CheckpointArtifactDigest(stored.Digest),
-			StateDigest:          semantic.StateDigest(stored.StateDigest),
-			CanonicalBytes:       stored.CanonicalBytes,
+			CheckpointKey:                 semantic.CheckpointKey(stored.CheckpointKey),
+			CheckpointID:                  semantic.CheckpointID(stored.CheckpointID),
+			CheckpointArtifactID:          semantic.CheckpointArtifactID(stored.CheckpointArtifactID),
+			Digest:                        semantic.CheckpointArtifactDigest(stored.Digest),
+			StateDigest:                   semantic.StateDigest(stored.StateDigest),
+			CanonicalBytes:                stored.CanonicalBytes,
+			InvariantResultDigest:         semantic.InvariantResultDigest(stored.InvariantResultDigest),
+			InvariantResultCanonicalBytes: stored.InvariantResultCanonicalBytes,
 		})
 	}
 	for _, stored := range d.Assessments {
