@@ -49,13 +49,21 @@ type Store struct {
 	// claimCursor is the index before which every execution is terminal, so
 	// claiming does not rescan finished history on every poll.
 	claimCursor int
+
+	// Policies are append-only. policyVersions holds each target's current
+	// version so appending does not have to scan for it, and so "no policy" is a
+	// missing entry rather than an absence inferred from a scan finding nothing.
+	policies       map[policyKey]ports.TargetPolicy
+	policyVersions map[targetKey]ports.PolicyVersion
 }
 
 // NewStore returns an empty store ready for concurrent use.
 func NewStore() *Store {
 	return &Store{
-		plans:      map[planKey]ports.PlanRecord{},
-		executions: map[executionKey]*executionEntry{},
+		plans:          map[planKey]ports.PlanRecord{},
+		executions:     map[executionKey]*executionEntry{},
+		policies:       map[policyKey]ports.TargetPolicy{},
+		policyVersions: map[targetKey]ports.PolicyVersion{},
 	}
 }
 
