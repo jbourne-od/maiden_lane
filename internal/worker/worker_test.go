@@ -440,3 +440,61 @@ func (s stubRunner) Run(context.Context, app.Request, app.Observer) (app.SpineRe
 	}
 	return app.SpineResult{}, s.err
 }
+
+// Production break caught by writing this test: the evidence a promotion gate
+// needs must survive the entire chain — kernel seal, app result, worker
+// projection, adapter codec, storage, and read — with the witness still verifying
+// against the commitment.
+//
+// This is the assertion the whole evidence slice exists for. Every part could be
+// individually correct while the chain still delivered a witness that no longer
+// matches its digest, and the failure would look identical to storage corruption.
+// Nothing before this point checks the chain end to end.
+func TestInvariantEvidenceSurvivesTheWholeChainVerifiable(t *testing.T) {
+	fixture := newFixture(t, teamhos.Passing)
+	if _, err := fixture.worker.RunOnce(t.Context()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	record := fixture.mustGet(t)
+	if record.Result == nil {
+		t.Fatal("a completed execution carries no result")
+	}
+	if len(record.Result.Checkpoints) == 0 {
+		t.Fatal("a completed execution sealed no checkpoints")
+	}
+
+	for _, checkpoint := range record.Result.Checkpoints {
+		if len(checkpoint.InvariantResultCanonicalBytes) == 0 {
+			t.Fatalf("checkpoint %s stored no invariant witness", checkpoint.CheckpointKey)
+		}
+		if checkpoint.InvariantResultDigest == "" {
+			t.Fatalf("checkpoint %s stored no invariant commitment", checkpoint.CheckpointKey)
+		}
+		// The one operation defined on the witness. Storage never reads it and
+		// the kernel offers no way back to invariant results, so this is the
+		// whole of what a later reader can establish about it -- and it is
+		// enough, because a checkpoint could not have sealed unless its exact
+		// all-passing protected result set matched its accepted journal.
+		if !semantic.VerifyInvariantResultDigest(
+			checkpoint.InvariantResultCanonicalBytes, checkpoint.InvariantResultDigest) {
+			t.Fatalf("checkpoint %s: stored witness does not reproduce its stored commitment",
+				checkpoint.CheckpointKey)
+		}
+	}
+}
+
+// A witness altered in storage must fail verification rather than degrade
+// quietly. This is what makes the evidence load-bearing instead of decorative.
+func TestATamperedWitnessFailsVerification(t *testing.T) {
+	fixture := newFixture(t, teamhos.Passing)
+	if _, err := fixture.worker.RunOnce(t.Context()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	checkpoint := fixture.mustGet(t).Result.Checkpoints[0]
+
+	tampered := append([]byte(nil), checkpoint.InvariantResultCanonicalBytes...)
+	tampered[len(tampered)-1] ^= 0xff
+	if semantic.VerifyInvariantResultDigest(tampered, checkpoint.InvariantResultDigest) {
+		t.Fatal("a single altered byte still verified against the commitment")
+	}
+}

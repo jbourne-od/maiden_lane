@@ -141,6 +141,28 @@ type SealedCheckpoint struct {
 	Digest               semantic.CheckpointArtifactDigest
 	StateDigest          semantic.StateDigest
 	CanonicalBytes       []byte
+
+	// InvariantResultDigest is the commitment the witness below is checked
+	// against. Both must survive: retaining the witness alone leaves it
+	// unverifiable, because the digest lives inside the artifact's canonical bytes
+	// and the kernel has no decoder to recover it from there.
+	InvariantResultDigest semantic.InvariantResultDigest
+
+	// InvariantResultCanonicalBytes is the witness the artifact's
+	// InvariantResultDigest commits to, retained so a later reader can establish
+	// that the evidence it holds is the evidence this checkpoint sealed against.
+	//
+	// It is opaque here and must stay that way. Storage cannot read it, and the
+	// kernel exposes no way to turn it back into invariant results; the only
+	// operation defined on it is semantic.VerifyInvariantResultDigest. An adapter
+	// that ever decides it knows what these bytes mean has become a second source
+	// of semantic meaning.
+	//
+	// A digest is a commitment, not a witness. Retaining only the digest, as this
+	// struct did, kept the commitment and discarded what it committed to, which
+	// left the promotion gate unable to establish anything about protected
+	// invariants at all.
+	InvariantResultCanonicalBytes []byte
 }
 
 // StoredAssessment is one readiness answer retained from a completed execution.

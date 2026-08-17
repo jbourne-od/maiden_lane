@@ -337,6 +337,8 @@ func cloneExecutionResult(result ports.ExecutionResult) ports.ExecutionResult {
 	for i, checkpoint := range result.Checkpoints {
 		cloned.Checkpoints[i] = checkpoint
 		cloned.Checkpoints[i].CanonicalBytes = bytes.Clone(checkpoint.CanonicalBytes)
+		cloned.Checkpoints[i].InvariantResultCanonicalBytes =
+			bytes.Clone(checkpoint.InvariantResultCanonicalBytes)
 	}
 
 	cloned.Assessments = make([]ports.StoredAssessment, len(result.Assessments))

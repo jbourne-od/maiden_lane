@@ -198,6 +198,26 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 			if checkpoint.Digest != want.Digest {
 				t.Errorf("checkpoint %d digest = %s, want %s", i, checkpoint.Digest, want.Digest)
 			}
+			// The invariant witness must round-trip exactly for the same reason,
+			// and for a sharper one: it is the evidence a promotion gate verifies
+			// against the artifact's committed digest. A single altered byte does
+			// not degrade that check, it fails it, and the execution becomes
+			// unpublishable with no way to tell storage corruption from a genuine
+			// mismatch.
+			if string(checkpoint.InvariantResultCanonicalBytes) !=
+				string(want.InvariantResultCanonicalBytes) {
+				t.Errorf("checkpoint %d invariant witness changed in storage", i)
+			}
+			if len(checkpoint.InvariantResultCanonicalBytes) == 0 {
+				t.Errorf("checkpoint %d came back with no invariant witness", i)
+			}
+			// The commitment must survive with it. A witness whose digest was
+			// lost is unverifiable, which is indistinguishable from having no
+			// witness at all.
+			if checkpoint.InvariantResultDigest != want.InvariantResultDigest {
+				t.Errorf("checkpoint %d invariant digest = %s, want %s",
+					i, checkpoint.InvariantResultDigest, want.InvariantResultDigest)
+			}
 		}
 		if len(got.Result.Assessments) != len(result.Assessments) {
 			t.Fatalf("assessments = %d, want %d", len(got.Result.Assessments), len(result.Assessments))
@@ -583,6 +603,12 @@ func ExecutionResultFixture(request ports.ExecutionRequest, status ports.Executi
 			Digest:               semantic.CheckpointArtifactDigest("sha256:" + repeat("e", 64)),
 			StateDigest:          request.Input.InitialState.Digest(),
 			CanonicalBytes:       []byte{0x00, 0x01, 0xff, 0x7f, 0x80},
+			// Bytes chosen to be hostile to a lossy round trip: a NUL, a high
+			// bit, and an invalid UTF-8 sequence. The witness is opaque binary,
+			// so an adapter that treats it as text corrupts it here rather than
+			// in production.
+			InvariantResultDigest:         semantic.InvariantResultDigest("sha256:" + repeat("9", 64)),
+			InvariantResultCanonicalBytes: []byte{0x00, 0xc3, 0x28, 0xff, 0xfe, 0x7f},
 		}},
 		Assessments: []ports.StoredAssessment{{
 			AssessmentID:         semantic.AssessmentID("sha256:" + repeat("f", 64)),

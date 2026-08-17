@@ -34,6 +34,22 @@ type CheckpointArtifact struct {
 	id                    CheckpointArtifactID
 	canonical             []byte
 	digest                CheckpointArtifactDigest
+
+	// invariantResultCanonical is the exact byte sequence invariantResultDigest
+	// was derived from: the witness beside the commitment.
+	//
+	// A digest is a commitment, not a witness. InvariantResultDigest can tell a
+	// later reader whether some supplied bytes are the committed ones; it cannot
+	// tell that reader what those bytes said. Retaining them here gives the
+	// witness the owner that commits to it, so nothing downstream has to remember
+	// which bytes from which transition belong to which subsequently sealed
+	// checkpoint.
+	//
+	// It participates in NO identity. CheckpointArtifactID is derived from
+	// invariantResultDigest, and the manifest encoder does not read this field, so
+	// retaining it leaves every identity and digest byte-identical. Two tests
+	// assert exactly that.
+	invariantResultCanonical []byte
 }
 
 func (c CheckpointArtifact) Checkpoint() CheckpointDeclaration { return c.checkpoint }
@@ -50,6 +66,44 @@ func (c CheckpointArtifact) StateDigest() StateDigest { return c.stateDigest }
 func (c CheckpointArtifact) JournalPrefixDigest() JournalPrefixDigest {
 	return c.journalPrefixDigest
 }
+
+// InvariantResultCanonicalBytes returns the exact canonical invariant-result
+// bytes this artifact's InvariantResultDigest was derived from.
+//
+// It is a witness for verification, not a value to interpret. There is
+// deliberately no way to turn these bytes back into []InvariantResult: the kernel
+// has no semantic decoders, so canonical encoding stays one-way and no second
+// source of semantic meaning can appear. A caller establishes that these are the
+// committed bytes with VerifyInvariantResultDigest and reasons from the fact of
+// sealing, rather than by reading them.
+func (c CheckpointArtifact) InvariantResultCanonicalBytes() []byte {
+	return bytes.Clone(c.invariantResultCanonical)
+}
+
+// VerifyInvariantResultDigest reports whether canonical is the exact byte
+// sequence expected was derived from.
+//
+// This is the whole of what a later reader needs, and deliberately no more. It
+// establishes that a retained witness is the one a checkpoint committed to,
+// without exposing how the kernel hashes anything and without any path back to
+// []InvariantResult. No constructor, no decoder, and neither encodeInvariantResults
+// nor canonicalDigest becomes reachable: canonical encoding remains one-way, so
+// the kernel stays the single source of semantic meaning.
+//
+// A caller establishing this, over an artifact that genuinely sealed, may conclude
+// that every applicable protected invariant passed — not because the bytes were
+// read, but because the kernel refuses to seal a checkpoint whose exact
+// all-passing protected result set does not match its accepted journal. That is a
+// theorem the kernel enforces, not a property inferred from storage.
+func VerifyInvariantResultDigest(canonical []byte, expected InvariantResultDigest) bool {
+	if len(canonical) == 0 {
+		// An absent witness verifies nothing. Returning true for the digest of
+		// empty input would let missing evidence satisfy the check.
+		return false
+	}
+	return InvariantResultDigest(canonicalDigest(canonical)) == expected
+}
+
 func (c CheckpointArtifact) InvariantResultDigest() InvariantResultDigest {
 	return c.invariantResultDigest
 }
@@ -163,6 +217,8 @@ func Seal(request SealRequest) (SealOutcome, error) {
 		policyID: request.Binding.policyID, stateDigest: verifiedState.Digest(),
 		journalPrefixDigest: journalDigest, invariantResultDigest: invariantDigest,
 		id: CheckpointArtifactID(canonicalDigest(claimBytes)),
+		// Exactly the bytes invariantDigest was taken from, a few lines above.
+		invariantResultCanonical: providedBytes,
 	}
 	manifest, err := encodeCheckpointArtifact(artifact)
 	if err != nil {
@@ -228,6 +284,9 @@ func conflictingKnownCheckpoint(known []CheckpointArtifact, candidate Checkpoint
 
 func cloneCheckpointArtifact(input CheckpointArtifact) CheckpointArtifact {
 	input.canonical = bytes.Clone(input.canonical)
+	// Struct assignment copies a slice header and shares its backing array, so
+	// every retained []byte must be cloned here or two artifacts alias one buffer.
+	input.invariantResultCanonical = bytes.Clone(input.invariantResultCanonical)
 	return input
 }
 

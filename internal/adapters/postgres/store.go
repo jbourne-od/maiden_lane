@@ -35,7 +35,12 @@ import (
 // storedFormat is the adapter's encoding version. Increment it when the stored
 // representation changes shape; a row carrying an unknown format is refused
 // rather than interpreted.
-const storedFormat = 1
+// Bumped to 2 when the invariant-result witness joined the stored checkpoint
+// projection. A format-1 row is refused rather than decoded into a checkpoint
+// with no witness, because a silently witness-less checkpoint would make the
+// promotion gate report evidence absent when the truth is that this build cannot
+// read the row. Nothing is stranded by the bump: no deployment exists.
+const storedFormat = 2
 
 // ErrIntegrity reports a stored row that cannot reproduce the identity it
 // claims. It is deliberately distinct from "absent": absence is a normal
