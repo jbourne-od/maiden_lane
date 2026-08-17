@@ -106,6 +106,44 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 		}
 	})
 
+	t.Run("returns a claimed input identical to the enqueued one", func(t *testing.T) {
+		// Comparing two claims against each other is not enough: a lossy
+		// encoding would corrupt both identically and they would still match.
+		// The comparison has to be against the request as submitted, before it
+		// ever reached storage.
+		//
+		// This is the execution equivalent of the plan store's round-trip
+		// assertion, and it is where a storage encoding that quietly altered a
+		// value would surface: every downstream identity derives from this
+		// state digest, so a lossy round trip would execute something other
+		// than what was accepted.
+		store := newStore(t)
+		submitted := ExecutionRequestFixture(t, "acme", "exec-roundtrip")
+		mustEnqueue(t, store, submitted)
+
+		claimed, found, err := store.Claim(t.Context(), time.Minute)
+		if err != nil || !found {
+			t.Fatalf("Claim: found=%t err=%v", found, err)
+		}
+
+		if claimed.Input.InitialState.Digest() != submitted.Input.InitialState.Digest() {
+			t.Fatalf("claimed state digest = %s, want %s",
+				claimed.Input.InitialState.Digest(), submitted.Input.InitialState.Digest())
+		}
+		if claimed.Input.World.ID() != submitted.Input.World.ID() {
+			t.Fatalf("claimed world = %s, want %s", claimed.Input.World.ID(), submitted.Input.World.ID())
+		}
+		if claimed.Input.ExecutorIdentity != submitted.Input.ExecutorIdentity {
+			t.Fatal("claimed executor identity differs from the submitted one")
+		}
+		if claimed.Input.Policy != submitted.Input.Policy {
+			t.Fatal("claimed provenance policy differs from the submitted one")
+		}
+		if claimed.ExecutionID != submitted.ExecutionID || claimed.RunID != submitted.RunID {
+			t.Fatal("claimed identities differ from the submitted ones")
+		}
+	})
+
 	t.Run("never claims a completed execution", func(t *testing.T) {
 		store := newStore(t)
 		request := ExecutionRequestFixture(t, "acme", "exec-a")
@@ -206,6 +244,105 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 		}
 		if got.Result != nil {
 			t.Fatal("an unattempted execution carries a semantic result")
+		}
+	})
+
+	t.Run("keeps terminal states terminal", func(t *testing.T) {
+		// A late Fail from a worker whose lease expired must not overwrite a
+		// success another worker already recorded. The determinism argument that
+		// makes at-least-once safe covers a duplicate Complete, because the
+		// second attempt reproduces the same artifacts. It does NOT cover a
+		// duplicate Fail: that destroys a real outcome and replaces it with an
+		// operational one, and nothing about determinism prevents it.
+		store := newStore(t)
+		request := ExecutionRequestFixture(t, "acme", "exec-terminal")
+		mustEnqueue(t, store, request)
+		result := ExecutionResultFixture(request, ports.ExecutionSucceeded)
+		if err := store.Complete(t.Context(), result); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+
+		// A late failure report from an abandoned attempt.
+		_ = store.Fail(t.Context(), "acme", request.ExecutionID, "dependency_unavailable")
+
+		got, found, err := store.Get(t.Context(), "acme", request.ExecutionID)
+		if err != nil || !found {
+			t.Fatalf("Get: found=%t err=%v", found, err)
+		}
+		if got.Status != ports.ExecutionSucceeded {
+			t.Fatalf("status = %s; a late Fail overwrote a recorded success", got.Status)
+		}
+		if got.Result == nil {
+			t.Fatal("a late Fail destroyed the recorded result")
+		}
+		if got.FailureReason != "" {
+			t.Fatalf("a succeeded execution carries a failure reason: %q", got.FailureReason)
+		}
+	})
+
+	t.Run("does not resurrect a failed execution", func(t *testing.T) {
+		store := newStore(t)
+		request := ExecutionRequestFixture(t, "acme", "exec-failed")
+		mustEnqueue(t, store, request)
+		if err := store.Fail(t.Context(), "acme", request.ExecutionID, "dependency_unavailable"); err != nil {
+			t.Fatalf("Fail: %v", err)
+		}
+
+		_ = store.Complete(t.Context(), ExecutionResultFixture(request, ports.ExecutionSucceeded))
+
+		got, found, err := store.Get(t.Context(), "acme", request.ExecutionID)
+		if err != nil || !found {
+			t.Fatalf("Get: found=%t err=%v", found, err)
+		}
+		if got.Status != ports.ExecutionFailed {
+			t.Fatalf("status = %s; a late Complete resurrected a failed execution", got.Status)
+		}
+		if got.Result != nil {
+			t.Fatal("a failed execution carries a semantic result")
+		}
+	})
+
+	t.Run("refuses to complete with a non-terminal status", func(t *testing.T) {
+		// A completed row carrying a non-terminal status is the worst shape
+		// available: it still matches the claim predicate but has no lease, so
+		// the execution is re-claimed and re-run forever, while a read reports a
+		// pending record carrying a result, which ExecutionRecord documents as
+		// impossible.
+		store := newStore(t)
+		request := ExecutionRequestFixture(t, "acme", "exec-nonterminal")
+		mustEnqueue(t, store, request)
+
+		for _, status := range []ports.ExecutionStatus{
+			ports.ExecutionPending, ports.ExecutionRunning, ports.ExecutionStatus(""),
+		} {
+			if err := store.Complete(t.Context(), ExecutionResultFixture(request, status)); err == nil {
+				t.Errorf("Complete accepted the non-terminal status %q", status)
+			}
+		}
+
+		// And the execution is untouched: still claimable, still without a result.
+		got, found, err := store.Get(t.Context(), "acme", request.ExecutionID)
+		if err != nil || !found {
+			t.Fatalf("Get: found=%t err=%v", found, err)
+		}
+		if got.Status != ports.ExecutionPending || got.Result != nil {
+			t.Fatalf("a refused Complete altered the execution: status=%s result=%v", got.Status, got.Result != nil)
+		}
+	})
+
+	t.Run("refuses a request whose pinned input is unusable", func(t *testing.T) {
+		// Accepting one produces an execution that can never run and can never
+		// be read: every later claim and read fails on the same unusable input.
+		// A store that accepts it has promised to do work it cannot do.
+		store := newStore(t)
+		unusable := ExecutionRequestFixture(t, "acme", "exec-unusable")
+		unusable.Input = ports.ExecutionInput{}
+
+		if _, err := store.Enqueue(t.Context(), unusable); err == nil {
+			t.Fatal("Enqueue accepted a request with no pinned input")
+		}
+		if _, found, err := store.Get(t.Context(), "acme", unusable.ExecutionID); err != nil || found {
+			t.Fatalf("a refused request was stored: found=%t err=%v", found, err)
 		}
 	})
 

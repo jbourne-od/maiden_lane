@@ -114,12 +114,13 @@ func TestUnmatchedRoutesStillAnswerAsProblems(t *testing.T) {
 	}
 }
 
-// testDependencies builds a router whose dependencies are real: an in-process
-// store and the production use case. Routing and problem rendering are what
-// these tests exercise, and a stub would not exercise the same wiring.
+// testDependencies builds a router over one real in-process adapter serving both
+// ports, as the process wires it. Routing and problem rendering are what these
+// tests exercise, and a stub would not exercise the same wiring.
 func testDependencies() httpapi.Dependencies {
+	store := memory.NewStore()
 	return httpapi.Dependencies{
-		Plans:  memory.NewStore(),
-		Runner: httpapi.ProductionRunner(),
+		Plans:      store,
+		Executions: store,
 	}
 }

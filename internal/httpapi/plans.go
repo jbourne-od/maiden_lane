@@ -16,9 +16,9 @@ import (
 // and no package-level state, so a test constructs exactly the server it means
 // to exercise.
 type Dependencies struct {
-	Plans    ports.PlanStore
-	Runner   SpineRunner
-	Observer app.Observer
+	Plans      ports.PlanStore
+	Executions ports.ExecutionStore
+	Observer   app.Observer
 
 	// Instrumenter wraps versioned routes in HTTP telemetry. It is optional:
 	// a nil instrumenter serves the same routes untelemetered, which is what
@@ -32,13 +32,6 @@ type Dependencies struct {
 // decisions.
 type RouteInstrumenter interface {
 	InstrumentHTTPRoute(method, pattern string, next http.Handler) http.Handler
-}
-
-// SpineRunner is the consumer-owned narrow interface over the application use
-// case. It is declared here, by the consumer, so handler tests can drive the
-// transport without standing up the whole kernel (AGENTS.md section 11).
-type SpineRunner interface {
-	Run(context.Context, app.Request, app.Observer) (app.SpineResult, error)
 }
 
 // server implements the generated ServerInterface. Routing comes from
@@ -71,6 +64,17 @@ func (s *server) CreatePlan(w http.ResponseWriter, r *http.Request, params opena
 	var declarations openapiv1.PlanDeclarations
 	if err := decodeJSON(r, &declarations); err != nil {
 		writeDecodeProblem(w, err)
+		return
+	}
+
+	if len(declarations.Rules.Transformations) == 0 {
+		// A plan with no transformations compiles, but the application refuses
+		// to execute one, so creating it would hand back an artifact that is
+		// guaranteed useless. Refusing here keeps one rule instead of two, and
+		// it matters more than it looks: an execution that cannot run reaches a
+		// terminal failure, and because execution identity is derived the same
+		// request can never be resubmitted to clear it.
+		writeProblem(w, problemInvalidSemanticInput, nil)
 		return
 	}
 
@@ -206,16 +210,3 @@ func writeJSON(w http.ResponseWriter, status int, document any) {
 	// gone, which nothing here can act on.
 	_ = json.NewEncoder(w).Encode(document)
 }
-
-// productionRunner adapts the application use case to the consumer-owned
-// SpineRunner interface.
-type productionRunner struct{}
-
-func (productionRunner) Run(ctx context.Context, request app.Request, observer app.Observer) (app.SpineResult, error) {
-	return app.Run(ctx, request, observer)
-}
-
-// ProductionRunner returns the real spine. It is the only implementation the
-// process composes; the interface exists so tests can drive the transport
-// without standing up the kernel.
-func ProductionRunner() SpineRunner { return productionRunner{} }

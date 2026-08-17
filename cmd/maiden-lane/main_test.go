@@ -199,7 +199,7 @@ func TestRunRequiresCommand(t *testing.T) {
 	t.Parallel()
 
 	var stderr strings.Builder
-	err := run(context.Background(), nil, &stderr, testLogger(), nil)
+	err := run(context.Background(), nil, &stderr, testLogger(), nil, nil)
 	if err == nil {
 		t.Fatal("run error = nil, want a command error")
 	}
@@ -211,7 +211,7 @@ func TestRunRequiresCommand(t *testing.T) {
 func TestRunRejectsUnknownCommand(t *testing.T) {
 	t.Parallel()
 
-	err := run(context.Background(), []string{"unknown"}, io.Discard, testLogger(), nil)
+	err := run(context.Background(), []string{"unknown"}, io.Discard, testLogger(), nil, nil)
 	if err == nil {
 		t.Fatal("run error = nil, want unknown-command error")
 	}
@@ -221,7 +221,7 @@ func TestRunPassesExplicitListenAddress(t *testing.T) {
 	t.Parallel()
 
 	var gotAddress string
-	serve := func(_ context.Context, address string, _ *slog.Logger) error {
+	serve := func(_ context.Context, address string, _ *slog.Logger, _ bool) error {
 		gotAddress = address
 		return nil
 	}
@@ -232,6 +232,7 @@ func TestRunPassesExplicitListenAddress(t *testing.T) {
 		io.Discard,
 		testLogger(),
 		serve,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("run: %v", err)
@@ -249,7 +250,8 @@ func TestRunRejectsUnexpectedServeArguments(t *testing.T) {
 		[]string{"serve", "unexpected"},
 		io.Discard,
 		testLogger(),
-		func(context.Context, string, *slog.Logger) error { return nil },
+		func(context.Context, string, *slog.Logger, bool) error { return nil },
+		nil,
 	)
 	if err == nil {
 		t.Fatal("run error = nil, want unexpected-argument error")
@@ -581,5 +583,65 @@ func envLookup(env map[string]string) observability.LookupEnv {
 	return func(key string) (string, bool) {
 		value, present := env[key]
 		return value, present
+	}
+}
+
+// Production break caught: the work command must exist and be reachable, or the
+// split deployment shape the HLD describes has no entry point.
+func TestRunDispatchesTheWorkCommand(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	err := run(
+		context.Background(),
+		[]string{"work"},
+		io.Discard,
+		testLogger(),
+		nil,
+		func(context.Context, *slog.Logger) error {
+			called = true
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !called {
+		t.Fatal("the work command was not dispatched")
+	}
+}
+
+// Production break caught: an in-process worker is the default because with
+// in-memory storage a separate process cannot see the queue, so an enqueued
+// execution would never run. The flag that disables it must actually reach the
+// serve command rather than being silently ignored.
+func TestServeReportsWhetherAWorkerRuns(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		args       []string
+		withWorker bool
+	}{
+		{[]string{"serve"}, true},
+		{[]string{"serve", "--no-worker"}, false},
+	} {
+		got := !test.withWorker
+		err := run(
+			context.Background(),
+			test.args,
+			io.Discard,
+			testLogger(),
+			func(_ context.Context, _ string, _ *slog.Logger, withWorker bool) error {
+				got = withWorker
+				return nil
+			},
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("run(%v): %v", test.args, err)
+		}
+		if got != test.withWorker {
+			t.Errorf("run(%v) withWorker = %t, want %t", test.args, got, test.withWorker)
+		}
 	}
 }

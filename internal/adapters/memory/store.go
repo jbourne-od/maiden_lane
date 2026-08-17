@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"time"
@@ -44,6 +45,10 @@ type Store struct {
 
 	executions     map[executionKey]*executionEntry
 	executionOrder []executionKey
+
+	// claimCursor is the index before which every execution is terminal, so
+	// claiming does not rescan finished history on every poll.
+	claimCursor int
 }
 
 // NewStore returns an empty store ready for concurrent use.
@@ -121,6 +126,34 @@ type executionEntry struct {
 
 var _ ports.ExecutionStore = (*Store)(nil)
 
+// ErrNotQueued reports an execution that is absent, or already terminal and
+// therefore no longer accepting an outcome. It is distinct from
+// ErrIncompleteRecord, which means the caller's argument was malformed: a caller
+// needs to tell "you gave me nonsense" from "that is already decided".
+var ErrNotQueued = errors.New("memory: execution is absent or already terminal")
+
+// ErrUnusableInput reports a request whose pinned input cannot be executed.
+// Accepting one would promise work the store cannot deliver: every later claim
+// and read would fail on the same input.
+var ErrUnusableInput = errors.New("memory: execution request has no usable pinned input")
+
+// terminal reports whether a status is a final outcome.
+//
+// Completing with a non-terminal status is refused rather than stored, because
+// such a row still matches the claim predicate while carrying a result: the
+// execution would be re-run forever and a read would report the
+// pending-with-result shape ExecutionRecord documents as impossible.
+func terminal(status ports.ExecutionStatus) bool {
+	return status == ports.ExecutionSucceeded || status == ports.ExecutionFailed
+}
+
+// usableInput reports whether a pinned input can actually be executed. A zero
+// state has no lineage and no digest, so nothing downstream can bind it.
+func usableInput(input ports.ExecutionInput) bool {
+	return input.InitialState.Digest() != "" && input.World.ID() != "" &&
+		input.ExecutorIdentity != (semantic.ExecutorIdentity{}) && input.Policy != 0
+}
+
 // Enqueue stores a pending execution, idempotently on its derived identity.
 func (s *Store) Enqueue(ctx context.Context, request ports.ExecutionRequest) (bool, error) {
 	if err := ctx.Err(); err != nil {
@@ -128,6 +161,9 @@ func (s *Store) Enqueue(ctx context.Context, request ports.ExecutionRequest) (bo
 	}
 	if request.TenantID == "" || request.ExecutionID == "" {
 		return false, ErrIncompleteRecord
+	}
+	if !usableInput(request.Input) {
+		return false, ErrUnusableInput
 	}
 
 	s.mu.Lock()
@@ -158,9 +194,23 @@ func (s *Store) Claim(ctx context.Context, lease time.Duration) (ports.Execution
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
-	for _, key := range s.executionOrder {
+
+	// The cursor matters because of this build's default configuration: an
+	// in-process worker polls continuously, so rescanning from index zero would
+	// make every poll cost proportional to all history ever enqueued, under the
+	// write lock. Terminal entries at the head can never become claimable
+	// again, so the cursor advances past them permanently.
+	for s.claimCursor < len(s.executionOrder) {
+		entry, present := s.executions[s.executionOrder[s.claimCursor]]
+		if present && !terminal(entry.status) {
+			break
+		}
+		s.claimCursor++
+	}
+
+	for _, key := range s.executionOrder[s.claimCursor:] {
 		entry, present := s.executions[key]
-		if !present {
+		if !present || terminal(entry.status) {
 			continue
 		}
 		claimable := entry.status == ports.ExecutionPending ||
@@ -186,13 +236,23 @@ func (s *Store) Complete(ctx context.Context, result ports.ExecutionResult) erro
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !terminal(result.Status) {
+		return fmt.Errorf("%w: %q is not a terminal status", ErrIncompleteRecord, result.Status)
+	}
+
 	entry, present := s.executions[executionKey{tenant: result.TenantID, executionID: result.ExecutionID}]
 	if !present {
-		return ErrIncompleteRecord
+		return ErrNotQueued
+	}
+	if terminal(entry.status) {
+		// Already decided. A late Complete from an abandoned attempt must not
+		// resurrect a failed execution or overwrite another attempt's outcome.
+		return ErrNotQueued
 	}
 	stored := cloneExecutionResult(result)
 	entry.result = &stored
 	entry.status = result.Status
+	entry.failureReason = ""
 	entry.leaseExpiry = time.Time{}
 	return nil
 }
@@ -211,10 +271,18 @@ func (s *Store) Fail(ctx context.Context, tenant ports.TenantID, executionID sem
 	defer s.mu.Unlock()
 	entry, present := s.executions[executionKey{tenant: tenant, executionID: executionID}]
 	if !present {
-		return ErrIncompleteRecord
+		return ErrNotQueued
+	}
+	if terminal(entry.status) {
+		// The lease-expiry argument that makes at-least-once safe covers a
+		// duplicate Complete, because a second attempt reproduces the same
+		// artifacts. It does not cover a late Fail: that would replace a real
+		// outcome with an operational one and destroy the result.
+		return ErrNotQueued
 	}
 	entry.status = ports.ExecutionFailed
 	entry.failureReason = reason
+	entry.result = nil
 	entry.leaseExpiry = time.Time{}
 	return nil
 }
@@ -228,8 +296,8 @@ func (s *Store) Get(ctx context.Context, tenant ports.TenantID, executionID sema
 		return ports.ExecutionRecord{}, false, nil
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	entry, present := s.executions[executionKey{tenant: tenant, executionID: executionID}]
 	if !present {
 		return ports.ExecutionRecord{}, false, nil

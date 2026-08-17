@@ -20,8 +20,12 @@ info:
     client can decode every failure with one type.
 
     A deterministic semantic outcome is not an error: a failed protected
-    invariant and a `needs_input` readiness verdict are successful responses
-    that report what the computation meant.
+    invariant and a `needs_input` readiness verdict are reported as results
+    rather than as problem documents, because the computation produced a real
+    answer.
+
+    Executions are asynchronous. Submission returns identities; the result
+    appears at the read operation once a worker has completed it.
 servers:
   - url: /
     description: The Maiden Lane service root.
@@ -119,26 +123,19 @@ paths:
       tags: [executions]
       summary: Execute a compiled plan
       description: |
-        Executes a previously compiled plan over a pinned initial state and
-        world, sealing every declared checkpoint and assessing readiness under
-        every compiled profile.
+        Accepts a previously compiled plan for execution over a pinned initial
+        state and world. The execution is queued and runs asynchronously; poll
+        `GET /v1/executions/{executionID}` for its status and result.
 
-        INTERIM DEVIATION: the High-Level Design specifies that this operation
-        returns `202 Accepted` and that results are retrieved separately. That
-        shape requires a worker mode and durable storage, neither of which
-        exists yet, so this implementation executes synchronously and returns
-        `200 OK` with the complete result. The response body is the same
-        projection the future asynchronous read will return, so clients written
-        against this operation keep working when the asynchronous shape lands.
+        Submission is idempotent, and needs no idempotency key to be. Execution
+        identity is derived from the semantic request rather than allocated, so
+        resubmitting identical inputs returns the same `executionID` and creates
+        no second execution. Changing only the executor identity preserves
+        `semanticRunID` and produces a different `executionID`.
 
-        A deterministic semantic rejection is a `200` response carrying a typed
-        failure and the retained verified prefix. It is not a problem document,
-        because the run produced a real answer.
-
-        Execution identity is derived, not allocated: repeating an identical
-        request reproduces the same `semanticRunID` and `executionID`, and
-        changing only the executor identity preserves `semanticRunID` while
-        producing a different `executionID`.
+        There is no synchronous variant. A caller wanting a result in one call
+        polls the read operation; a convenience wrapper belongs in a client
+        rather than in a second server behaviour with its own lifecycle.
       parameters:
         - $ref: "#/components/parameters/TenantHeader"
       requestBody:
@@ -148,15 +145,18 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateExecutionRequest"
       responses:
-        "200":
+        "202":
           description: |
-            The execution completed and produced a result. This status covers
-            both a successful spine and a deterministic semantic rejection;
-            inspect `spineStatus` and `failure`.
+            The execution was accepted. Its identities are returned immediately;
+            the result appears at the read operation once a worker completes it.
+
+            This status is also returned for a resubmission of an execution that
+            already exists, with the same identities, because the identity is
+            derived from the request.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Execution"
+                $ref: "#/components/schemas/ExecutionAccepted"
         "400": { $ref: "#/components/responses/BadRequest" }
         "404": { $ref: "#/components/responses/NotFound" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
@@ -164,6 +164,41 @@ paths:
         "422": { $ref: "#/components/responses/UnprocessableEntity" }
         "500": { $ref: "#/components/responses/InternalError" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
+
+  /v1/executions/{executionID}:
+    get:
+      operationId: getExecution
+      tags: [executions]
+      summary: Retrieve an execution
+      description: |
+        Reports the lifecycle status of an execution and, once it has finished,
+        the complete result.
+
+        A `result` is present only for a finished execution. A deterministic
+        semantic rejection is a finished execution whose result carries a typed
+        `failure`: the computation produced a real answer, so it is reported here
+        rather than as a problem document. `failureReason` is different — it is a
+        bounded operational code meaning the execution could not be attempted at
+        all.
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+        - name: executionID
+          in: path
+          required: true
+          description: The derived execution identity.
+          schema:
+            $ref: "#/components/schemas/Digest"
+      responses:
+        "200":
+          description: The execution, with its result if it has finished.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Execution"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
 
 components:
   parameters:
@@ -725,20 +760,53 @@ components:
             populate truthfully.
       additionalProperties: false
 
+    ExecutionAccepted:
+      type: object
+      description: The identities of an accepted execution, returned immediately on submission.
+      required: [executionID, semanticRunID, planID, executionStatus]
+      properties:
+        executionID: { $ref: "#/components/schemas/Digest" }
+        semanticRunID: { $ref: "#/components/schemas/Digest" }
+        planID: { $ref: "#/components/schemas/Digest" }
+        executionStatus: { $ref: "#/components/schemas/ExecutionStatus" }
+      additionalProperties: false
+
+    ExecutionStatus:
+      type: string
+      description: |
+        Application control-plane lifecycle state, deliberately excluded from
+        canonical semantic identity. The semantic layer answers what a
+        computation meant; this answers what happened while it ran.
+      enum: [pending, running, succeeded, failed]
+
     Execution:
       type: object
-      required: [planID, spineStatus, checkpoints, assessments]
+      required: [executionID, semanticRunID, planID, executionStatus]
       properties:
+        executionID: { $ref: "#/components/schemas/Digest" }
+        semanticRunID: { $ref: "#/components/schemas/Digest" }
         planID: { $ref: "#/components/schemas/Digest" }
+        executionStatus: { $ref: "#/components/schemas/ExecutionStatus" }
+        failureReason:
+          type: string
+          description: |
+            A bounded operational code present only when the execution could not
+            be attempted. It is not a semantic outcome: a computation that ran
+            and refused reports that through `result.failure`.
+        result:
+          $ref: "#/components/schemas/ExecutionResult"
+      additionalProperties: false
+
+    ExecutionResult:
+      type: object
+      description: |
+        The complete answer of a finished execution. Present only once the
+        execution finished, so a caller must not infer one from the status alone.
+      required: [spineStatus, checkpoints, assessments]
+      properties:
         spineStatus:
           type: string
           enum: [succeeded, failed, invalid_plan]
-        executionStatus:
-          type: string
-          description: Application control-plane lifecycle state. It is deliberately excluded from canonical semantic identity.
-          enum: [pending, running, succeeded, failed]
-        semanticRunID: { $ref: "#/components/schemas/Digest" }
-        executionID: { $ref: "#/components/schemas/Digest" }
         inputID: { $ref: "#/components/schemas/Digest" }
         worldID: { $ref: "#/components/schemas/Digest" }
         finalStateDigest: { $ref: "#/components/schemas/Digest" }

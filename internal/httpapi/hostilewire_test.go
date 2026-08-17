@@ -7,8 +7,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/optimaldynamics/maiden-lane/internal/adapters/memory"
 )
 
 // This corpus exists because of a defect the typed handler tests could not
@@ -91,7 +89,7 @@ var acceptableHostileStatuses = []int{
 // a client error, never accepted and never reported as a server fault. This is
 // the class that produced the 500 the typed tests could not reach.
 func TestMalformedWireBodiesAreRefusedSafely(t *testing.T) {
-	router := NewRouter(Dependencies{Plans: memory.NewStore(), Runner: ProductionRunner()})
+	router := NewRouter(oneStoreDependencies())
 
 	for _, path := range []string{"/v1/plans", "/v1/executions"} {
 		for _, hostile := range malformedCorpus() {
@@ -112,7 +110,7 @@ func TestMalformedWireBodiesAreRefusedSafely(t *testing.T) {
 // and must not be reflected into a problem document even when it is refused
 // for some other reason.
 func TestHostileValuesNeverFaultOrReflect(t *testing.T) {
-	router := NewRouter(Dependencies{Plans: memory.NewStore(), Runner: ProductionRunner()})
+	router := NewRouter(oneStoreDependencies())
 
 	for _, path := range []string{"/v1/plans", "/v1/executions"} {
 		for _, hostile := range hostileValueCorpus() {
@@ -168,7 +166,7 @@ func postRaw(t *testing.T, router http.Handler, path, tenant, body string) *http
 // process memory. The limit must refuse rather than truncate, because a
 // truncated document could parse into something the caller never sent.
 func TestOversizedBodiesAreRefusedRatherThanTruncated(t *testing.T) {
-	router := NewRouter(Dependencies{Plans: memory.NewStore(), Runner: ProductionRunner()})
+	router := NewRouter(oneStoreDependencies())
 
 	oversized := `{"compilerSemanticsVersion":"` + strings.Repeat("a", maxRequestBytes+1024) + `"}`
 	request := httptest.NewRequest(http.MethodPost, "/v1/plans", strings.NewReader(oversized))
@@ -186,7 +184,7 @@ func TestOversizedBodiesAreRefusedRatherThanTruncated(t *testing.T) {
 // Production break caught: a hostile tenant travels on every versioned route,
 // so it is checked here against raw bytes as well as through the validator.
 func TestHostileTenantsNeverReachAResponseBody(t *testing.T) {
-	router := NewRouter(Dependencies{Plans: memory.NewStore(), Runner: ProductionRunner()})
+	router := NewRouter(oneStoreDependencies())
 
 	hostile := []string{
 		"<script>alert(1)</script>",

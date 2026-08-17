@@ -70,6 +70,25 @@ ratified type; it cannot compose a new one.
 | `internal-error` | 500 | An internal inconsistency, including a stored plan that no longer reproduces its own identity when recompiled. Storage integrity failures surface here rather than as a client error, because the caller's request was valid and the fault is entirely server side. |
 | `dependency-unavailable` | 503 | A required dependency was unavailable, or the caller's context was cancelled. Retryable. |
 
+Execution outcomes are reported through the execution itself rather than as
+problems, because an execution is accepted before it runs. A read distinguishes
+three things that are easy to conflate:
+
+- `executionStatus` is lifecycle: `pending`, `running`, `succeeded`, `failed`.
+- `result.failure` is a deterministic semantic refusal. The computation ran and
+  declined to commit, which is an answer; retrying reproduces it exactly.
+- `failureReason` is a bounded operational code meaning the execution could not
+  be attempted at all. Its values are `plan_absent`, `identity_mismatch`,
+  `invalid_semantic_input`, `internal_error`, `storage_format_unknown`, and
+  `storage_integrity_failed`.
+
+Only causes where repetition could plausibly change the outcome leave an
+execution claimable: cancellation and an unavailable dependency. The rest are
+terminal, because leaving a deterministic failure claimable would retry forever
+on an input that cannot succeed. Note that terminal is permanent for that input:
+execution identity is derived, so resubmitting the same request resolves to the
+same failed record rather than starting a new attempt.
+
 Two boundaries matter more than the table.
 
 **A deterministic semantic outcome is never a problem document.** A failed

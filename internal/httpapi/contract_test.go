@@ -26,6 +26,7 @@ var wantOperations = []string{
 	"CreatePlan",
 	"GetPlan",
 	"CreateExecution",
+	"GetExecution",
 }
 
 // Production break caught: adding an operation to the contract without
@@ -56,6 +57,7 @@ func TestEveryVersionedOperationRequiresTheTenantHeader(t *testing.T) {
 		"CreatePlanParams":      true,
 		"GetPlanParams":         true,
 		"CreateExecutionParams": true,
+		"GetExecutionParams":    true,
 	}
 	for name := range tenanted {
 		params, ok := paramsTypeByName(name)
@@ -95,25 +97,64 @@ func TestHealthOperationsTakeNoParameters(t *testing.T) {
 // a handler must project a kernel identity rather than construct one is
 // therefore enforced against the handler code, not against these DTOs.
 func TestExecutionResponseFieldNamesAreStable(t *testing.T) {
-	want := map[string]string{
-		"PlanID":        "planID",
-		"SpineStatus":   "spineStatus",
-		"SemanticRunID": "semanticRunID",
-		"ExecutionID":   "executionID",
-		"Checkpoints":   "checkpoints",
-		"Assessments":   "assessments",
-		"Failure":       "failure",
+	// The execution response is split: the envelope carries identities and
+	// lifecycle, and the result carries what the computation decided. The split
+	// is the contract, so both halves are pinned.
+	envelope := map[string]string{
+		"ExecutionID":     "executionID",
+		"SemanticRunID":   "semanticRunID",
+		"PlanID":          "planID",
+		"ExecutionStatus": "executionStatus",
+		"FailureReason":   "failureReason",
+		"Result":          "result",
 	}
-	execution := reflect.TypeFor[openapiv1.Execution]()
+	assertJSONNames(t, reflect.TypeFor[openapiv1.Execution](), "Execution", envelope)
+
+	result := map[string]string{
+		"SpineStatus":         "spineStatus",
+		"InputID":             "inputID",
+		"WorldID":             "worldID",
+		"FinalStateDigest":    "finalStateDigest",
+		"JournalPrefixDigest": "journalPrefixDigest",
+		"AcceptedRules":       "acceptedRules",
+		"Checkpoints":         "checkpoints",
+		"Assessments":         "assessments",
+		"Failure":             "failure",
+	}
+	assertJSONNames(t, reflect.TypeFor[openapiv1.ExecutionResult](), "ExecutionResult", result)
+
+	accepted := map[string]string{
+		"ExecutionID":     "executionID",
+		"SemanticRunID":   "semanticRunID",
+		"PlanID":          "planID",
+		"ExecutionStatus": "executionStatus",
+	}
+	assertJSONNames(t, reflect.TypeFor[openapiv1.ExecutionAccepted](), "ExecutionAccepted", accepted)
+}
+
+// Production break caught: a submission response that carried a result would
+// reinstate synchronous execution in the contract even if the handler queued the
+// work, and a client would reasonably expect one.
+func TestAcceptedSubmissionCarriesNoResult(t *testing.T) {
+	accepted := reflect.TypeFor[openapiv1.ExecutionAccepted]()
+	for _, forbidden := range []string{"Result", "Checkpoints", "Assessments", "Failure"} {
+		if _, present := accepted.FieldByName(forbidden); present {
+			t.Errorf("ExecutionAccepted carries %s; submission must return identities only", forbidden)
+		}
+	}
+}
+
+func assertJSONNames(t *testing.T, target reflect.Type, name string, want map[string]string) {
+	t.Helper()
 	for field, jsonName := range want {
-		found, ok := execution.FieldByName(field)
+		found, ok := target.FieldByName(field)
 		if !ok {
-			t.Errorf("Execution has no %s field", field)
+			t.Errorf("%s has no %s field", name, field)
 			continue
 		}
 		tag := found.Tag.Get("json")
-		if name, _, _ := strings.Cut(tag, ","); name != jsonName {
-			t.Errorf("Execution.%s serializes as %q, want %q", field, name, jsonName)
+		if got, _, _ := strings.Cut(tag, ","); got != jsonName {
+			t.Errorf("%s.%s serializes as %q, want %q", name, field, got, jsonName)
 		}
 	}
 }
@@ -126,6 +167,8 @@ func paramsTypeByName(name string) (reflect.Type, bool) {
 		return reflect.TypeFor[openapiv1.GetPlanParams](), true
 	case "CreateExecutionParams":
 		return reflect.TypeFor[openapiv1.CreateExecutionParams](), true
+	case "GetExecutionParams":
+		return reflect.TypeFor[openapiv1.GetExecutionParams](), true
 	default:
 		return nil, false
 	}

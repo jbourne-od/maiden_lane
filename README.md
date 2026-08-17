@@ -26,11 +26,28 @@ rather than the asynchronous shape the High-Level Design specifies.
 Authentication is delegated to a deployment gateway; this process enforces
 tenant scoping but verifies no credentials.
 
+### Running it
+
+```bash
+# Everything in one process: an API and an in-process worker.
+go run ./cmd/maiden-lane serve --listen-address=127.0.0.1:8080
+
+# Or split, which is the shape the High-Level Design targets.
+go run ./cmd/maiden-lane serve --listen-address=127.0.0.1:8080 --no-worker
+go run ./cmd/maiden-lane work
+```
+
+The API and the worker are two modes of one binary. `serve` runs a worker in
+process by default, and it must: with in-memory storage a separate worker
+process cannot see the queue, so an enqueued execution would never run and every
+read would report `pending` forever. Splitting them requires durable storage,
+which is what makes the queue visible to both.
+
 ### Storage
 
 | Variable | Meaning |
 |---|---|
-| `MAIDEN_LANE_DATABASE_URL` | PostgreSQL connection URL. When unset, plans are held in process memory. |
+| `MAIDEN_LANE_DATABASE_URL` | PostgreSQL connection URL. When unset, plans and executions are held in process memory. |
 
 Absent configuration keeps everything in memory, so a local run needs no
 database. The process says so at startup, because an operator who expected
@@ -70,7 +87,8 @@ The current HTTP surface is:
 | `GET /readyz` | Process readiness, returning `204 No Content`. |
 | `POST /v1/plans` | Compile declarations into an immutable plan. |
 | `GET /v1/plans/{planID}` | Retrieve a plan, including the declarations the compiler accepted. |
-| `POST /v1/executions` | Execute a plan over pinned inputs and return the complete result. |
+| `POST /v1/executions` | Queue an execution of a plan over pinned inputs. Returns `202` with its identities. |
+| `GET /v1/executions/{executionID}` | Report an execution's status and, once finished, its result. |
 
 Every `/v1` operation requires the `X-Maiden-Lane-Tenant` header and is scoped
 by it. An artifact belonging to another tenant is reported as `404`, never
@@ -80,19 +98,31 @@ by it. An artifact belonging to another tenant is reported as `404`, never
 
 Two response conventions are worth knowing before writing a client.
 
-**A deterministic semantic outcome is a success, not an error.** A failed
-protected invariant means the computation correctly refused to commit, so
-`POST /v1/executions` answers `200` carrying a typed `failure` alongside every
-artifact that verified before the refusal. Retrying reproduces it exactly.
-Only the service's inability to reach an answer becomes an RFC 9457
-`application/problem+json` document. A readiness verdict of `needs_input` is
-likewise a successful assessment.
+**Executions are asynchronous.** Submission returns identities; a worker runs
+the execution and the result appears at the read operation. There is no
+synchronous variant, so there is one execution path and one lifecycle, and
+worker availability never affects a submission's response.
+
+**A deterministic semantic outcome is an answer, not an error.** A failed
+protected invariant means the computation correctly refused to commit, so a
+finished execution reports it through `result.failure` alongside every artifact
+that verified beforehand. `failureReason` is different: it is a bounded
+operational code meaning the execution could not be attempted at all. Only the
+service's inability to reach an answer becomes an RFC 9457
+`application/problem+json` document, and a readiness verdict of `needs_input` is
+a successful assessment.
 
 **Execution identity is derived, not allocated.** Repeating an identical
 request reproduces the same `semanticRunID` and `executionID`; changing only
 the executor identity preserves the semantic run, changes the execution, and
 leaves sealed checkpoint digests untouched. Idempotency therefore needs no
 request keys, no deduplication store, and no expiry policy.
+
+One consequence is worth knowing before you rely on it: because identity is
+derived, an execution that reaches a terminal failure cannot be cleared by
+resubmitting, since the same request resolves to the same record. Retrying a
+terminally failed execution needs an explicit operation, which does not exist
+yet.
 
 ### Generating a client
 
