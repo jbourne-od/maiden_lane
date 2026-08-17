@@ -5,7 +5,7 @@ BINARY_DIR ?= bin
 BINARY ?= $(BINARY_DIR)/maiden-lane
 IMAGE ?= maiden-lane:local
 
-.PHONY: help fmt fmt-check mod-check tool-versions openapi openapi-check vet staticcheck test test-race vulncheck build verify store-check container-build container-smoke container-check
+.PHONY: help fmt fmt-check mod-check tool-versions openapi openapi-check vet staticcheck test test-race vulncheck build verify store-check container-build container-smoke container-check observe-preflight observe-up observe-down observe-logs
 
 help:
 	@echo "fmt              format Go source"
@@ -23,6 +23,9 @@ help:
 	@echo "verify           run the complete local CI sequence"
 	@echo "store-check      run the PostgreSQL adapter tests against a throwaway database"
 	@echo "container-check  build and smoke-test $(IMAGE)"
+	@echo "observe-up       start the local collector, Tempo, Prometheus, and Grafana"
+	@echo "observe-down     stop the observability stack and discard its data"
+	@echo "observe-logs     follow the observability stack logs"
 
 fmt:
 	@gofmt="$$( $(GO) env GOROOT)/bin/gofmt"; \
@@ -188,3 +191,75 @@ container-smoke:
 	}
 
 container-check: container-build container-smoke
+
+# The observability stack is a development aid, not part of verification. It
+# never joins `verify`: it needs Docker, it is long-running rather than
+# pass/fail, and what it produces is a thing to look at rather than an
+# assertion. The assertions about telemetry live in internal/observability.
+OBSERVE_COMPOSE ?= deploy/observability/compose.yaml
+ML_GRAFANA_PORT ?= 3000
+ML_PROMETHEUS_PORT ?= 9090
+ML_TEMPO_PORT ?= 3200
+ML_OTLP_HTTP_PORT ?= 4318
+ML_OTLP_GRPC_PORT ?= 4317
+export ML_GRAFANA_PORT ML_PROMETHEUS_PORT ML_TEMPO_PORT ML_OTLP_HTTP_PORT ML_OTLP_GRPC_PORT
+
+# Every published port is checked for an existing listener first. This is not
+# defensiveness for its own sake: Docker Desktop reported a successful bind for a
+# port another process already held, the stack came up "healthy", and Grafana's
+# URL served an unrelated Express application. A silent loss like that costs far
+# more to diagnose than a refusal, because every symptom points at the stack
+# rather than at the squatter.
+#
+# The check runs only when none of the stack's own containers are up, which
+# removes any need to recognise the container runtime's listeners. Excluding them
+# by process name looked reasonable and was wrong immediately: the names vary by
+# runtime -- Docker Desktop, OrbStack, Colima, docker-proxy -- and the first
+# attempt flagged the stack's own published ports as conflicts. Asking "is our
+# stack down?" is a question with a reliable answer, so when it is down every
+# listener on these ports is by definition somebody else's.
+observe-preflight:
+	@running="$$(docker compose --file $(OBSERVE_COMPOSE) ps --quiet 2>/dev/null | tr -d '[:space:]')"; \
+	if [ -n "$$running" ]; then \
+		exit 0; \
+	fi; \
+	conflict=0; \
+	for entry in "Grafana:$(ML_GRAFANA_PORT)" "Prometheus:$(ML_PROMETHEUS_PORT)" \
+	             "Tempo:$(ML_TEMPO_PORT)" "OTLP/HTTP:$(ML_OTLP_HTTP_PORT)" \
+	             "OTLP/gRPC:$(ML_OTLP_GRPC_PORT)"; do \
+		name="$${entry%%:*}"; port="$${entry##*:}"; \
+		holder="$$(lsof -nP -iTCP:$$port -sTCP:LISTEN 2>/dev/null \
+			| awk 'NR>1 {print $$1}' | sort -u | tr '\n' ' ')"; \
+		if [ -n "$$holder" ]; then \
+			echo "port $$port ($$name) is already held by: $$holder"; \
+			conflict=1; \
+		fi; \
+	done; \
+	if [ $$conflict -ne 0 ]; then \
+		echo; \
+		echo "Refusing to start: Docker may report success and still lose the bind,"; \
+		echo "leaving the published URL serving the other process."; \
+		echo "Override the port instead, for example:"; \
+		echo "  make observe-up ML_GRAFANA_PORT=3900 ML_PROMETHEUS_PORT=9990"; \
+		exit 1; \
+	fi
+
+observe-up: observe-preflight
+	@docker compose --file $(OBSERVE_COMPOSE) up --detach --wait || { \
+		docker compose --file $(OBSERVE_COMPOSE) logs --tail 40; \
+		exit 1; \
+	}
+	@echo "Grafana      http://127.0.0.1:$(ML_GRAFANA_PORT)"
+	@echo "Prometheus   http://127.0.0.1:$(ML_PROMETHEUS_PORT)"
+	@echo "Tempo        http://127.0.0.1:$(ML_TEMPO_PORT)"
+	@echo
+	@echo "Point a Maiden Lane process at the collector with:"
+	@echo "  export OTEL_TRACES_EXPORTER=otlp"
+	@echo "  export OTEL_METRICS_EXPORTER=otlp"
+	@echo "  export OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:$(ML_OTLP_HTTP_PORT)"
+
+observe-down:
+	@docker compose --file $(OBSERVE_COMPOSE) down --volumes --remove-orphans
+
+observe-logs:
+	@docker compose --file $(OBSERVE_COMPOSE) logs --follow --tail 40

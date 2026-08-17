@@ -1,0 +1,18 @@
+apiVersion: 1
+
+# Dashboards are files in the repository rather than state inside Grafana's
+# database. The volume is mounted read-only and `allowUiUpdates` is false, so an
+# edit made in the browser cannot become the only copy of a panel: it will be
+# reverted, which is the intended feedback. Changing a dashboard means changing
+# the JSON.
+
+providers:
+  - name: maiden-lane
+    orgId: 1
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 10
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

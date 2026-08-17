@@ -1,0 +1,3 @@
+# Grafana logs an error for each provisioning directory it cannot open.
+# The errors are harmless, but a newcomer reading the logs cannot tell that,
+# so the directories exist to keep the startup output free of false alarms.

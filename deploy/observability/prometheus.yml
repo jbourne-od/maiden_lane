@@ -1,0 +1,27 @@
+# Prometheus for the local stack. It receives application metrics by remote
+# write from the collector rather than scraping anything in the application:
+# the application exposes no /metrics endpoint and should not grow one, because
+# OTLP export is the only metric surface it has and adding a second would mean
+# two definitions of the same instrument.
+#
+# The one scrape target is the collector's own telemetry, which is how delivery
+# gets verified. otelcol_exporter_sent_metric_points rising while a series stays
+# absent means the problem is downstream of the application, and that
+# distinction is otherwise very hard to make.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+storage:
+  tsdb:
+    # OTLP delivers metrics in batches whose timestamps can trail the current
+    # head, especially when a short-lived process flushes on shutdown. Without a
+    # tolerance window those samples are rejected outright, which looks
+    # identical to telemetry never being emitted.
+    out_of_order_time_window: 30m
+
+scrape_configs:
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["collector:8888"]

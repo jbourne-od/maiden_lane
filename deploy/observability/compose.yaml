@@ -1,0 +1,95 @@
+# Local observability stack: collector, Tempo, Prometheus, Grafana.
+#
+# This is a development stack, brought up beside a Maiden Lane process running
+# on the host. It is deliberately not a deployment artifact: storage is
+# ephemeral, retention is hours, and Grafana has authentication switched off.
+#
+# The application is not a service here. It runs on the host and reaches the
+# collector at 127.0.0.1:4318, which keeps the normal development loop --
+# rebuild, restart, re-run -- free of container rebuilds. That also means the
+# stack is useful without the application: the collector's own metrics make it
+# possible to tell a broken pipeline from an idle one.
+#
+# Every published port binds to 127.0.0.1 rather than 0.0.0.0. An unauthenticated
+# Grafana and an open remote-write receiver should not be reachable from the
+# network a laptop happens to be on.
+
+name: maiden-lane-observability
+
+services:
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.140.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./collector.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      # The OTLP ports the application exports to. 4317 is gRPC, 4318 is
+      # HTTP/protobuf, which is what this repository's exporter uses.
+      - "127.0.0.1:${ML_OTLP_GRPC_PORT:-4317}:4317"
+      - "127.0.0.1:${ML_OTLP_HTTP_PORT:-4318}:4318"
+      - "127.0.0.1:${ML_COLLECTOR_HEALTH_PORT:-13133}:13133"
+    depends_on:
+      tempo:
+        condition: service_started
+      prometheus:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "--help"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  tempo:
+    image: grafana/tempo:2.9.0
+    # The image runs as uid 10001, and a named volume is created root-owned, so
+    # the default user cannot write its own WAL. Overriding the user is the
+    # documented workaround for local Tempo and is safe only because this is a
+    # development stack.
+    user: "0"
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    volumes:
+      - ./tempo.yaml:/etc/tempo/config.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "127.0.0.1:${ML_TEMPO_PORT:-3200}:3200"
+
+  prometheus:
+    image: prom/prometheus:v3.7.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Remote write is off by default and is how the collector delivers
+      # metrics. Without this flag the collector reports export failures and no
+      # application series ever appears.
+      - --web.enable-remote-write-receiver
+      - --storage.tsdb.retention.time=6h
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${ML_PROMETHEUS_PORT:-9090}:9090"
+
+  grafana:
+    image: grafana/grafana:12.3.0
+    environment:
+      # Anonymous admin. Acceptable because the port is loopback-only and the
+      # stack holds nothing but local development telemetry.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_USERS_DEFAULT_THEME: dark
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_started
+      tempo:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${ML_GRAFANA_PORT:-3000}:3000"
+
+volumes:
+  tempo-data:
+  prometheus-data:
