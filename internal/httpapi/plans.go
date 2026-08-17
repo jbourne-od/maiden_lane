@@ -111,6 +111,7 @@ func (s *server) CreatePlan(w http.ResponseWriter, r *http.Request, params opena
 	record := ports.PlanRecord{
 		TenantID:    tenant,
 		PlanID:      plan.ID(),
+		Input:       compilation.Input(),
 		Schema:      schema,
 		Compilation: compilation,
 	}

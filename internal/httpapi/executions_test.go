@@ -337,12 +337,11 @@ func TestExecutionRefusesWhenTheStoredPlanCannotBeReproduced(t *testing.T) {
 	}
 }
 
-// Production break caught: the compiler request is rebuilt from the stored
-// compilation rather than retained, because retaining it would hand callers a
-// mutable alias into the store. The rebuild must reproduce the same plan and
-// profile identities, or execution would silently run a different program than
-// the one that was created.
-func TestRebuiltCompilerRequestReproducesTheStoredIdentities(t *testing.T) {
+// Production break caught: the retained compilation input must reproduce the
+// same plan and profile identities, or execution would silently run a different
+// program than the one that was created. A durable adapter depends on exactly
+// this property to verify a round trip.
+func TestRetainedCompilationInputReproducesTheStoredIdentities(t *testing.T) {
 	store := memory.NewStore()
 	router := NewRouter(Dependencies{Plans: store, Runner: ProductionRunner()})
 	created := createPlan(t, router, "acme", fixtureDeclarations(t))
@@ -351,26 +350,21 @@ func TestRebuiltCompilerRequestReproducesTheStoredIdentities(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("GetPlan: found=%t err=%v", found, err)
 	}
-	request, ok := compileRequestFor(record)
-	if !ok {
-		t.Fatal("stored record produced no compiler request")
-	}
-
-	recompiled, err := semantic.Compile(request)
+	recompiled, err := semantic.Compile(record.Input.Request())
 	if err != nil {
 		t.Fatalf("recompile: %v", err)
 	}
 	plan, ok := recompiled.Plan()
 	if !ok {
 		failure, _ := recompiled.Failure()
-		t.Fatalf("rebuilt request did not compile: %+v", failure.Diagnostics())
+		t.Fatalf("retained input did not compile: %+v", failure.Diagnostics())
 	}
 	if plan.ID() != semantic.PlanID(created.PlanID) {
-		t.Fatalf("rebuilt planID = %s, want %s", plan.ID(), created.PlanID)
+		t.Fatalf("recompiled planID = %s, want %s", plan.ID(), created.PlanID)
 	}
 	for i, profile := range recompiled.Profiles() {
 		if openapiv1.Digest(profile.ID()) != created.Profiles[i].ProfileID {
-			t.Errorf("rebuilt profile %d = %s, want %s", i, profile.ID(), created.Profiles[i].ProfileID)
+			t.Errorf("recompiled profile %d = %s, want %s", i, profile.ID(), created.Profiles[i].ProfileID)
 		}
 	}
 }

@@ -35,15 +35,24 @@ type TenantID string
 // adapter to store and return a record by ordinary assignment without any
 // defensive copying of its own.
 //
-// A compiler request was briefly retained here and had to be removed. Unlike a
-// Schema or a Compilation it is an ordinary authoring structure of exported
-// slices and pointers, so storing it handed every caller a mutable alias into
-// the store. Do not reintroduce it, or any other value whose interior can be
-// reached and changed after it is stored: the caller that needs a compiler
-// request can rebuild one from the Compilation, whose accessors clone.
+// A bare semantic.CompileRequest was briefly retained here and had to be
+// removed: it is an ordinary authoring structure of exported slices and
+// pointers, so storing one handed every caller a mutable alias into the store.
+// Do not reintroduce it, or any other value whose interior can be reached and
+// changed after it is stored. Input carries the same information immutably.
 type PlanRecord struct {
 	TenantID TenantID
 	PlanID   semantic.PlanID
+
+	// Input is what a durable adapter persists.
+	//
+	// A Compilation cannot be serialized: its fields are private, Compile is
+	// the only way to obtain one, and the kernel's canonical encoders are
+	// one-way with no decoder to rehydrate from. An adapter therefore stores
+	// this input in its own encoding, recompiles on read, and requires the
+	// resulting PlanID to equal the one it stored. Storage consequently cannot
+	// return a plan under an identity it did not actually produce.
+	Input semantic.CompilationInput
 
 	// Schema is the compiled schema, retained so an initial state can be
 	// constructed without re-deriving it. A plan pins only its schema digest.
