@@ -160,6 +160,18 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, deps 
 	if storeErr != nil {
 		// The connection string may carry a credential, so the cause is logged
 		// as a bounded code rather than rendered.
+		//
+		// A schema that has not been migrated gets its own code, because it is a
+		// different problem with a different fix. Both block startup, but an
+		// operator told only "unavailable" would go looking at networking and
+		// credentials for a database that answered perfectly well and simply has
+		// not had `make migrate` run against it. The application deliberately
+		// cannot resolve this itself: it holds no DDL privilege, by design.
+		if errors.Is(storeErr, postgres.ErrSchemaOutOfDate) {
+			logger.Error("plan storage schema is not migrated",
+				"code", "plan_storage_schema_out_of_date")
+			return storeErr
+		}
 		logger.Error("plan storage unavailable", "code", "plan_storage_unavailable")
 		return storeErr
 	}

@@ -5,7 +5,7 @@ BINARY_DIR ?= bin
 BINARY ?= $(BINARY_DIR)/maiden-lane
 IMAGE ?= maiden-lane:local
 
-.PHONY: help fmt fmt-check mod-check tool-versions openapi openapi-check vet staticcheck test test-race vulncheck build verify store-check container-build container-smoke container-check observe-preflight observe-up observe-down observe-logs
+.PHONY: help fmt fmt-check mod-check tool-versions openapi openapi-check vet staticcheck test test-race vulncheck build verify migrate migrate-status store-check container-build container-smoke container-check observe-preflight observe-up observe-down observe-logs
 
 help:
 	@echo "fmt              format Go source"
@@ -21,6 +21,8 @@ help:
 	@echo "vulncheck        run the pinned govulncheck"
 	@echo "build            build $(BINARY)"
 	@echo "verify           run the complete local CI sequence"
+	@echo "migrate          apply pending migrations to $$MAIDEN_LANE_DATABASE_URL"
+	@echo "migrate-status   show which migrations are applied"
 	@echo "store-check      run the PostgreSQL adapter tests against a throwaway database"
 	@echo "container-check  build and smoke-test $(IMAGE)"
 	@echo "observe-up       start the local collector, Tempo, Prometheus, and Grafana"
@@ -121,6 +123,30 @@ verify: fmt-check mod-check tool-versions openapi-check vet staticcheck test tes
 # The target supplies the database URL itself, so the adapter tests never skip
 # when this runs, and it then asserts that they actually executed. A silent skip
 # would look exactly like a pass and would leave the adapter unverified in CI.
+# Migrations are an explicit step, never something the application does to itself.
+# The application holds no DDL privilege by design, so that a compromised process
+# cannot rewrite the tables holding sealed artifacts; see
+# internal/adapters/postgres/schema.go.
+#
+# dbmate is pinned in go.mod and run through `go tool`, so this needs no
+# workstation-global install and CI gets the same version a developer does.
+MIGRATIONS_DIR ?= internal/adapters/postgres/migrations
+DBMATE = $(GO) tool dbmate --migrations-dir $(MIGRATIONS_DIR) --no-dump-schema
+
+migrate:
+	@test -n "$(MAIDEN_LANE_DATABASE_URL)" || { \
+		echo "MAIDEN_LANE_DATABASE_URL is not set"; \
+		exit 1; \
+	}
+	@$(DBMATE) --url "$(MAIDEN_LANE_DATABASE_URL)" up
+
+migrate-status:
+	@test -n "$(MAIDEN_LANE_DATABASE_URL)" || { \
+		echo "MAIDEN_LANE_DATABASE_URL is not set"; \
+		exit 1; \
+	}
+	@$(DBMATE) --url "$(MAIDEN_LANE_DATABASE_URL)" status
+
 STORE_CONTAINER ?= maiden-lane-store-check
 STORE_PORT ?= 55433
 STORE_URL ?= "postgres://postgres:maiden@127.0.0.1:$(STORE_PORT)/maidenlane?sslmode=disable"
@@ -145,6 +171,10 @@ store-check:
 	test -n "$$ready" || { \
 		echo "PostgreSQL did not become ready"; \
 		docker logs $(STORE_CONTAINER); \
+		exit 1; \
+	}; \
+	$(DBMATE) --url $(STORE_URL) up >/dev/null || { \
+		echo "migrations failed against the throwaway database"; \
 		exit 1; \
 	}; \
 	if ! output="$$(MAIDEN_LANE_TEST_POSTGRES_URL=$(STORE_URL) \

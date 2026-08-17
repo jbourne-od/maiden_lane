@@ -57,6 +57,37 @@ A configured URL that cannot be reached **blocks startup**. Falling back to
 memory would be the worst available outcome: nothing would look wrong until the
 first restart, by which point the artifacts are already gone.
 
+### Migrations
+
+The application **never migrates its own database**. It verifies the schema at
+startup and refuses to serve one that is missing a migration it was built
+against, reporting `plan_storage_schema_out_of_date` rather than the generic
+unavailable code, because the fix is different.
+
+That is a deliberate privilege boundary rather than a workflow preference. A
+runtime role with no `ALTER` or `DROP` rights cannot rewrite the tables holding
+sealed artifacts, so "this process cannot rewrite its own history" is true by
+construction instead of by convention.
+
+```bash
+export MAIDEN_LANE_DATABASE_URL='postgres://…'
+make migrate         # apply pending migrations
+make migrate-status  # show what is applied and what is pending
+```
+
+Migrations are plain SQL in `internal/adapters/postgres/migrations`, run by
+[dbmate](https://github.com/amacneil/dbmate). It is pinned in `go.mod` and
+invoked through `go tool`, so no workstation-global install is needed and CI uses
+the same version.
+
+A database **ahead** of the binary is accepted, because old and new tasks run
+together during a rolling deploy. A database **behind** it is refused.
+
+The first migration is idempotent so that a database created before migrations
+existed adopts the history rather than needing to be rebuilt. Later migrations
+should not be: once a database is under migration control, a statement that
+silently does nothing hides a divergence instead of adopting one.
+
 Stored plans are never trusted on the way back out. A read recompiles the stored
 declarations and returns a plan only if the recompiled identity matches the one
 stored beside it, so a corrupted, truncated, or substituted row fails closed
