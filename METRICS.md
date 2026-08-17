@@ -45,9 +45,14 @@ The permitted values are deliberately closed or bounded:
 
 The three HTTP instruments are registered when the observability runtime
 starts. They record only for handlers explicitly wrapped at registration.
-Health, readiness, unmatched, and method-not-allowed requests are excluded. The
-current production router contains only health and readiness routes, so it
-exports no HTTP request points yet.
+Health, readiness, unmatched, and method-not-allowed requests are excluded.
+
+The versioned `/v1` routes are wrapped, so the production process now exports
+HTTP request points for them. The dimension is always the registered route
+pattern, never the request path: `/v1/plans/{planID}` is one bounded series,
+while the path it matched carries a content digest and would mint a new series
+per plan. Because plan identities are caller-influenced, using the path would
+make metric cardinality growable by anyone able to call the API.
 
 ### Semantic dimension values
 
@@ -98,10 +103,19 @@ because emitting a placeholder would assert a classification the spine never
 made; the always-required `phase` and `result` instead fall back to
 `internal_error`, which is a deliberate tripwire rather than a category.
 
-The semantic instruments are registered because the corresponding internal use
-case exists. There is no public caller yet, so the production process records
-no semantic points; package tests exercise recording without introducing an
-HTTP or CLI surface.
+The semantic instruments are registered because the corresponding use case
+exists, and `POST /v1/executions` is now a public caller of it, so the
+production process does record semantic points. Nothing about the recording
+rules changes: an execution driven over HTTP produces exactly the phases,
+structural operations, checkpoints, invariant failures, and readiness
+assessments described above, because the observer is the same non-authoritative
+adapter the use case has always been given.
+
+No identity reaches a metric dimension along that path. Tenant identifiers,
+plan identities, run and execution identities, and artifact digests are absent
+from every instrument here by construction: the semantic instruments receive
+only a bounded projection with no identity fields, and the HTTP instruments
+receive only the registered route pattern.
 
 Exemplars are disabled. OTel views repeat each instrument's attribute
 allowlist inside the SDK, so a future recording call cannot add a dimension.

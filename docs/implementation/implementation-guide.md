@@ -63,10 +63,15 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
   registered semantic instruments in `METRICS.md`.
 - Stable typed application machinery errors with fixed safe text and preserved
   cause chains, registered in `ERRORS.md`.
+- A tenant-scoped HTTP surface over the spine: plan compilation, plan
+  retrieval including the declarations the compiler accepted, and synchronous
+  execution. `api/openapi.yaml` is the authoritative contract; Go server and
+  client code are generated from it and a drift gate runs inside `make verify`.
+- Storage interfaces owned by the application in `internal/ports`, with an
+  in-process adapter in `internal/adapters/memory`.
 
-There is no public transformation API, worker, persistence adapter, promotion
-gate, publication path, or production team-HOS policy. The spine is an internal
-operation exercised by tests only.
+There is no worker mode, durable persistence, promotion gate, publication path,
+authentication, or production team-HOS policy.
 
 ## Current repository map
 
@@ -78,6 +83,11 @@ internal/observability/          operational config, slog, OTel runtime, HTTP in
 internal/semantic/               pure typed state, compiler, atomic patches, reference executor, invariants, journal, checkpoints, and readiness
 internal/fixtures/teamhos/       data-only ratified team-HOS declarations and initial-state variants
 internal/app/                    spine orchestration, verified frontier, closed observation contract, typed machinery errors
+internal/httpapi/                transport: generated routing, problems, tenant scoping, wire translation, handlers
+internal/httpapi/openapiv1/      GENERATED server types and routing; never hand-edited
+internal/httpapiclient/          GENERATED client, used only by tests
+internal/ports/                  storage interfaces owned by the application
+internal/adapters/memory/        in-process storage adapter
 Dockerfile                       non-root application image
 Makefile                         explicit local verification commands
 .github/workflows/pipeline.yml   CI and ECR publication
@@ -118,9 +128,7 @@ cardinality boundary.
 
 ## Semantic spine flow
 
-`app.Run` is an internal use case with no HTTP route, CLI command, worker, or
-scheduler. Nothing in the running process invokes it; tests are its only
-callers. It executes:
+`app.Run` is reached by `POST /v1/executions`. It executes:
 
 1. compile the plan and profiles;
 2. bind the run over the pinned initial state, world, executor identity, and
@@ -190,6 +198,22 @@ parenting their traces.
   such as queued, retrying, timed out, or cancelled must never force a semantic
   schema or version change, and new semantic outcomes must never require the
   execution controller to own semantic vocabulary.
+- The transport layer translates and never decides. Handlers map wire documents
+  onto kernel constructors and project artifacts back; they evaluate no rule,
+  invariant, or readiness verdict. The compiler request for a stored plan is
+  rebuilt from its immutable compilation on each use rather than retained,
+  because a compiler request is an ordinary authoring structure of exported
+  slices and pointers and storing one would hand callers a mutable alias into
+  the store.
+- JSON is never a canonicalizer. Identities in responses are the kernel's,
+  copied verbatim; nothing in the transport layer hashes a document or
+  assembles a digest, and a test fails the build on a digest literal or a hash
+  import in that package.
+- Tenant scoping is structural. The storage key includes the tenant and the
+  port exposes no lookup by identity alone, so an unscoped read is not
+  expressible rather than merely discouraged. Another tenant's artifact is
+  reported as absent, because distinguishing absence from refusal leaks
+  existence.
 - Telemetry dimensions fail closed. `internal/observability` re-declares the
   whole closed vocabulary rather than reusing the application's, so widening an
   application enum cannot widen telemetry without a deliberate edit at the
@@ -282,6 +306,13 @@ absent by design at this stage.
 The team-HOS rule is a sanitized fixture, not production policy. Its
 componentwise-maximum reduction is chosen for determinism in the walking
 skeleton and must not be mistaken for a real hours-of-service rule.
+
+Execution is synchronous and returns `200`, while the High-Level Design
+specifies `202 Accepted` with a separate read. That deviation is deliberate and
+interim: the asynchronous shape requires a worker mode and durable storage,
+neither of which exists. The response body is the projection the eventual read
+will return, so clients written now keep working. Retiring the deviation is a
+required part of the slice that adds a worker, not optional cleanup.
 
 `ProvenancePolicy` currently has exactly one valid value, `changes.v1`, so the
 policy dimension of the identity matrix is proved by construction rather than

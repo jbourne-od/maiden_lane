@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	openapiv1 "github.com/optimaldynamics/maiden-lane/internal/httpapi/openapiv1"
+	"github.com/optimaldynamics/maiden-lane/internal/ports"
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
 )
 
@@ -847,3 +848,49 @@ const maxRequestBytes = 8 << 20
 // errUnsupportedMediaType is distinguished from a translation failure so a
 // handler can answer 415 rather than 400.
 var errUnsupportedMediaType = errors.New("httpapi: unsupported media type")
+
+// compileRequestFor rebuilds the compiler input for a stored plan.
+//
+// The application use case owns the whole compile-bind-execute sequence and so
+// takes a compiler request rather than an already-compiled plan. The request is
+// deliberately NOT retained in storage: unlike a Schema or a Compilation it is
+// an ordinary authoring structure of exported slices and pointers, so storing
+// it would hand every caller a mutable alias into the store and quietly break
+// the port's promise to transport only immutable values.
+//
+// Rebuilding is safe because every accessor used here deep-copies: the plan's
+// transformations, each normalized declaration, the checkpoint list, each
+// compiled profile's declaration, and the schema declaration. The result is a
+// fresh structure per call that shares nothing with the stored artifact.
+//
+// The declarations are the compiler's own normalized output, so recompiling
+// them reproduces the same PlanID. The caller verifies that rather than
+// assuming it.
+func compileRequestFor(record ports.PlanRecord) (semantic.CompileRequest, bool) {
+	plan, ok := record.Compilation.Plan()
+	if !ok {
+		return semantic.CompileRequest{}, false
+	}
+
+	compiled := plan.Transformations()
+	transformations := make([]semantic.TransformationDeclaration, 0, len(compiled))
+	for _, transformation := range compiled {
+		transformations = append(transformations, transformation.Declaration())
+	}
+
+	profiles := record.Compilation.Profiles()
+	declarations := make([]semantic.ProfileDeclaration, 0, len(profiles))
+	for _, profile := range profiles {
+		declarations = append(declarations, profile.Declaration())
+	}
+
+	return semantic.CompileRequest{
+		Schema: record.Schema.Declaration(),
+		Rules: semantic.RulesetDeclaration{
+			Transformations: transformations,
+			Checkpoints:     plan.Checkpoints(),
+		},
+		Profiles:                 declarations,
+		CompilerSemanticsVersion: plan.CompilerVersion(),
+	}, true
+}

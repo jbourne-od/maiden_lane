@@ -51,6 +51,39 @@ This slice implements no publication or promotion path, so the publication
 column states which artifacts survive the failure rather than describing a
 gate that does not exist yet. Update it when publication is implemented.
 
+## HTTP problem types
+
+The HTTP boundary reports failure as RFC 9457 `application/problem+json` using
+a closed vocabulary of stable type URIs under
+`https://maiden-lane.optimaldynamics.com/problems/`. A call site selects a
+ratified type; it cannot compose a new one.
+
+| Type | Status | Meaning |
+|---|---|---|
+| `invalid-request` | 400 | The body was malformed, carried an unknown member, or omitted a required reference. |
+| `tenant-required` | 400 | The tenant header was absent, repeated, or not of the declared form. |
+| `not-found` | 404 | No such artifact for this tenant. Also returned for another tenant's artifact and for an unmatched path. |
+| `method-not-allowed` | 405 | The resource does not support the requested method. |
+| `unsupported-media-type` | 415 | The request body was not `application/json`. |
+| `invalid-plan` | 422 | Compilation rejected the declarations. Carries the closed diagnostic codes and no `planID`. |
+| `invalid-semantic-input` | 422 | Canonical input was incomplete or unsupported, including declarations the compiler cannot canonicalize at all. |
+| `internal-error` | 500 | An internal inconsistency, including a stored plan that no longer reproduces its own identity. |
+| `dependency-unavailable` | 503 | A required dependency was unavailable, or the caller's context was cancelled. Retryable. |
+
+Two boundaries matter more than the table.
+
+**A deterministic semantic outcome is never a problem document.** A failed
+protected invariant, an artifact integrity failure, and a `needs_input`
+readiness verdict are answers the computation produced. `POST /v1/executions`
+returns them as `200` with a typed `failure` field and every artifact that
+verified beforehand. Reporting them as `5xx` would misclassify a correct
+refusal as a service fault and invite a retry that can only reproduce it.
+
+**Problem documents carry fixed text only.** Titles and details are constants
+selected by type. No payload, digest, entity reference, evidence body, tenant
+value, or Go error text is representable in one, so a problem is safe to log
+verbatim and cannot reflect caller input back to a caller.
+
 `app.Run` additionally wraps every machinery failure in an unexported error
 whose text names only the closed phase that failed. The wrapper is not part of
 the catalog because callers must not match on it: use `errors.Is` for

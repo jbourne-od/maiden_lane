@@ -715,10 +715,14 @@ components:
           enum: [protected_invariant_failed, artifact_integrity_failed]
         code:
           type: string
-          description: The closed invariant, operation-invariant, or integrity code.
-        rule:
-          type: string
-          description: The rule whose execution was rejected, when applicable.
+          description: |
+            The closed invariant, operation-invariant, or integrity code.
+
+            The rejected rule is deliberately not reported here. A failure
+            report is a canonical semantic artifact and does not carry a rule
+            identity; the accepted rule list plus the closed code identify the
+            boundary that refused, without inventing a field the kernel cannot
+            populate truthfully.
       additionalProperties: false
 
     Execution:

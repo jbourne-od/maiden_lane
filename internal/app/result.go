@@ -80,6 +80,11 @@ func (s ExecutionStatus) String() string {
 type SpineResult struct {
 	status             SpineStatus
 	executionStatus    ExecutionStatus
+	semanticRunID      semantic.SemanticRunID
+	executionID        semantic.ExecutionID
+	inputID            semantic.InputID
+	worldID            semantic.WorldID
+	journalPrefix      semantic.JournalPrefixDigest
 	plan               *semantic.Plan
 	profiles           []semantic.CompiledProfile
 	compilationFailure *semantic.CompilationFailure
@@ -97,6 +102,42 @@ func (r SpineResult) Status() SpineStatus { return r.status }
 // execution was established.
 func (r SpineResult) ExecutionStatus() (ExecutionStatus, bool) {
 	return r.executionStatus, r.executionStatus != 0
+}
+
+// SemanticRunID returns the identity of the semantic run, present once
+// binding established one. It identifies what was computed, independently of
+// which executor computed it, so two backends running the same semantic
+// request share it.
+func (r SpineResult) SemanticRunID() (semantic.SemanticRunID, bool) {
+	return r.semanticRunID, r.semanticRunID != ""
+}
+
+// ExecutionID returns the identity of this execution, present once binding
+// established one. Unlike SemanticRunID it incorporates the executor identity,
+// so changing only the executor produces a different ExecutionID over the same
+// semantic run. Both are derived, never allocated: repeating an identical
+// request reproduces both.
+func (r SpineResult) ExecutionID() (semantic.ExecutionID, bool) {
+	return r.executionID, r.executionID != ""
+}
+
+// InputID returns the identity of the pinned input, present once binding
+// established one. With WorldID it names everything the run was pinned to, so
+// a caller holding these can reconstruct which inputs produced an artifact.
+func (r SpineResult) InputID() (semantic.InputID, bool) {
+	return r.inputID, r.inputID != ""
+}
+
+// WorldID returns the identity of the pinned execution world.
+func (r SpineResult) WorldID() (semantic.WorldID, bool) {
+	return r.worldID, r.worldID != ""
+}
+
+// JournalPrefixDigest returns the accepted history's content identity at the
+// point the run finished, whether it succeeded or retained a prefix. It covers
+// committed transitions only; rejections never entered it.
+func (r SpineResult) JournalPrefixDigest() (semantic.JournalPrefixDigest, bool) {
+	return r.journalPrefix, r.journalPrefix != ""
 }
 
 // Plan returns the compiled plan when compilation succeeded.

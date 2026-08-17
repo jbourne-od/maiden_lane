@@ -658,11 +658,14 @@ type SchemaDeclaration struct {
 // verified before the rejection is retained.
 type SemanticFailure struct {
 	// Code The closed invariant, operation-invariant, or integrity code.
+	//
+	// The rejected rule is deliberately not reported here. A failure
+	// report is a canonical semantic artifact and does not carry a rule
+	// identity; the accepted rule list plus the closed code identify the
+	// boundary that refused, without inventing a field the kernel cannot
+	// populate truthfully.
 	Code *string             `json:"code,omitempty"`
 	Kind SemanticFailureKind `json:"kind"`
-
-	// Rule The rule whose execution was rejected, when applicable.
-	Rule *string `json:"rule,omitempty"`
 }
 
 // SemanticFailureKind defines model for SemanticFailure.Kind.
