@@ -230,14 +230,6 @@ func TestCreatePlanRejectsMalformedBodies(t *testing.T) {
 	}
 }
 
-func newTestRouter(t *testing.T) http.Handler {
-	t.Helper()
-	return NewRouter(Dependencies{
-		Plans:  memory.NewStore(),
-		Runner: ProductionRunner(),
-	})
-}
-
 // fixtureDeclarations renders the ratified team-HOS declarations as the wire
 // document a client would send.
 func fixtureDeclarations(t *testing.T) openapiv1.PlanDeclarations {
@@ -328,5 +320,41 @@ func TestUncanonicalizableDeclarationsAreNotAServerFault(t *testing.T) {
 	decodeBody(t, recorder, &problem)
 	if problem.Type != problemBaseURI+"invalid-semantic-input" {
 		t.Fatalf("problem type = %s, want invalid-semantic-input", problem.Type)
+	}
+}
+
+// newTestRouter builds the router over one adapter serving both ports, as the
+// process wires it. Two separate stores would model a plan store and an execution
+// queue that cannot see each other, which the composition never produces.
+func newTestRouter(t *testing.T) http.Handler {
+	t.Helper()
+	return NewRouter(oneStoreDependencies())
+}
+
+func oneStoreDependencies() Dependencies {
+	store := memory.NewStore()
+	return Dependencies{Plans: store, Executions: store}
+}
+
+// Production break caught by running the binary, not by the suite: the compiler
+// accepts a ruleset with no transformations and returns a plan, but the
+// application refuses to execute one. A caller could therefore create a plan,
+// submit an execution against it, receive 202, and find the execution terminally
+// failed — with no way to clear it, because execution identity is derived and
+// resubmitting returns the same failed row. Refusing at creation keeps one rule
+// rather than two and closes the trap at the earliest point.
+func TestPlanWithNoTransformationsIsRefused(t *testing.T) {
+	router := newTestRouter(t)
+	declarations := fixtureDeclarations(t)
+	declarations.Rules.Transformations = nil
+
+	recorder := postJSON(t, router, "/v1/plans", "acme", declarations)
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422: %s", recorder.Code, recorder.Body.String())
+	}
+	var problem openapiv1.Problem
+	decodeBody(t, recorder, &problem)
+	if problem.Type != problemBaseURI+"invalid-semantic-input" {
+		t.Fatalf("problem type = %s", problem.Type)
 	}
 }

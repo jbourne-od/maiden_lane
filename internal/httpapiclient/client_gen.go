@@ -85,45 +85,45 @@ func (e CreateExecutionRequestProvenancePolicy) Valid() bool {
 	}
 }
 
-// Defines values for ExecutionExecutionStatus.
+// Defines values for ExecutionResultSpineStatus.
 const (
-	ExecutionExecutionStatusFailed    ExecutionExecutionStatus = "failed"
-	ExecutionExecutionStatusPending   ExecutionExecutionStatus = "pending"
-	ExecutionExecutionStatusRunning   ExecutionExecutionStatus = "running"
-	ExecutionExecutionStatusSucceeded ExecutionExecutionStatus = "succeeded"
+	ExecutionResultSpineStatusFailed      ExecutionResultSpineStatus = "failed"
+	ExecutionResultSpineStatusInvalidPlan ExecutionResultSpineStatus = "invalid_plan"
+	ExecutionResultSpineStatusSucceeded   ExecutionResultSpineStatus = "succeeded"
 )
 
-// Valid indicates whether the value is a known member of the ExecutionExecutionStatus enum.
-func (e ExecutionExecutionStatus) Valid() bool {
+// Valid indicates whether the value is a known member of the ExecutionResultSpineStatus enum.
+func (e ExecutionResultSpineStatus) Valid() bool {
 	switch e {
-	case ExecutionExecutionStatusFailed:
+	case ExecutionResultSpineStatusFailed:
 		return true
-	case ExecutionExecutionStatusPending:
+	case ExecutionResultSpineStatusInvalidPlan:
 		return true
-	case ExecutionExecutionStatusRunning:
-		return true
-	case ExecutionExecutionStatusSucceeded:
+	case ExecutionResultSpineStatusSucceeded:
 		return true
 	default:
 		return false
 	}
 }
 
-// Defines values for ExecutionSpineStatus.
+// Defines values for ExecutionStatus.
 const (
-	ExecutionSpineStatusFailed      ExecutionSpineStatus = "failed"
-	ExecutionSpineStatusInvalidPlan ExecutionSpineStatus = "invalid_plan"
-	ExecutionSpineStatusSucceeded   ExecutionSpineStatus = "succeeded"
+	ExecutionStatusFailed    ExecutionStatus = "failed"
+	ExecutionStatusPending   ExecutionStatus = "pending"
+	ExecutionStatusRunning   ExecutionStatus = "running"
+	ExecutionStatusSucceeded ExecutionStatus = "succeeded"
 )
 
-// Valid indicates whether the value is a known member of the ExecutionSpineStatus enum.
-func (e ExecutionSpineStatus) Valid() bool {
+// Valid indicates whether the value is a known member of the ExecutionStatus enum.
+func (e ExecutionStatus) Valid() bool {
 	switch e {
-	case ExecutionSpineStatusFailed:
+	case ExecutionStatusFailed:
 		return true
-	case ExecutionSpineStatusInvalidPlan:
+	case ExecutionStatusPending:
 		return true
-	case ExecutionSpineStatusSucceeded:
+	case ExecutionStatusRunning:
+		return true
+	case ExecutionStatusSucceeded:
 		return true
 	default:
 		return false
@@ -418,18 +418,56 @@ type EntityInput struct {
 
 // Execution defines model for Execution.
 type Execution struct {
+	// ExecutionID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	ExecutionID Digest `json:"executionID"`
+
+	// ExecutionStatus Application control-plane lifecycle state, deliberately excluded from
+	// canonical semantic identity. The semantic layer answers what a
+	// computation meant; this answers what happened while it ran.
+	ExecutionStatus ExecutionStatus `json:"executionStatus"`
+
+	// FailureReason A bounded operational code present only when the execution could not
+	// be attempted. It is not a semantic outcome: a computation that ran
+	// and refused reports that through `result.failure`.
+	FailureReason *string `json:"failureReason,omitempty"`
+
+	// PlanID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	PlanID Digest `json:"planID"`
+
+	// Result The complete answer of a finished execution. Present only once the
+	// execution finished, so a caller must not infer one from the status alone.
+	Result *ExecutionResult `json:"result,omitempty"`
+
+	// SemanticRunID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	SemanticRunID Digest `json:"semanticRunID"`
+}
+
+// ExecutionAccepted The identities of an accepted execution, returned immediately on submission.
+type ExecutionAccepted struct {
+	// ExecutionID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	ExecutionID Digest `json:"executionID"`
+
+	// ExecutionStatus Application control-plane lifecycle state, deliberately excluded from
+	// canonical semantic identity. The semantic layer answers what a
+	// computation meant; this answers what happened while it ran.
+	ExecutionStatus ExecutionStatus `json:"executionStatus"`
+
+	// PlanID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	PlanID Digest `json:"planID"`
+
+	// SemanticRunID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	SemanticRunID Digest `json:"semanticRunID"`
+}
+
+// ExecutionResult The complete answer of a finished execution. Present only once the
+// execution finished, so a caller must not infer one from the status alone.
+type ExecutionResult struct {
 	// AcceptedRules Committed transitions in accepted order. Rejections never appear here.
 	AcceptedRules *[]string    `json:"acceptedRules,omitempty"`
 	Assessments   []Assessment `json:"assessments"`
 
 	// Checkpoints Sealed checkpoints in the independently verified dependency-closed frontier.
 	Checkpoints []Checkpoint `json:"checkpoints"`
-
-	// ExecutionID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
-	ExecutionID *Digest `json:"executionID,omitempty"`
-
-	// ExecutionStatus Application control-plane lifecycle state. It is deliberately excluded from canonical semantic identity.
-	ExecutionStatus *ExecutionExecutionStatus `json:"executionStatus,omitempty"`
 
 	// Failure A deterministic semantic rejection. Its presence does not make the HTTP
 	// response an error: the run produced a real answer, and every artifact
@@ -443,24 +481,20 @@ type Execution struct {
 	InputID *Digest `json:"inputID,omitempty"`
 
 	// JournalPrefixDigest A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
-	JournalPrefixDigest *Digest `json:"journalPrefixDigest,omitempty"`
-
-	// PlanID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
-	PlanID Digest `json:"planID"`
-
-	// SemanticRunID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
-	SemanticRunID *Digest              `json:"semanticRunID,omitempty"`
-	SpineStatus   ExecutionSpineStatus `json:"spineStatus"`
+	JournalPrefixDigest *Digest                    `json:"journalPrefixDigest,omitempty"`
+	SpineStatus         ExecutionResultSpineStatus `json:"spineStatus"`
 
 	// WorldID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
 	WorldID *Digest `json:"worldID,omitempty"`
 }
 
-// ExecutionExecutionStatus Application control-plane lifecycle state. It is deliberately excluded from canonical semantic identity.
-type ExecutionExecutionStatus string
+// ExecutionResultSpineStatus defines model for ExecutionResult.SpineStatus.
+type ExecutionResultSpineStatus string
 
-// ExecutionSpineStatus defines model for Execution.SpineStatus.
-type ExecutionSpineStatus string
+// ExecutionStatus Application control-plane lifecycle state, deliberately excluded from
+// canonical semantic identity. The semantic layer answers what a
+// computation meant; this answers what happened while it ran.
+type ExecutionStatus string
 
 // ExecutorIdentity The executing backend. It affects only `executionID` and never enters checkpoint or journal identity.
 type ExecutorIdentity struct {
@@ -768,6 +802,13 @@ type CreateExecutionParams struct {
 	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
 }
 
+// GetExecutionParams defines parameters for GetExecution.
+type GetExecutionParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
 // CreatePlanParams defines parameters for CreatePlan.
 type CreatePlanParams struct {
 	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
@@ -874,26 +915,19 @@ type ClientInterface interface {
 
 	// CreateExecutionWithBody Execute a compiled plan
 	//
-	// Executes a previously compiled plan over a pinned initial state and
-	// world, sealing every declared checkpoint and assessing readiness under
-	// every compiled profile.
+	// Accepts a previously compiled plan for execution over a pinned initial
+	// state and world. The execution is queued and runs asynchronously; poll
+	// `GET /v1/executions/{executionID}` for its status and result.
 	//
-	// INTERIM DEVIATION: the High-Level Design specifies that this operation
-	// returns `202 Accepted` and that results are retrieved separately. That
-	// shape requires a worker mode and durable storage, neither of which
-	// exists yet, so this implementation executes synchronously and returns
-	// `200 OK` with the complete result. The response body is the same
-	// projection the future asynchronous read will return, so clients written
-	// against this operation keep working when the asynchronous shape lands.
+	// Submission is idempotent, and needs no idempotency key to be. Execution
+	// identity is derived from the semantic request rather than allocated, so
+	// resubmitting identical inputs returns the same `executionID` and creates
+	// no second execution. Changing only the executor identity preserves
+	// `semanticRunID` and produces a different `executionID`.
 	//
-	// A deterministic semantic rejection is a `200` response carrying a typed
-	// failure and the retained verified prefix. It is not a problem document,
-	// because the run produced a real answer.
-	//
-	// Execution identity is derived, not allocated: repeating an identical
-	// request reproduces the same `semanticRunID` and `executionID`, and
-	// changing only the executor identity preserves `semanticRunID` while
-	// producing a different `executionID`.
+	// There is no synchronous variant. A caller wanting a result in one call
+	// polls the read operation; a convenience wrapper belongs in a client
+	// rather than in a second server behaviour with its own lifecycle.
 	//
 	// Takes any type of body and a specified content type.
 	//
@@ -902,31 +936,39 @@ type ClientInterface interface {
 
 	// CreateExecution Execute a compiled plan
 	//
-	// Executes a previously compiled plan over a pinned initial state and
-	// world, sealing every declared checkpoint and assessing readiness under
-	// every compiled profile.
+	// Accepts a previously compiled plan for execution over a pinned initial
+	// state and world. The execution is queued and runs asynchronously; poll
+	// `GET /v1/executions/{executionID}` for its status and result.
 	//
-	// INTERIM DEVIATION: the High-Level Design specifies that this operation
-	// returns `202 Accepted` and that results are retrieved separately. That
-	// shape requires a worker mode and durable storage, neither of which
-	// exists yet, so this implementation executes synchronously and returns
-	// `200 OK` with the complete result. The response body is the same
-	// projection the future asynchronous read will return, so clients written
-	// against this operation keep working when the asynchronous shape lands.
+	// Submission is idempotent, and needs no idempotency key to be. Execution
+	// identity is derived from the semantic request rather than allocated, so
+	// resubmitting identical inputs returns the same `executionID` and creates
+	// no second execution. Changing only the executor identity preserves
+	// `semanticRunID` and produces a different `executionID`.
 	//
-	// A deterministic semantic rejection is a `200` response carrying a typed
-	// failure and the retained verified prefix. It is not a problem document,
-	// because the run produced a real answer.
-	//
-	// Execution identity is derived, not allocated: repeating an identical
-	// request reproduces the same `semanticRunID` and `executionID`, and
-	// changing only the executor identity preserves `semanticRunID` while
-	// producing a different `executionID`.
+	// There is no synchronous variant. A caller wanting a result in one call
+	// polls the read operation; a convenience wrapper belongs in a client
+	// rather than in a second server behaviour with its own lifecycle.
 	//
 	// Takes a body of the `application/json` content type.
 	//
 	// Corresponds with POST /v1/executions (the `CreateExecution` operationId).
 	CreateExecution(ctx context.Context, params *CreateExecutionParams, body CreateExecutionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetExecution Retrieve an execution
+	//
+	// Reports the lifecycle status of an execution and, once it has finished,
+	// the complete result.
+	//
+	// A `result` is present only for a finished execution. A deterministic
+	// semantic rejection is a finished execution whose result carries a typed
+	// `failure`: the computation produced a real answer, so it is reported here
+	// rather than as a problem document. `failureReason` is different — it is a
+	// bounded operational code meaning the execution could not be attempted at
+	// all.
+	//
+	// Corresponds with GET /v1/executions/{executionID} (the `GetExecution` operationId).
+	GetExecution(ctx context.Context, executionID Digest, params *GetExecutionParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreatePlanWithBody Compile declarations into a semantic plan
 	//
@@ -994,26 +1036,19 @@ func (c *Client) GetReadiness(ctx context.Context, reqEditors ...RequestEditorFn
 
 // CreateExecutionWithBody Execute a compiled plan
 //
-// Executes a previously compiled plan over a pinned initial state and
-// world, sealing every declared checkpoint and assessing readiness under
-// every compiled profile.
+// Accepts a previously compiled plan for execution over a pinned initial
+// state and world. The execution is queued and runs asynchronously; poll
+// `GET /v1/executions/{executionID}` for its status and result.
 //
-// INTERIM DEVIATION: the High-Level Design specifies that this operation
-// returns `202 Accepted` and that results are retrieved separately. That
-// shape requires a worker mode and durable storage, neither of which
-// exists yet, so this implementation executes synchronously and returns
-// `200 OK` with the complete result. The response body is the same
-// projection the future asynchronous read will return, so clients written
-// against this operation keep working when the asynchronous shape lands.
+// Submission is idempotent, and needs no idempotency key to be. Execution
+// identity is derived from the semantic request rather than allocated, so
+// resubmitting identical inputs returns the same `executionID` and creates
+// no second execution. Changing only the executor identity preserves
+// `semanticRunID` and produces a different `executionID`.
 //
-// A deterministic semantic rejection is a `200` response carrying a typed
-// failure and the retained verified prefix. It is not a problem document,
-// because the run produced a real answer.
-//
-// Execution identity is derived, not allocated: repeating an identical
-// request reproduces the same `semanticRunID` and `executionID`, and
-// changing only the executor identity preserves `semanticRunID` while
-// producing a different `executionID`.
+// There is no synchronous variant. A caller wanting a result in one call
+// polls the read operation; a convenience wrapper belongs in a client
+// rather than in a second server behaviour with its own lifecycle.
 //
 // Takes any type of body and a specified content type.
 //
@@ -1032,32 +1067,50 @@ func (c *Client) CreateExecutionWithBody(ctx context.Context, params *CreateExec
 
 // CreateExecution Execute a compiled plan
 //
-// Executes a previously compiled plan over a pinned initial state and
-// world, sealing every declared checkpoint and assessing readiness under
-// every compiled profile.
+// Accepts a previously compiled plan for execution over a pinned initial
+// state and world. The execution is queued and runs asynchronously; poll
+// `GET /v1/executions/{executionID}` for its status and result.
 //
-// INTERIM DEVIATION: the High-Level Design specifies that this operation
-// returns `202 Accepted` and that results are retrieved separately. That
-// shape requires a worker mode and durable storage, neither of which
-// exists yet, so this implementation executes synchronously and returns
-// `200 OK` with the complete result. The response body is the same
-// projection the future asynchronous read will return, so clients written
-// against this operation keep working when the asynchronous shape lands.
+// Submission is idempotent, and needs no idempotency key to be. Execution
+// identity is derived from the semantic request rather than allocated, so
+// resubmitting identical inputs returns the same `executionID` and creates
+// no second execution. Changing only the executor identity preserves
+// `semanticRunID` and produces a different `executionID`.
 //
-// A deterministic semantic rejection is a `200` response carrying a typed
-// failure and the retained verified prefix. It is not a problem document,
-// because the run produced a real answer.
-//
-// Execution identity is derived, not allocated: repeating an identical
-// request reproduces the same `semanticRunID` and `executionID`, and
-// changing only the executor identity preserves `semanticRunID` while
-// producing a different `executionID`.
+// There is no synchronous variant. A caller wanting a result in one call
+// polls the read operation; a convenience wrapper belongs in a client
+// rather than in a second server behaviour with its own lifecycle.
 //
 // Takes a body of the `application/json` content type.
 //
 // Corresponds with POST /v1/executions (the `CreateExecution` operationId).
 func (c *Client) CreateExecution(ctx context.Context, params *CreateExecutionParams, body CreateExecutionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateExecutionRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetExecution Retrieve an execution
+//
+// Reports the lifecycle status of an execution and, once it has finished,
+// the complete result.
+//
+// A `result` is present only for a finished execution. A deterministic
+// semantic rejection is a finished execution whose result carries a typed
+// `failure`: the computation produced a real answer, so it is reported here
+// rather than as a problem document. `failureReason` is different — it is a
+// bounded operational code meaning the execution could not be attempted at
+// all.
+//
+// Corresponds with GET /v1/executions/{executionID} (the `GetExecution` operationId).
+func (c *Client) GetExecution(ctx context.Context, executionID Digest, params *GetExecutionParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetExecutionRequest(c.Server, executionID, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1238,6 +1291,53 @@ func NewCreateExecutionRequestWithBody(server string, params *CreateExecutionPar
 	return req, nil
 }
 
+// NewGetExecutionRequest constructs an http.Request for the GetExecution method
+func NewGetExecutionRequest(server string, executionID Digest, params *GetExecutionParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "executionID", executionID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/executions/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Maiden-Lane-Tenant", params.XMaidenLaneTenant, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Maiden-Lane-Tenant", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewCreatePlanRequest calls the generic CreatePlan builder with application/json body
 func NewCreatePlanRequest(server string, params *CreatePlanParams, body CreatePlanJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -1398,26 +1498,19 @@ type ClientWithResponsesInterface interface {
 
 	// CreateExecutionWithBodyWithResponse Execute a compiled plan
 	//
-	// Executes a previously compiled plan over a pinned initial state and
-	// world, sealing every declared checkpoint and assessing readiness under
-	// every compiled profile.
+	// Accepts a previously compiled plan for execution over a pinned initial
+	// state and world. The execution is queued and runs asynchronously; poll
+	// `GET /v1/executions/{executionID}` for its status and result.
 	//
-	// INTERIM DEVIATION: the High-Level Design specifies that this operation
-	// returns `202 Accepted` and that results are retrieved separately. That
-	// shape requires a worker mode and durable storage, neither of which
-	// exists yet, so this implementation executes synchronously and returns
-	// `200 OK` with the complete result. The response body is the same
-	// projection the future asynchronous read will return, so clients written
-	// against this operation keep working when the asynchronous shape lands.
+	// Submission is idempotent, and needs no idempotency key to be. Execution
+	// identity is derived from the semantic request rather than allocated, so
+	// resubmitting identical inputs returns the same `executionID` and creates
+	// no second execution. Changing only the executor identity preserves
+	// `semanticRunID` and produces a different `executionID`.
 	//
-	// A deterministic semantic rejection is a `200` response carrying a typed
-	// failure and the retained verified prefix. It is not a problem document,
-	// because the run produced a real answer.
-	//
-	// Execution identity is derived, not allocated: repeating an identical
-	// request reproduces the same `semanticRunID` and `executionID`, and
-	// changing only the executor identity preserves `semanticRunID` while
-	// producing a different `executionID`.
+	// There is no synchronous variant. A caller wanting a result in one call
+	// polls the read operation; a convenience wrapper belongs in a client
+	// rather than in a second server behaviour with its own lifecycle.
 	//
 	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 	//
@@ -1426,31 +1519,41 @@ type ClientWithResponsesInterface interface {
 
 	// CreateExecutionWithResponse Execute a compiled plan
 	//
-	// Executes a previously compiled plan over a pinned initial state and
-	// world, sealing every declared checkpoint and assessing readiness under
-	// every compiled profile.
+	// Accepts a previously compiled plan for execution over a pinned initial
+	// state and world. The execution is queued and runs asynchronously; poll
+	// `GET /v1/executions/{executionID}` for its status and result.
 	//
-	// INTERIM DEVIATION: the High-Level Design specifies that this operation
-	// returns `202 Accepted` and that results are retrieved separately. That
-	// shape requires a worker mode and durable storage, neither of which
-	// exists yet, so this implementation executes synchronously and returns
-	// `200 OK` with the complete result. The response body is the same
-	// projection the future asynchronous read will return, so clients written
-	// against this operation keep working when the asynchronous shape lands.
+	// Submission is idempotent, and needs no idempotency key to be. Execution
+	// identity is derived from the semantic request rather than allocated, so
+	// resubmitting identical inputs returns the same `executionID` and creates
+	// no second execution. Changing only the executor identity preserves
+	// `semanticRunID` and produces a different `executionID`.
 	//
-	// A deterministic semantic rejection is a `200` response carrying a typed
-	// failure and the retained verified prefix. It is not a problem document,
-	// because the run produced a real answer.
-	//
-	// Execution identity is derived, not allocated: repeating an identical
-	// request reproduces the same `semanticRunID` and `executionID`, and
-	// changing only the executor identity preserves `semanticRunID` while
-	// producing a different `executionID`.
+	// There is no synchronous variant. A caller wanting a result in one call
+	// polls the read operation; a convenience wrapper belongs in a client
+	// rather than in a second server behaviour with its own lifecycle.
 	//
 	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 	//
 	// Corresponds with POST /v1/executions (the `CreateExecution` operationId).
 	CreateExecutionWithResponse(ctx context.Context, params *CreateExecutionParams, body CreateExecutionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateExecutionResponse, error)
+
+	// GetExecutionWithResponse Retrieve an execution
+	//
+	// Reports the lifecycle status of an execution and, once it has finished,
+	// the complete result.
+	//
+	// A `result` is present only for a finished execution. A deterministic
+	// semantic rejection is a finished execution whose result carries a typed
+	// `failure`: the computation produced a real answer, so it is reported here
+	// rather than as a problem document. `failureReason` is different — it is a
+	// bounded operational code meaning the execution could not be attempted at
+	// all.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /v1/executions/{executionID} (the `GetExecution` operationId).
+	GetExecutionWithResponse(ctx context.Context, executionID Digest, params *GetExecutionParams, reqEditors ...RequestEditorFn) (*GetExecutionResponse, error)
 
 	// CreatePlanWithBodyWithResponse Compile declarations into a semantic plan
 	//
@@ -1573,8 +1676,8 @@ func (r GetReadinessResponse) ContentType() string {
 type CreateExecutionResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	// JSON200 the response for an HTTP 200 `application/json` response
-	JSON200 *Execution
+	// JSON202 the response for an HTTP 202 `application/json` response
+	JSON202 *ExecutionAccepted
 	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
 	ApplicationproblemJSON400 *BadRequest
 	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
@@ -1591,9 +1694,9 @@ type CreateExecutionResponse struct {
 	ApplicationproblemJSON503 *DependencyUnavailable
 }
 
-// GetJSON200 returns the response for an HTTP 200 `application/json` response
-func (r CreateExecutionResponse) GetJSON200() *Execution {
-	return r.JSON200
+// GetJSON202 returns the response for an HTTP 202 `application/json` response
+func (r CreateExecutionResponse) GetJSON202() *ExecutionAccepted {
+	return r.JSON202
 }
 
 // GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
@@ -1654,6 +1757,75 @@ func (r CreateExecutionResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r CreateExecutionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetExecutionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Execution
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON405 the response for an HTTP 405 `application/problem+json` response
+	ApplicationproblemJSON405 *MethodNotAllowed
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetExecutionResponse) GetJSON200() *Execution {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r GetExecutionResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r GetExecutionResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON405 returns the response for an HTTP 405 `application/problem+json` response
+func (r GetExecutionResponse) GetApplicationproblemJSON405() *MethodNotAllowed {
+	return r.ApplicationproblemJSON405
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r GetExecutionResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r GetExecutionResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetExecutionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetExecutionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetExecutionResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -1833,26 +2005,19 @@ func (c *ClientWithResponses) GetReadinessWithResponse(ctx context.Context, reqE
 
 // CreateExecutionWithBodyWithResponse Execute a compiled plan
 //
-// Executes a previously compiled plan over a pinned initial state and
-// world, sealing every declared checkpoint and assessing readiness under
-// every compiled profile.
+// Accepts a previously compiled plan for execution over a pinned initial
+// state and world. The execution is queued and runs asynchronously; poll
+// `GET /v1/executions/{executionID}` for its status and result.
 //
-// INTERIM DEVIATION: the High-Level Design specifies that this operation
-// returns `202 Accepted` and that results are retrieved separately. That
-// shape requires a worker mode and durable storage, neither of which
-// exists yet, so this implementation executes synchronously and returns
-// `200 OK` with the complete result. The response body is the same
-// projection the future asynchronous read will return, so clients written
-// against this operation keep working when the asynchronous shape lands.
+// Submission is idempotent, and needs no idempotency key to be. Execution
+// identity is derived from the semantic request rather than allocated, so
+// resubmitting identical inputs returns the same `executionID` and creates
+// no second execution. Changing only the executor identity preserves
+// `semanticRunID` and produces a different `executionID`.
 //
-// A deterministic semantic rejection is a `200` response carrying a typed
-// failure and the retained verified prefix. It is not a problem document,
-// because the run produced a real answer.
-//
-// Execution identity is derived, not allocated: repeating an identical
-// request reproduces the same `semanticRunID` and `executionID`, and
-// changing only the executor identity preserves `semanticRunID` while
-// producing a different `executionID`.
+// There is no synchronous variant. A caller wanting a result in one call
+// polls the read operation; a convenience wrapper belongs in a client
+// rather than in a second server behaviour with its own lifecycle.
 //
 // Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
 //
@@ -1867,26 +2032,19 @@ func (c *ClientWithResponses) CreateExecutionWithBodyWithResponse(ctx context.Co
 
 // CreateExecutionWithResponse Execute a compiled plan
 //
-// Executes a previously compiled plan over a pinned initial state and
-// world, sealing every declared checkpoint and assessing readiness under
-// every compiled profile.
+// Accepts a previously compiled plan for execution over a pinned initial
+// state and world. The execution is queued and runs asynchronously; poll
+// `GET /v1/executions/{executionID}` for its status and result.
 //
-// INTERIM DEVIATION: the High-Level Design specifies that this operation
-// returns `202 Accepted` and that results are retrieved separately. That
-// shape requires a worker mode and durable storage, neither of which
-// exists yet, so this implementation executes synchronously and returns
-// `200 OK` with the complete result. The response body is the same
-// projection the future asynchronous read will return, so clients written
-// against this operation keep working when the asynchronous shape lands.
+// Submission is idempotent, and needs no idempotency key to be. Execution
+// identity is derived from the semantic request rather than allocated, so
+// resubmitting identical inputs returns the same `executionID` and creates
+// no second execution. Changing only the executor identity preserves
+// `semanticRunID` and produces a different `executionID`.
 //
-// A deterministic semantic rejection is a `200` response carrying a typed
-// failure and the retained verified prefix. It is not a problem document,
-// because the run produced a real answer.
-//
-// Execution identity is derived, not allocated: repeating an identical
-// request reproduces the same `semanticRunID` and `executionID`, and
-// changing only the executor identity preserves `semanticRunID` while
-// producing a different `executionID`.
+// There is no synchronous variant. A caller wanting a result in one call
+// polls the read operation; a convenience wrapper belongs in a client
+// rather than in a second server behaviour with its own lifecycle.
 //
 // Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
 //
@@ -1897,6 +2055,29 @@ func (c *ClientWithResponses) CreateExecutionWithResponse(ctx context.Context, p
 		return nil, err
 	}
 	return ParseCreateExecutionResponse(rsp)
+}
+
+// GetExecutionWithResponse Retrieve an execution
+//
+// Reports the lifecycle status of an execution and, once it has finished,
+// the complete result.
+//
+// A `result` is present only for a finished execution. A deterministic
+// semantic rejection is a finished execution whose result carries a typed
+// `failure`: the computation produced a real answer, so it is reported here
+// rather than as a problem document. `failureReason` is different — it is a
+// bounded operational code meaning the execution could not be attempted at
+// all.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /v1/executions/{executionID} (the `GetExecution` operationId).
+func (c *ClientWithResponses) GetExecutionWithResponse(ctx context.Context, executionID Digest, params *GetExecutionParams, reqEditors ...RequestEditorFn) (*GetExecutionResponse, error) {
+	rsp, err := c.GetExecution(ctx, executionID, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetExecutionResponse(rsp)
 }
 
 // CreatePlanWithBodyWithResponse Compile declarations into a semantic plan
@@ -2024,12 +2205,12 @@ func ParseCreateExecutionResponse(rsp *http.Response) (*CreateExecutionResponse,
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest Execution
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest ExecutionAccepted
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
-		response.JSON200 = &dest
+		response.JSON202 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest BadRequest
@@ -2079,6 +2260,60 @@ func ParseCreateExecutionResponse(rsp *http.Response) (*CreateExecutionResponse,
 			return nil, err
 		}
 		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetExecutionResponse parses an HTTP response from a GetExecutionWithResponse call
+func ParseGetExecutionResponse(rsp *http.Response) (*GetExecutionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetExecutionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Execution
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 405:
+		var dest MethodNotAllowed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON405 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
 
 	}
 

@@ -37,9 +37,10 @@ func (i *recordingInstrumenter) observed() []string {
 // failure the observability slice's route-template rule exists to prevent.
 func TestInstrumentationUsesRoutePatternsNeverRequestPaths(t *testing.T) {
 	instrumenter := &recordingInstrumenter{}
+	store := memory.NewStore()
 	router := NewRouter(Dependencies{
-		Plans:        memory.NewStore(),
-		Runner:       ProductionRunner(),
+		Plans:        store,
+		Executions:   store,
 		Instrumenter: instrumenter,
 	})
 
@@ -70,9 +71,10 @@ func TestInstrumentationUsesRoutePatternsNeverRequestPaths(t *testing.T) {
 // matched non-health handlers are instrumented.
 func TestHealthProbesAreNeverInstrumented(t *testing.T) {
 	instrumenter := &recordingInstrumenter{}
+	store := memory.NewStore()
 	router := NewRouter(Dependencies{
-		Plans:        memory.NewStore(),
-		Runner:       ProductionRunner(),
+		Plans:        store,
+		Executions:   store,
 		Instrumenter: instrumenter,
 	})
 
@@ -91,7 +93,7 @@ func TestHealthProbesAreNeverInstrumented(t *testing.T) {
 // than panic, because telemetry is non-authoritative and its absence cannot be
 // allowed to change what the API does.
 func TestRoutesServeWithoutAnInstrumenter(t *testing.T) {
-	router := NewRouter(Dependencies{Plans: memory.NewStore(), Runner: ProductionRunner()})
+	router := NewRouter(oneStoreDependencies())
 	created := createPlan(t, router, "acme", fixtureDeclarations(t))
 	if created.PlanID == "" {
 		t.Fatal("no plan was created without an instrumenter")
