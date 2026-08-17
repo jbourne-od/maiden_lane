@@ -1,0 +1,86 @@
+# OpenTelemetry Collector configuration for the local stack.
+#
+# PORTABILITY IS THE POINT OF THIS FILE. The receivers and processors below are
+# the durable half: they are what the application talks to, and they do not
+# change when this moves to AWS. The exporters are the swappable tail.
+#
+# Both exporters were chosen because they are the ones a managed AWS deployment
+# keeps rather than replaces:
+#
+#   prometheusremotewrite  is the same exporter Amazon Managed Prometheus takes.
+#                          Moving there changes the endpoint and adds the
+#                          sigv4auth extension. The pipeline is untouched.
+#
+#   otlp                   is the wire protocol, not a vendor. It reaches
+#                          Tempo here, and a managed OTLP endpoint elsewhere.
+#
+# A pull-based `prometheus` exporter would also work locally, but it would be a
+# local-only shape that has to be rewritten as remote write for AMP. Remote
+# write costs nothing extra here and is what production wants.
+#
+# Every component used here is present in the AWS Distro for OpenTelemetry,
+# which ships a subset of contrib. Staying inside that subset is what keeps the
+# migration a matter of endpoints and credentials.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # memory_limiter must come first in every pipeline: it can only shed load it
+  # sees before the batcher has buffered it.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 20
+  batch:
+    timeout: 5s
+    send_batch_size: 512
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  prometheusremotewrite:
+    endpoint: http://prometheus:9090/api/v1/write
+    tls:
+      insecure: true
+    # Left at the default deliberately. Enabling it would copy every resource
+    # attribute onto every series, which is how a bounded metric becomes an
+    # unbounded one. Resource attributes stay reachable through target_info.
+    resource_to_telemetry_conversion:
+      enabled: false
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheusremotewrite]
+  telemetry:
+    metrics:
+      # The collector's own metrics default to a localhost-only listener, which
+      # is unreachable from another container. Binding 0.0.0.0 is what makes
+      # otelcol_exporter_sent_* observable, and those counters are the only
+      # direct evidence that telemetry left the collector rather than being
+      # dropped inside it.
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888

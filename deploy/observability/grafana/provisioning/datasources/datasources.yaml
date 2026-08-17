@@ -1,0 +1,41 @@
+apiVersion: 1
+
+# Provisioned so the stack is useful the moment it is up, with no click-through
+# setup. Fixed UIDs matter: the dashboard JSON references datasources by UID,
+# and Grafana generates a random one when it is left unset, which would make a
+# provisioned dashboard point at nothing.
+#
+# There is no metric-to-trace jump configured, and that is not an omission. The
+# usual mechanism is exemplars, which the application disables on purpose: an
+# exemplar attaches a trace ID to a metric point, and that is a correlation
+# channel the dimension allowlist does not govern. Navigation between the two
+# signals goes through a shared attribute value instead.
+
+datasources:
+  - name: Prometheus
+    uid: maiden-lane-prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      # This is the sample interval of the data, and it must describe the
+      # application rather than Prometheus. Application metrics arrive by remote
+      # write on the SDK's periodic export cycle, which is 60 seconds, not on
+      # Prometheus's 15-second scrape.
+      #
+      # Grafana derives $__rate_interval from this value as
+      # max($__interval + timeInterval, 4 * timeInterval). Left at the 15s
+      # default it resolves to about 60 seconds, which is exactly one sample
+      # period: rate() needs two samples inside its window and would return
+      # nothing. Every rate-based panel on the dashboard was blank for this
+      # reason while the data was present and correct the whole time -- the
+      # worst kind of failure, because an empty graph reads as "idle".
+      timeInterval: 60s
+      httpMethod: POST
+
+  - name: Tempo
+    uid: maiden-lane-tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200

@@ -1,0 +1,39 @@
+# Tempo in single-binary mode with local block storage.
+#
+# This is a development trace store and nothing more: blocks live in a Docker
+# volume and are retained for an hour. Nothing here should be read as a
+# recommendation for a deployed Tempo, which wants object storage and separated
+# components.
+#
+# Tempo accepts OTLP directly, so pointing the application at it and skipping
+# the collector would work. The collector still sits in front because it is the
+# component whose configuration changes on the way to AWS, and a local topology
+# that omits it would not be exercising the piece most likely to be wrong.
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+
+ingester:
+  # Short blocks so a trace becomes queryable seconds after it is sent, rather
+  # than at the default cut interval. This is a debugging convenience and the
+  # opposite of what a deployed ingester wants.
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 1h
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
