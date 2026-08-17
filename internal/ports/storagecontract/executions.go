@@ -106,6 +106,44 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 		}
 	})
 
+	t.Run("returns a claimed input identical to the enqueued one", func(t *testing.T) {
+		// Comparing two claims against each other is not enough: a lossy
+		// encoding would corrupt both identically and they would still match.
+		// The comparison has to be against the request as submitted, before it
+		// ever reached storage.
+		//
+		// This is the execution equivalent of the plan store's round-trip
+		// assertion, and it is where a storage encoding that quietly altered a
+		// value would surface: every downstream identity derives from this
+		// state digest, so a lossy round trip would execute something other
+		// than what was accepted.
+		store := newStore(t)
+		submitted := ExecutionRequestFixture(t, "acme", "exec-roundtrip")
+		mustEnqueue(t, store, submitted)
+
+		claimed, found, err := store.Claim(t.Context(), time.Minute)
+		if err != nil || !found {
+			t.Fatalf("Claim: found=%t err=%v", found, err)
+		}
+
+		if claimed.Input.InitialState.Digest() != submitted.Input.InitialState.Digest() {
+			t.Fatalf("claimed state digest = %s, want %s",
+				claimed.Input.InitialState.Digest(), submitted.Input.InitialState.Digest())
+		}
+		if claimed.Input.World.ID() != submitted.Input.World.ID() {
+			t.Fatalf("claimed world = %s, want %s", claimed.Input.World.ID(), submitted.Input.World.ID())
+		}
+		if claimed.Input.ExecutorIdentity != submitted.Input.ExecutorIdentity {
+			t.Fatal("claimed executor identity differs from the submitted one")
+		}
+		if claimed.Input.Policy != submitted.Input.Policy {
+			t.Fatal("claimed provenance policy differs from the submitted one")
+		}
+		if claimed.ExecutionID != submitted.ExecutionID || claimed.RunID != submitted.RunID {
+			t.Fatal("claimed identities differ from the submitted ones")
+		}
+	})
+
 	t.Run("never claims a completed execution", func(t *testing.T) {
 		store := newStore(t)
 		request := ExecutionRequestFixture(t, "acme", "exec-a")

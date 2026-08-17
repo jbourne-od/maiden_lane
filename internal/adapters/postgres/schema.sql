@@ -45,3 +45,47 @@ CREATE TABLE IF NOT EXISTS plans (
 
     PRIMARY KEY (tenant_id, plan_id)
 );
+
+CREATE TABLE IF NOT EXISTS executions (
+    -- Tenancy is part of the primary key for the same reason as plans: an
+    -- unscoped read is not expressible against this table.
+    tenant_id    text NOT NULL,
+    execution_id text NOT NULL,
+
+    -- Both derived by the kernel from the pinned input, never allocated here.
+    -- That is what makes enqueueing idempotent with no deduplication key: the
+    -- same semantic request necessarily produces the same execution_id.
+    run_id  text NOT NULL,
+    plan_id text NOT NULL,
+
+    status text NOT NULL,
+
+    -- The pinned semantic input, byte exact and self-describing: it carries the
+    -- schema alongside the state so a worker can rehydrate it without consulting
+    -- another table. bytea, never jsonb, for the reason given on plans.
+    request      bytea NOT NULL,
+    request_hash text  NOT NULL,
+
+    -- The completed projection, present only once the execution finished. Its
+    -- hash lets a read prove storage returned the bytes it was given.
+    result      bytea,
+    result_hash text,
+
+    -- A bounded operational reason, distinct from a semantic rejection, which
+    -- lives inside result because the computation produced a real answer.
+    failure_reason text NOT NULL DEFAULT '',
+
+    -- Operational state. A lease rather than a lock, because a worker can die;
+    -- when it expires the execution becomes claimable again, which is safe
+    -- because execution is deterministic.
+    lease_expires_at timestamptz,
+    enqueued_at      timestamptz NOT NULL DEFAULT now(),
+
+    PRIMARY KEY (tenant_id, execution_id)
+);
+
+-- Claiming scans only unfinished executions, so a queue that has processed a
+-- large history does not slow down.
+CREATE INDEX IF NOT EXISTS executions_claimable
+    ON executions (enqueued_at)
+    WHERE status IN ('pending', 'running');
