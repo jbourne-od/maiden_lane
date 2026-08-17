@@ -21,7 +21,6 @@ package postgres
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,12 +31,6 @@ import (
 	"github.com/optimaldynamics/maiden-lane/internal/ports"
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
 )
-
-// schema is applied on Open. Embedding it keeps the DDL beside the code that
-// depends on it, so the two cannot drift apart in a deployment.
-//
-//go:embed schema.sql
-var schema string
 
 // storedFormat is the adapter's encoding version. Increment it when the stored
 // representation changes shape; a row carrying an unknown format is refused
@@ -69,14 +62,14 @@ type Store struct {
 
 var _ ports.PlanStore = (*Store)(nil)
 
-// Open connects, applies the schema, and returns a ready store.
+// Open connects, verifies the schema, and returns a ready store.
 //
-// The schema is applied here rather than by a separate migration step because
-// this slice has exactly one table and no migration history to honor. That will
-// not remain true. When a second version of the schema exists this becomes a
-// real migration boundary: an implicit CREATE TABLE IF NOT EXISTS cannot alter
-// an existing table, so the first schema change must arrive with an explicit
-// migration step rather than by editing schema.sql and hoping.
+// It verifies rather than migrates. The adapter previously applied an idempotent
+// CREATE TABLE on open, which was honest while there was one table and no history
+// to honour, and which its own comment identified as unable to survive the first
+// column change. Migrations are now an explicit step, and this function's job is
+// to refuse a database that has not had it run — see schema.go for why the
+// application deliberately holds no privilege to fix that itself.
 func Open(ctx context.Context, url string) (*Store, error) {
 	config, err := pgxpool.ParseConfig(url)
 	if err != nil {
@@ -95,9 +88,9 @@ func Open(ctx context.Context, url string) (*Store, error) {
 		pool.Close()
 		return nil, fmt.Errorf("postgres: database is unreachable: %w", err)
 	}
-	if _, err := pool.Exec(ctx, schema); err != nil {
+	if err := verifySchema(ctx, pool); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("postgres: schema could not be applied: %w", err)
+		return nil, err
 	}
 	return &Store{pool: pool}, nil
 }

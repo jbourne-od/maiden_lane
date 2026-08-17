@@ -1,7 +1,16 @@
--- Maiden Lane control-plane schema.
+-- Adopts the schema that existed before migrations did.
 --
--- Applied by the adapter on Open. It is idempotent, so a process starting
--- against an existing database is a no-op rather than an error.
+-- Every statement is idempotent, and that is load-bearing rather than
+-- defensive: this migration must be applicable to a database whose tables were
+-- already created by the adapter's former implicit CREATE TABLE on open. Running
+-- it there records the version and changes nothing, which is what lets an
+-- existing database join the migration history instead of having to be rebuilt.
+--
+-- Later migrations should NOT use IF NOT EXISTS. Once a database is under
+-- migration control, a statement that silently does nothing hides a divergence
+-- rather than adopting one.
+
+-- migrate:up
 
 CREATE TABLE IF NOT EXISTS plans (
     -- Tenancy is part of the primary key rather than a column to filter on.
@@ -102,3 +111,16 @@ CREATE TABLE IF NOT EXISTS executions (
 CREATE INDEX IF NOT EXISTS executions_claimable
     ON executions (enqueued_at)
     WHERE status IN ('pending', 'running');
+
+-- migrate:down
+
+-- Reversible on purpose, and destructive on purpose. These tables hold sealed
+-- artifacts, which are the product rather than a cache: nothing recreates them
+-- and no execution can be re-run to regenerate one, because a terminally
+-- recorded execution cannot be cleared. This exists so a development database
+-- can be torn down, and running it anywhere else destroys the record lineage
+-- the system exists to protect.
+
+DROP INDEX IF EXISTS executions_claimable;
+DROP TABLE IF EXISTS executions;
+DROP TABLE IF EXISTS plans;
