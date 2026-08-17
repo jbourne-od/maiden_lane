@@ -213,14 +213,52 @@ func httpMetricViews() []sdkmetric.View {
 		semconv.HTTPRouteKey,
 		semconv.HTTPResponseStatusCodeKey,
 	)
+	// An unset aggregation inherits the SDK's default boundaries, which start
+	// [0, 5, 10, 25, ...]. Those suit milliseconds; these instruments record
+	// seconds and bytes, so the defaults put every observation of interest in
+	// one bucket and make percentiles confidently wrong. See
+	// TestDurationHistogramsCanDistinguishSubSecondLatency.
+	boundaries := map[string][]float64{
+		httpDurationName:     httpDurationBoundaries,
+		httpRequestSizeName:  httpBodySizeBoundaries,
+		httpResponseSizeName: httpBodySizeBoundaries,
+	}
+
 	views := make([]sdkmetric.View, 0, 3)
 	for _, name := range []string{httpDurationName, httpRequestSizeName, httpResponseSizeName} {
 		views = append(views, sdkmetric.NewView(
 			sdkmetric.Instrument{Name: name},
-			sdkmetric.Stream{AttributeFilter: filter},
+			sdkmetric.Stream{
+				AttributeFilter: filter,
+				Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
+					Boundaries: boundaries[name],
+				},
+			},
 		))
 	}
 	return views
+}
+
+// httpDurationBoundaries are the boundaries the HTTP semantic conventions
+// recommend for http.server.request.duration, used verbatim.
+//
+// They are coarser at the low end than this server's in-memory responses
+// warrant, and that is the right trade. This instrument's name and attributes
+// are semantic-convention surface, so dashboards, alert libraries, and managed
+// backends all expect this distribution. Hand-tuning it for a local process
+// would make the series diverge from every tool built to read it, for the sake
+// of resolution that stops mattering the moment a network and a database are in
+// the path.
+var httpDurationBoundaries = []float64{
+	0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10,
+}
+
+// httpBodySizeBoundaries span the payloads this API actually carries. The
+// conventions recommend no distribution for body size, and the default one tops
+// out at 10000 bytes, which a plan declaration for the ratified fixture already
+// exceeds at 7225 bytes.
+var httpBodySizeBoundaries = []float64{
+	64, 256, 1024, 4096, 16384, 65536, 262144, 1 << 20, 4 << 20,
 }
 
 type countingReadCloser struct {

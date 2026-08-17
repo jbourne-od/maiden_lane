@@ -208,10 +208,35 @@ func semanticMetricViews() []sdkmetric.View {
 	views := make([]sdkmetric.View, 0, len(allowed))
 	for _, name := range []string{semanticPhaseDurationName, semanticOperationsName,
 		semanticCheckpointsName, semanticInvariantFailuresName, semanticAssessmentsName} {
-		views = append(views, sdkmetric.NewView(
-			sdkmetric.Instrument{Name: name},
-			sdkmetric.Stream{AttributeFilter: attribute.NewAllowKeysFilter(allowed[name]...)},
-		))
+		stream := sdkmetric.Stream{
+			AttributeFilter: attribute.NewAllowKeysFilter(allowed[name]...),
+		}
+		if name == semanticPhaseDurationName {
+			stream.Aggregation = sdkmetric.AggregationExplicitBucketHistogram{
+				Boundaries: semanticPhaseDurationBoundaries,
+			}
+		}
+		views = append(views, sdkmetric.NewView(sdkmetric.Instrument{Name: name}, stream))
 	}
 	return views
+}
+
+// semanticPhaseDurationBoundaries are matched to what this instrument actually
+// measures. Spine phases are in-process transformations over already-loaded
+// state, and a measured run put the mean phase at 104 microseconds, so the
+// scale of interest starts well below a millisecond.
+//
+// Leaving the aggregation unset would inherit the SDK's default boundaries,
+// which begin [0, 5, 10, 25, ...]. Those are shaped for milliseconds, and
+// against a seconds-valued instrument they collapse every real observation into
+// a single bucket. That is not merely imprecise: an operator asking for p95 gets
+// a confident answer several thousand times larger than the truth.
+//
+// The top of the range stays at ten seconds deliberately. A phase that slow
+// means something is wrong in a way a percentile will not diagnose, and the
+// bucket count is the cardinality this instrument pays for on every dimension
+// combination.
+var semanticPhaseDurationBoundaries = []float64{
+	0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025,
+	0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
 }
