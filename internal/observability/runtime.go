@@ -55,6 +55,13 @@ type Runtime struct {
 	semanticInvariantFailures metric.Int64Counter
 	semanticAssessments       metric.Int64Counter
 
+	// Execution instruments cover the worker's handling of claimed executions.
+	// They are the only view of the asynchronous path that survives a restart of
+	// whatever was watching it, because a trace answers "what happened to this
+	// one" while these answer "is the queue being worked".
+	executionOutcomes metric.Int64Counter
+	executionDuration metric.Float64Histogram
+
 	traceLifecycle  providerLifecycle
 	metricLifecycle providerLifecycle
 	shutdownOnce    sync.Once
@@ -164,6 +171,12 @@ func newRuntimeWithLogger(ctx context.Context, cfg Config, logger *slog.Logger, 
 			rollbackRuntime(runtime),
 		)
 	}
+	if err := runtime.registerExecutionInstruments(); err != nil {
+		return nil, errors.Join(
+			safeCause{message: "execution telemetry initialization failed", cause: err},
+			rollbackRuntime(runtime),
+		)
+	}
 	return runtime, nil
 }
 
@@ -262,7 +275,7 @@ func newMetricProvider(ctx context.Context, cfg Config, res *resource.Resource) 
 		sdkmetric.WithReader(reader),
 		sdkmetric.WithExemplarFilter(exemplar.AlwaysOffFilter),
 		sdkmetric.WithCardinalityLimit(2000),
-		sdkmetric.WithView(append(httpMetricViews(), semanticMetricViews()...)...),
+		sdkmetric.WithView(allMetricViews()...),
 	)
 	return provider, provider, nil
 }
