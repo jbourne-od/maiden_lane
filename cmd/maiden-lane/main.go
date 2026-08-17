@@ -21,9 +21,11 @@ import (
 	"time"
 
 	"github.com/optimaldynamics/maiden-lane/internal/adapters/memory"
+	"github.com/optimaldynamics/maiden-lane/internal/adapters/postgres"
 	"github.com/optimaldynamics/maiden-lane/internal/app"
 	"github.com/optimaldynamics/maiden-lane/internal/httpapi"
 	"github.com/optimaldynamics/maiden-lane/internal/observability"
+	"github.com/optimaldynamics/maiden-lane/internal/ports"
 )
 
 const (
@@ -46,6 +48,33 @@ type observabilityRuntime interface {
 }
 
 type serveCommand func(context.Context, string, *slog.Logger, http.Handler, *log.Logger) error
+
+// planStore is the closed set of things this process can serve plans from. The
+// seam exists so the selection logic is testable without a database.
+type planStore interface {
+	ports.PlanStore
+}
+
+// openPlanStore selects the store from configuration.
+//
+// databaseURLVariable is read rather than defaulted, so a local run needs no
+// database. What it must never do is fall back: a configured URL that cannot be
+// reached blocks startup, because quietly serving from memory when durability
+// was asked for is the worst available outcome. Nothing would look wrong until
+// the first restart, by which point the artifacts are already gone.
+const databaseURLVariable = "MAIDEN_LANE_DATABASE_URL"
+
+func openPlanStore(ctx context.Context, lookupEnv observability.LookupEnv) (planStore, func(), error) {
+	url, present := lookupEnv(databaseURLVariable)
+	if !present || url == "" {
+		return memory.NewStore(), func() {}, nil
+	}
+	store, err := postgres.Open(ctx, url)
+	if err != nil {
+		return nil, nil, err
+	}
+	return store, store.Close, nil
+}
 
 type processDeps struct {
 	lookupEnv  observability.LookupEnv
@@ -114,13 +143,26 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, deps 
 	errorLogger := log.New(safeHTTPErrorWriter{logger: logger}, "", 0)
 
 	// Composition happens here, near the entry point, rather than through any
-	// package-level state. The store is in-process: artifacts do not survive a
-	// restart and are not shared between replicas. That is a real limitation of
-	// this revision, stated rather than hidden, and it is why the storage
-	// interfaces live in internal/ports so a durable adapter can replace this
-	// one without touching the application or the semantic kernel.
+	// package-level state.
+	planStore, closeStore, storeErr := openPlanStore(ctx, deps.lookupEnv)
+	if storeErr != nil {
+		// The connection string may carry a credential, so the cause is logged
+		// as a bounded code rather than rendered.
+		logger.Error("plan storage unavailable", "code", "plan_storage_unavailable")
+		return storeErr
+	}
+	defer closeStore()
+	if _, durable := deps.lookupEnv(databaseURLVariable); durable {
+		logger.Info("plan storage is durable", "code", "plan_storage_durable")
+	} else {
+		// Said plainly at startup, because an operator who expected durability
+		// should learn it here and not after a restart.
+		logger.Warn("plan storage is in memory and will not survive a restart",
+			"code", "plan_storage_ephemeral")
+	}
+
 	apiDependencies := httpapi.Dependencies{
-		Plans:        memory.NewStore(),
+		Plans:        planStore,
 		Runner:       httpapi.ProductionRunner(),
 		Observer:     runtime.SemanticObserver(),
 		Instrumenter: runtime,

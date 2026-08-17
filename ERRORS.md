@@ -67,7 +67,7 @@ ratified type; it cannot compose a new one.
 | `unsupported-media-type` | 415 | The request body was not `application/json`. |
 | `invalid-plan` | 422 | Compilation rejected the declarations. Carries the closed diagnostic codes and no `planID`. |
 | `invalid-semantic-input` | 422 | Canonical input was incomplete or unsupported, including declarations the compiler cannot canonicalize at all. |
-| `internal-error` | 500 | An internal inconsistency, including a stored plan that no longer reproduces its own identity. |
+| `internal-error` | 500 | An internal inconsistency, including a stored plan that no longer reproduces its own identity when recompiled. Storage integrity failures surface here rather than as a client error, because the caller's request was valid and the fault is entirely server side. |
 | `dependency-unavailable` | 503 | A required dependency was unavailable, or the caller's context was cancelled. Retryable. |
 
 Two boundaries matter more than the table.

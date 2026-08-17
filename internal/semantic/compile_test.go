@@ -799,3 +799,160 @@ func compileFixtureProfiles(reverse bool) []ProfileDeclaration {
 	}
 	return []ProfileDeclaration{cm, optimizer}
 }
+
+// Production break caught: a compilation input that shared interior state with
+// its compilation would hand every holder a mutable alias into an immutable
+// artifact. A stored record is the worst place for that, because one caller's
+// mutation would silently change what every later reader believes was compiled.
+func TestCompilationInputCannotBeMutatedThroughItsAccessor(t *testing.T) {
+	compilation, err := Compile(compileFixtureRequest(t, false))
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	original, ok := compilation.Plan()
+	if !ok {
+		t.Fatal("fixture did not compile")
+	}
+
+	// Reach as deeply as the returned request allows and corrupt everything.
+	request := compilation.Input().Request()
+	request.CompilerSemanticsVersion = "corrupted"
+	for i := range request.Rules.Transformations {
+		request.Rules.Transformations[i].ID = "corrupted"
+		for j := range request.Rules.Transformations[i].DeclaredReads {
+			request.Rules.Transformations[i].DeclaredReads[j] = "corrupted.field"
+		}
+		if form := request.Rules.Transformations[i].Form; form != nil {
+			form.OutputSlot = "corrupted"
+			for j := range form.Sources {
+				form.Sources[j].CanonicalSourceKey = "corrupted"
+			}
+		}
+		if aggregate := request.Rules.Transformations[i].Aggregate; aggregate != nil {
+			aggregate.Target.Slot = "corrupted"
+			for j := range aggregate.RequiredSourceTuple {
+				aggregate.RequiredSourceTuple[j] = "corrupted.field"
+			}
+		}
+	}
+	for i := range request.Rules.Checkpoints {
+		request.Rules.Checkpoints[i].Key = "corrupted"
+	}
+	for i := range request.Profiles {
+		request.Profiles[i].Key = "corrupted"
+		for j := range request.Profiles[i].Requirements {
+			request.Profiles[i].Requirements[j].Code = "CORRUPTED"
+		}
+	}
+	entities := request.Schema.EntityDeclarations()
+	for i := range entities {
+		entities[i].Kind = "corrupted"
+		for j := range entities[i].Fields {
+			entities[i].Fields[j].Name = "corrupted"
+		}
+	}
+
+	// The compilation is unchanged, and a second read is unaffected by the first.
+	afterPlan, ok := compilation.Plan()
+	if !ok || afterPlan.ID() != original.ID() {
+		t.Fatalf("plan identity changed after mutating the returned request: %s", afterPlan.ID())
+	}
+	second := compilation.Input().Request()
+	if second.CompilerSemanticsVersion == "corrupted" {
+		t.Fatal("mutating one returned request corrupted the next")
+	}
+	if got := second.Rules.Transformations[0].ID; got == "corrupted" {
+		t.Fatalf("transformation identity leaked a mutation: %s", got)
+	}
+}
+
+// Production break caught: the retained input must be sufficient to reproduce
+// the compilation exactly. A durable adapter rebuilds from it and verifies the
+// identities match, so an input that lost anything would make every read of a
+// persisted plan fail closed.
+func TestCompilationInputRecompilesToTheIdenticalArtifacts(t *testing.T) {
+	first, err := Compile(compileFixtureRequest(t, false))
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	firstPlan, ok := first.Plan()
+	if !ok {
+		t.Fatal("fixture did not compile")
+	}
+
+	second, err := Compile(first.Input().Request())
+	if err != nil {
+		t.Fatalf("recompile: %v", err)
+	}
+	secondPlan, ok := second.Plan()
+	if !ok {
+		failure, _ := second.Failure()
+		t.Fatalf("retained input did not compile: %v", failure.Diagnostics())
+	}
+
+	if secondPlan.ID() != firstPlan.ID() {
+		t.Fatalf("recompiled planID = %s, want %s", secondPlan.ID(), firstPlan.ID())
+	}
+	if second.InputDigest() != first.InputDigest() {
+		t.Fatalf("recompiled input digest = %s, want %s", second.InputDigest(), first.InputDigest())
+	}
+	if !bytes.Equal(secondPlan.CanonicalBytes(), firstPlan.CanonicalBytes()) {
+		t.Fatal("recompiled plan bytes differ")
+	}
+	firstProfiles, secondProfiles := first.Profiles(), second.Profiles()
+	if len(firstProfiles) != len(secondProfiles) {
+		t.Fatalf("profiles = %d, want %d", len(secondProfiles), len(firstProfiles))
+	}
+	for i := range firstProfiles {
+		if firstProfiles[i].ID() != secondProfiles[i].ID() {
+			t.Errorf("profile %d = %s, want %s", i, secondProfiles[i].ID(), firstProfiles[i].ID())
+		}
+	}
+}
+
+// Production break caught: the input carries its own identity so an adapter can
+// verify a round trip without recompiling twice, and that identity must be the
+// one the compilation already reports.
+func TestCompilationInputReportsTheCompilationsOwnInputIdentity(t *testing.T) {
+	compilation, err := Compile(compileFixtureRequest(t, false))
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if got, want := compilation.Input().Digest(), compilation.InputDigest(); got != want {
+		t.Fatalf("input digest = %s, want %s", got, want)
+	}
+	if len(compilation.Input().CanonicalBytes()) == 0 {
+		t.Fatal("compilation input has no canonical bytes")
+	}
+	// The bytes are a defensive copy: mutating them cannot move the digest.
+	canonical := compilation.Input().CanonicalBytes()
+	for i := range canonical {
+		canonical[i] = 0
+	}
+	if compilation.Input().Digest() != compilation.InputDigest() {
+		t.Fatal("mutating returned canonical bytes changed the reported identity")
+	}
+}
+
+// Production break caught: an invalid program still has an input identity, and
+// a caller diagnosing a rejected compilation needs it. It must not panic or
+// return a zero value that claims to be an identity.
+func TestFailedCompilationStillCarriesItsInput(t *testing.T) {
+	request := compileFixtureRequest(t, false)
+	request.Rules.Transformations[0].DeclaredReads = append(
+		request.Rules.Transformations[0].DeclaredReads, "driver.field_that_does_not_exist")
+
+	compilation, err := Compile(request)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if _, ok := compilation.Failure(); !ok {
+		t.Fatal("invalid declarations compiled")
+	}
+	if got, want := compilation.Input().Digest(), compilation.InputDigest(); got != want {
+		t.Fatalf("failed compilation input digest = %s, want %s", got, want)
+	}
+	if compilation.Input().Request().CompilerSemanticsVersion == "" {
+		t.Fatal("failed compilation retained no input")
+	}
+}

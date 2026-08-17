@@ -79,16 +79,11 @@ func (s *server) CreateExecution(w http.ResponseWriter, r *http.Request, params 
 		return
 	}
 
-	request, ok := compileRequestFor(record)
-	if !ok {
-		// A stored record whose compilation carries no plan is an internal
-		// contradiction: nothing accepts a plan into storage without one.
-		writeProblem(w, problemInternalError, nil)
-		return
-	}
-
 	result, err := s.deps.Runner.Run(r.Context(), app.Request{
-		Compilation:      request,
+		// The retained input is the compiler request that produced this plan.
+		// Recompiling it is deterministic, and the identity comparison below
+		// verifies that rather than trusting it.
+		Compilation:      record.Input.Request(),
 		InitialState:     state,
 		World:            world,
 		ExecutorIdentity: executor,

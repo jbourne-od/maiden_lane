@@ -5,7 +5,7 @@ BINARY_DIR ?= bin
 BINARY ?= $(BINARY_DIR)/maiden-lane
 IMAGE ?= maiden-lane:local
 
-.PHONY: help fmt fmt-check mod-check tool-versions openapi openapi-check vet staticcheck test test-race vulncheck build verify container-build container-smoke container-check
+.PHONY: help fmt fmt-check mod-check tool-versions openapi openapi-check vet staticcheck test test-race vulncheck build verify store-check container-build container-smoke container-check
 
 help:
 	@echo "fmt              format Go source"
@@ -21,6 +21,7 @@ help:
 	@echo "vulncheck        run the pinned govulncheck"
 	@echo "build            build $(BINARY)"
 	@echo "verify           run the complete local CI sequence"
+	@echo "store-check      run the PostgreSQL adapter tests against a throwaway database"
 	@echo "container-check  build and smoke-test $(IMAGE)"
 
 fmt:
@@ -110,6 +111,53 @@ build:
 	$(GO) build -trimpath -o $(BINARY) ./cmd/maiden-lane
 
 verify: fmt-check mod-check tool-versions openapi-check vet staticcheck test test-race vulncheck build
+
+# The PostgreSQL adapter tests need a database, so they live here rather than in
+# verify: `make verify` must stay runnable with no Docker and no database.
+#
+# The target supplies the database URL itself, so the adapter tests never skip
+# when this runs, and it then asserts that they actually executed. A silent skip
+# would look exactly like a pass and would leave the adapter unverified in CI.
+STORE_CONTAINER ?= maiden-lane-store-check
+STORE_PORT ?= 55433
+STORE_URL ?= "postgres://postgres:maiden@127.0.0.1:$(STORE_PORT)/maidenlane?sslmode=disable"
+
+store-check:
+	@set -eu; \
+	docker rm --force $(STORE_CONTAINER) >/dev/null 2>&1 || true; \
+	docker run --detach --name $(STORE_CONTAINER) \
+		--env POSTGRES_PASSWORD=maiden --env POSTGRES_DB=maidenlane \
+		--publish 127.0.0.1:$(STORE_PORT):5432 postgres:17-alpine >/dev/null; \
+	trap 'docker rm --force $(STORE_CONTAINER) >/dev/null 2>&1 || true' EXIT INT TERM; \
+	ready=""; \
+	attempt=0; \
+	while [ "$$attempt" -lt 60 ]; do \
+		if docker exec $(STORE_CONTAINER) pg_isready --username postgres --dbname maidenlane >/dev/null 2>&1; then \
+			ready="yes"; \
+			break; \
+		fi; \
+		attempt=$$((attempt + 1)); \
+		sleep 0.5; \
+	done; \
+	test -n "$$ready" || { \
+		echo "PostgreSQL did not become ready"; \
+		docker logs $(STORE_CONTAINER); \
+		exit 1; \
+	}; \
+	if ! output="$$(MAIDEN_LANE_TEST_POSTGRES_URL=$(STORE_URL) \
+		$(GO) test -count=1 -v ./internal/adapters/postgres 2>&1)"; then \
+		echo "$$output"; \
+		exit 1; \
+	fi; \
+	echo "$$output"; \
+	if echo "$$output" | grep -q -- "--- SKIP"; then \
+		echo "adapter tests skipped; store-check must never skip them"; \
+		exit 1; \
+	fi; \
+	echo "$$output" | grep -q -- "--- PASS: TestCorruptedRowsFailClosed" || { \
+		echo "the corruption tests did not run"; \
+		exit 1; \
+	}
 
 container-build:
 	docker build --tag $(IMAGE) .

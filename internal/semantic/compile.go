@@ -50,6 +50,7 @@ func (d CompilationDiagnostic) Detail() string { return d.detail }
 // Compilation is either one accepted plan and its complete compiled profile
 // set, or one canonical failure. It never exposes partial accepted artifacts.
 type Compilation struct {
+	input       CompilationInput
 	inputDigest CompilationInputDigest
 	plan        *Plan
 	profiles    []CompiledProfile
@@ -58,6 +59,66 @@ type Compilation struct {
 
 // InputDigest identifies the complete canonicalizable compiler request.
 func (c Compilation) InputDigest() CompilationInputDigest { return c.inputDigest }
+
+// Input returns the immutable input that produced this compilation.
+//
+// It exists so a durable store can retain what is needed to reproduce a
+// compilation. A Compilation itself cannot be persisted: its fields are
+// private and Compile is the only way to obtain one, and the canonical
+// encoders here are deliberately one-way, so there is no decoder to rehydrate
+// with. An adapter therefore persists this input in whatever form it likes,
+// recompiles on read, and requires the resulting identities to equal the ones
+// it stored. A corrupted or silently re-encoded row cannot satisfy that, so
+// storage is structurally unable to lie about semantic identity.
+//
+// A bare CompileRequest deliberately is not used for that purpose: it is an
+// ordinary authoring structure of exported slices and pointers, so holding one
+// hands every caller a mutable alias. This value's interior is unreachable.
+func (c Compilation) Input() CompilationInput { return c.input }
+
+// CompilationInput is the immutable, persistable input of one compilation.
+type CompilationInput struct {
+	request   CompileRequest
+	digest    CompilationInputDigest
+	canonical []byte
+}
+
+// Request returns a deep copy. The copy is made here, in the package that
+// defines the declarations, so a field added to one is copied where it is
+// declared rather than in an adapter that cannot see it.
+func (i CompilationInput) Request() CompileRequest { return cloneCompileRequest(i.request) }
+
+// Digest returns the canonical identity of this input. It equals the
+// InputDigest of the compilation that produced it.
+func (i CompilationInput) Digest() CompilationInputDigest { return i.digest }
+
+// CanonicalBytes returns a defensive copy of the canonical input bytes.
+func (i CompilationInput) CanonicalBytes() []byte { return bytes.Clone(i.canonical) }
+
+// cloneCompileRequest deep-copies every part of an authoring request whose
+// interior is reachable through an exported field.
+func cloneCompileRequest(input CompileRequest) CompileRequest {
+	transformations := make([]TransformationDeclaration, len(input.Rules.Transformations))
+	for i, transformation := range input.Rules.Transformations {
+		transformations[i] = cloneTransformation(transformation)
+	}
+	profiles := make([]ProfileDeclaration, len(input.Profiles))
+	for i, profile := range input.Profiles {
+		profiles[i] = cloneProfile(profile)
+	}
+	return CompileRequest{
+		Schema: SchemaDeclaration{
+			entities:  cloneEntityDeclarations(input.Schema.entities),
+			relations: slices.Clone(input.Schema.relations),
+		},
+		Rules: RulesetDeclaration{
+			Transformations: transformations,
+			Checkpoints:     slices.Clone(input.Rules.Checkpoints),
+		},
+		Profiles:                 profiles,
+		CompilerSemanticsVersion: input.CompilerSemanticsVersion,
+	}
+}
 
 // Plan returns the immutable accepted plan, if compilation succeeded.
 func (c Compilation) Plan() (Plan, bool) {
@@ -287,6 +348,10 @@ func Compile(request CompileRequest) (Compilation, error) {
 		return Compilation{}, fmt.Errorf("canonicalize compiler input: %w", err)
 	}
 	inputDigest := CompilationInputDigest(canonicalDigest(inputBytes))
+	// The retained input is cloned on the way in as well as on the way out, so
+	// a caller mutating the request it passed cannot reach the compilation.
+	retained := CompilationInput{request: cloneCompileRequest(request), digest: inputDigest,
+		canonical: bytes.Clone(inputBytes)}
 
 	diagnostics := make([]CompilationDiagnostic, 0)
 	compiledByID := make(map[RuleID]CompiledTransformation, len(rules.transformations))
@@ -311,7 +376,7 @@ func Compile(request CompileRequest) (Compilation, error) {
 		}
 		failure := CompilationFailure{inputDigest: inputDigest, diagnostics: diagnostics, canonical: failureBytes,
 			digest: CompilationFailureDigest(canonicalDigest(failureBytes))}
-		return Compilation{inputDigest: inputDigest, failure: &failure}, nil
+		return Compilation{input: retained, inputDigest: inputDigest, failure: &failure}, nil
 	}
 
 	checkpoints := orderCheckpoints(rules.checkpoints, ordered)
@@ -321,7 +386,7 @@ func Compile(request CompileRequest) (Compilation, error) {
 	}
 	plan := Plan{schemaDigest: schema.Digest(), rulesetDigest: rulesDigest, compilerVersion: request.CompilerSemanticsVersion,
 		transformations: ordered, checkpoints: checkpoints, canonical: planBytes, id: PlanID(canonicalDigest(planBytes))}
-	return Compilation{inputDigest: inputDigest, plan: &plan, profiles: compiledProfiles}, nil
+	return Compilation{input: retained, inputDigest: inputDigest, plan: &plan, profiles: compiledProfiles}, nil
 }
 
 func validateCheckpointBoundaries(checkpoints []CheckpointDeclaration, compiled map[RuleID]CompiledTransformation) []CompilationDiagnostic {

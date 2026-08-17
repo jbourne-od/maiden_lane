@@ -18,13 +18,32 @@ That engine is now reachable over HTTP. A tenant-scoped `/v1` surface compiles
 declarations into a plan and executes it, with `api/openapi.yaml` as the
 authoritative contract that Go server code and clients are generated from.
 
-There is still **no persistence, promotion, publication, worker mode, or
-production hours-of-service policy**. Artifacts are held in process memory and
-are lost on restart, the sanitized team-HOS fixture is a walking-skeleton
-fixture rather than a real rule, and execution is synchronous rather than the
-asynchronous shape the High-Level Design specifies. Authentication is delegated
-to a deployment gateway; this process enforces tenant scoping but verifies no
-credentials.
+Compiled plans can be stored durably in PostgreSQL. There is still **no
+promotion, publication, worker mode, or production hours-of-service policy**;
+executions themselves are not yet persisted, the sanitized team-HOS fixture is a
+walking-skeleton fixture rather than a real rule, and execution is synchronous
+rather than the asynchronous shape the High-Level Design specifies.
+Authentication is delegated to a deployment gateway; this process enforces
+tenant scoping but verifies no credentials.
+
+### Storage
+
+| Variable | Meaning |
+|---|---|
+| `MAIDEN_LANE_DATABASE_URL` | PostgreSQL connection URL. When unset, plans are held in process memory. |
+
+Absent configuration keeps everything in memory, so a local run needs no
+database. The process says so at startup, because an operator who expected
+durability should learn it then rather than after a restart.
+
+A configured URL that cannot be reached **blocks startup**. Falling back to
+memory would be the worst available outcome: nothing would look wrong until the
+first restart, by which point the artifacts are already gone.
+
+Stored plans are never trusted on the way back out. A read recompiles the stored
+declarations and returns a plan only if the recompiled identity matches the one
+stored beside it, so a corrupted, truncated, or substituted row fails closed
+rather than answering under an identity it did not produce.
 
 ## Requirements
 
@@ -156,8 +175,13 @@ is absent, recording, or backed by a failing exporter.
 make help
 make fmt
 make verify
+make store-check
 make container-check
 ```
+
+`make verify` needs no Docker and no database. `make store-check` runs the
+PostgreSQL adapter against a throwaway container, and `make container-check`
+builds and smoke-tests the image.
 
 `make verify` is the authoritative complete local verification command. Its
 `Makefile` recipe enforces formatting and module tidiness, verifies the pinned
