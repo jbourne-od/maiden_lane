@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -280,9 +281,22 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 			claims = map[semantic.ExecutionID]int{}
 			group  sync.WaitGroup
 		)
+		// The loop is bounded rather than run until the queue drains. A store
+		// that hands out work without recording the claim would otherwise
+		// return found=true forever and hang the test, which in CI means a
+		// timeout with no useful message instead of a failure that names the
+		// defect. Exceeding the amount of work that exists IS the defect, so
+		// the bound is the assertion.
+		const maxClaims = executions * 2
+		var attempts atomic.Int64
 		for range 6 {
 			group.Go(func() {
 				for {
+					if attempts.Add(1) > maxClaims {
+						t.Errorf("claims exceeded %d for %d executions; the store is handing out work it already gave away",
+							maxClaims, executions)
+						return
+					}
 					request, found, err := store.Claim(context.Background(), time.Minute)
 					if err != nil {
 						t.Errorf("Claim: %v", err)

@@ -14,9 +14,12 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"sync"
+	"time"
 
 	"github.com/optimaldynamics/maiden-lane/internal/ports"
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
@@ -38,11 +41,17 @@ type planKey struct {
 type Store struct {
 	mu    sync.RWMutex
 	plans map[planKey]ports.PlanRecord
+
+	executions     map[executionKey]*executionEntry
+	executionOrder []executionKey
 }
 
 // NewStore returns an empty store ready for concurrent use.
 func NewStore() *Store {
-	return &Store{plans: map[planKey]ports.PlanRecord{}}
+	return &Store{
+		plans:      map[planKey]ports.PlanRecord{},
+		executions: map[executionKey]*executionEntry{},
+	}
 }
 
 var _ ports.PlanStore = (*Store)(nil)
@@ -88,4 +97,182 @@ func (s *Store) GetPlan(ctx context.Context, tenant ports.TenantID, planID seman
 	// values whose getters clone, so a caller cannot reach the stored copy
 	// through them; there is no additional defensive copy to make here.
 	return record, true, nil
+}
+
+// executionKey scopes a stored execution by tenant, for the same reason plans
+// are keyed that way: an unscoped read is not expressible.
+type executionKey struct {
+	tenant      ports.TenantID
+	executionID semantic.ExecutionID
+}
+
+// executionEntry is one queued or completed execution.
+//
+// leaseExpiry is operational state. It observes wall-clock time, which is why it
+// lives here and never reaches the semantic kernel: nothing about when an
+// execution ran may influence what it computed.
+type executionEntry struct {
+	request       ports.ExecutionRequest
+	status        ports.ExecutionStatus
+	result        *ports.ExecutionResult
+	failureReason string
+	leaseExpiry   time.Time
+}
+
+var _ ports.ExecutionStore = (*Store)(nil)
+
+// Enqueue stores a pending execution, idempotently on its derived identity.
+func (s *Store) Enqueue(ctx context.Context, request ports.ExecutionRequest) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if request.TenantID == "" || request.ExecutionID == "" {
+		return false, ErrIncompleteRecord
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := executionKey{tenant: request.TenantID, executionID: request.ExecutionID}
+	if _, present := s.executions[key]; present {
+		// ExecutionID is derived from the semantic request, so an existing entry
+		// under this key is necessarily the same execution.
+		return false, nil
+	}
+	s.executions[key] = &executionEntry{request: request, status: ports.ExecutionPending}
+	// Insertion order is kept explicitly rather than relying on map iteration,
+	// so claiming is predictable instead of arbitrary.
+	s.executionOrder = append(s.executionOrder, key)
+	return true, nil
+}
+
+// Claim leases the oldest available execution.
+//
+// Available means pending, or running with an expired lease. Reclaiming is safe
+// because execution is deterministic: a second attempt reproduces byte-identical
+// artifacts, so at-least-once delivery cannot produce a divergent result.
+func (s *Store) Claim(ctx context.Context, lease time.Duration) (ports.ExecutionRequest, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.ExecutionRequest{}, false, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	for _, key := range s.executionOrder {
+		entry, present := s.executions[key]
+		if !present {
+			continue
+		}
+		claimable := entry.status == ports.ExecutionPending ||
+			(entry.status == ports.ExecutionRunning && now.After(entry.leaseExpiry))
+		if !claimable {
+			continue
+		}
+		entry.status = ports.ExecutionRunning
+		entry.leaseExpiry = now.Add(lease)
+		return entry.request, true, nil
+	}
+	return ports.ExecutionRequest{}, false, nil
+}
+
+// Complete stores the result and takes the execution out of the queue.
+func (s *Store) Complete(ctx context.Context, result ports.ExecutionResult) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if result.TenantID == "" || result.ExecutionID == "" {
+		return ErrIncompleteRecord
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, present := s.executions[executionKey{tenant: result.TenantID, executionID: result.ExecutionID}]
+	if !present {
+		return ErrIncompleteRecord
+	}
+	stored := cloneExecutionResult(result)
+	entry.result = &stored
+	entry.status = result.Status
+	entry.leaseExpiry = time.Time{}
+	return nil
+}
+
+// Fail records that an execution could not be attempted.
+//
+// This is not a semantic rejection. A deterministic refusal is a completed
+// execution whose result carries a typed failure, because the computation
+// produced a real answer.
+func (s *Store) Fail(ctx context.Context, tenant ports.TenantID, executionID semantic.ExecutionID, reason string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, present := s.executions[executionKey{tenant: tenant, executionID: executionID}]
+	if !present {
+		return ErrIncompleteRecord
+	}
+	entry.status = ports.ExecutionFailed
+	entry.failureReason = reason
+	entry.leaseExpiry = time.Time{}
+	return nil
+}
+
+// Get reports the execution for this tenant, or absence.
+func (s *Store) Get(ctx context.Context, tenant ports.TenantID, executionID semantic.ExecutionID) (ports.ExecutionRecord, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ports.ExecutionRecord{}, false, err
+	}
+	if tenant == "" || executionID == "" {
+		return ports.ExecutionRecord{}, false, nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, present := s.executions[executionKey{tenant: tenant, executionID: executionID}]
+	if !present {
+		return ports.ExecutionRecord{}, false, nil
+	}
+
+	record := ports.ExecutionRecord{
+		Request:       entry.request,
+		Status:        entry.status,
+		FailureReason: entry.failureReason,
+	}
+	if entry.result != nil {
+		// Copied on the way out as well as in. The sealed bytes are the
+		// artifact; a caller that could mutate them would corrupt every later
+		// reader's view of something that is supposed to be immutable.
+		stored := cloneExecutionResult(*entry.result)
+		record.Result = &stored
+	}
+	return record, true, nil
+}
+
+// cloneExecutionResult deep-copies the parts of a result whose interior a
+// caller can reach: the byte slices holding sealed artifacts, and the closed
+// code slices beside them.
+func cloneExecutionResult(result ports.ExecutionResult) ports.ExecutionResult {
+	cloned := result
+	cloned.AcceptedRules = slices.Clone(result.AcceptedRules)
+
+	cloned.Checkpoints = make([]ports.SealedCheckpoint, len(result.Checkpoints))
+	for i, checkpoint := range result.Checkpoints {
+		cloned.Checkpoints[i] = checkpoint
+		cloned.Checkpoints[i].CanonicalBytes = bytes.Clone(checkpoint.CanonicalBytes)
+	}
+
+	cloned.Assessments = make([]ports.StoredAssessment, len(result.Assessments))
+	for i, assessment := range result.Assessments {
+		cloned.Assessments[i] = assessment
+		cloned.Assessments[i].CanonicalBytes = bytes.Clone(assessment.CanonicalBytes)
+		cloned.Assessments[i].MissingRequirements = slices.Clone(assessment.MissingRequirements)
+	}
+
+	if result.Failure != nil {
+		failure := *result.Failure
+		cloned.Failure = &failure
+	}
+	return cloned
 }
