@@ -526,3 +526,60 @@ func testProcessDeps(runtime observabilityRuntime, serveCommand serveCommand) pr
 		serve: serveCommand,
 	}
 }
+
+// Production break caught: falling back to in-memory storage when a database was
+// configured but unreachable is the worst available failure. Nothing would look
+// wrong until the first restart, by which point the artifacts are already gone.
+// Refusing to start is loud, immediate, and recoverable.
+func TestConfiguredButUnreachableDatabaseBlocksStartup(t *testing.T) {
+	lookup := envLookup(map[string]string{
+		databaseURLVariable: "postgres://nobody:secret@127.0.0.1:1/absent?sslmode=disable&connect_timeout=1",
+	})
+
+	store, closeStore, err := openPlanStore(t.Context(), lookup)
+	if err == nil {
+		if closeStore != nil {
+			closeStore()
+		}
+		t.Fatal("an unreachable database yielded a usable store")
+	}
+	if store != nil {
+		t.Fatal("a failed open returned a store to serve from")
+	}
+	// The connection string carries a credential, so it must not be echoed.
+	if strings.Contains(err.Error(), "secret") {
+		t.Fatalf("the error echoed the credential: %v", err)
+	}
+}
+
+// Production break caught: a local run must need no database, or every developer
+// and every test would require one.
+func TestAbsentConfigurationSelectsInMemoryStorage(t *testing.T) {
+	for name, lookup := range map[string]observability.LookupEnv{
+		"unset": envLookup(map[string]string{}),
+		"empty": envLookup(map[string]string{databaseURLVariable: ""}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			store, closeStore, err := openPlanStore(t.Context(), lookup)
+			if err != nil {
+				t.Fatalf("openPlanStore: %v", err)
+			}
+			if store == nil {
+				t.Fatal("no store was selected")
+			}
+			if closeStore == nil {
+				t.Fatal("no cleanup was returned")
+			}
+			closeStore()
+		})
+	}
+}
+
+// envLookup builds a deterministic environment for composition tests, so no test
+// reads or mutates the real process environment.
+func envLookup(env map[string]string) observability.LookupEnv {
+	return func(key string) (string, bool) {
+		value, present := env[key]
+		return value, present
+	}
+}

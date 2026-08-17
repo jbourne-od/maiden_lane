@@ -68,9 +68,12 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
   execution. `api/openapi.yaml` is the authoritative contract; Go server and
   client code are generated from it and a drift gate runs inside `make verify`.
 - Storage interfaces owned by the application in `internal/ports`, with an
-  in-process adapter in `internal/adapters/memory`.
+  in-process adapter in `internal/adapters/memory` and a durable PostgreSQL
+  adapter in `internal/adapters/postgres`. Both are held to one shared
+  behavioural contract in `internal/ports/storagecontract`, which is what makes
+  substitutability a tested property rather than a claim.
 
-There is no worker mode, durable persistence, promotion gate, publication path,
+There is no worker mode, execution persistence, promotion gate, publication path,
 authentication, or production team-HOS policy.
 
 ## Current repository map
@@ -88,6 +91,8 @@ internal/httpapi/openapiv1/      GENERATED server types and routing; never hand-
 internal/httpapiclient/          GENERATED client, used only by tests
 internal/ports/                  storage interfaces owned by the application
 internal/adapters/memory/        in-process storage adapter
+internal/adapters/postgres/      durable PostgreSQL adapter and its schema
+internal/ports/storagecontract/  the behavioural contract both adapters must pass
 Dockerfile                       non-root application image
 Makefile                         explicit local verification commands
 .github/workflows/pipeline.yml   CI and ECR publication
@@ -214,6 +219,21 @@ parenting their traces.
   expressible rather than merely discouraged. Another tenant's artifact is
   reported as absent, because distinguishing absence from refusal leaks
   existence.
+- Storage is never trusted. A Compilation cannot be serialized at all: its
+  fields are private, Compile is the only way to obtain one, and the kernel's
+  canonical encoders are one-way with no decoder. A durable adapter therefore
+  stores the compilation input in its own encoding, recompiles on read, and
+  returns a record only if the reproduced plan identity and input digest match
+  what was stored. A row that was corrupted, truncated, or replaced with a
+  different but entirely valid program fails closed, which no checksum over the
+  bytes would catch.
+- Identity-bearing content is stored as `bytea`, never `jsonb`. Postgres `jsonb`
+  reorders object keys, drops duplicates, and normalizes numeric forms, which for
+  a system whose identities derive from exact canonical bytes is a silent
+  mutation of the recipe. A test reads `information_schema` so the rule is
+  enforced rather than remembered.
+- Tenancy is part of the storage primary key rather than a column to filter on,
+  so an unscoped read is not expressible against the table.
 - Telemetry dimensions fail closed. `internal/observability` re-declares the
   whole closed vocabulary rather than reusing the application's, so widening an
   application enum cannot widen telemetry without a deliberate edit at the
@@ -313,6 +333,11 @@ interim: the asynchronous shape requires a worker mode and durable storage,
 neither of which exists. The response body is the projection the eventual read
 will return, so clients written now keep working. Retiring the deviation is a
 required part of the slice that adds a worker, not optional cleanup.
+
+Executions are not persisted; only plans are. The schema is applied implicitly
+on open, which is adequate for one table with no migration history and will stop
+being adequate at the first schema change: `CREATE TABLE IF NOT EXISTS` cannot
+alter an existing table, so the next change needs an explicit migration step.
 
 `ProvenancePolicy` currently has exactly one valid value, `changes.v1`, so the
 policy dimension of the identity matrix is proved by construction rather than

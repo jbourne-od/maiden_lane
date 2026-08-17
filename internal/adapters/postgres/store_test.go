@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"embed"
 	"errors"
 	"os"
 	"strings"
@@ -13,9 +12,6 @@ import (
 	"github.com/optimaldynamics/maiden-lane/internal/ports"
 	"github.com/optimaldynamics/maiden-lane/internal/ports/storagecontract"
 )
-
-//go:embed schema.sql
-var schemaFS embed.FS
 
 // databaseURLVariable names the database these tests run against. `make
 // store-check` always sets it, so CI never skips these; running `go test ./...`
@@ -211,7 +207,7 @@ func TestTenancyIsPartOfThePrimaryKey(t *testing.T) {
 // rather than yield a store that appears to work and loses everything.
 func TestOpenFailsOnAnUnreachableDatabase(t *testing.T) {
 	_, err := Open(t.Context(),
-		"postgres://nobody:nothing@127.0.0.1:1/absent?sslmode=disable&connect_timeout=1", schema(t))
+		"postgres://nobody:nothing@127.0.0.1:1/absent?sslmode=disable&connect_timeout=1")
 	if err == nil {
 		t.Fatal("Open succeeded against an unreachable database")
 	}
@@ -230,21 +226,12 @@ func requireDatabase(t *testing.T) string {
 	return url
 }
 
-func schema(t *testing.T) string {
-	t.Helper()
-	contents, err := schemaFS.ReadFile("schema.sql")
-	if err != nil {
-		t.Fatalf("read schema: %v", err)
-	}
-	return string(contents)
-}
-
 // freshStore returns a store over an empty plans table. The contract suite
 // requires each store to start empty, and truncating is how that holds for a
 // database that outlives the process.
 func freshStore(t *testing.T, url string) *Store {
 	t.Helper()
-	store, err := Open(t.Context(), url, schema(t))
+	store, err := Open(t.Context(), url)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
