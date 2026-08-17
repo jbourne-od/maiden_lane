@@ -1,6 +1,10 @@
 package promotion
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/optimaldynamics/maiden-lane/internal/ports"
+)
 
 // Production break caught by construction rather than by review: if Pass were the
 // zero value, every forgotten assignment, every struct a future caller builds
@@ -36,8 +40,8 @@ func TestAnEmptyDecisionRefuses(t *testing.T) {
 		t.Fatalf("clauses reported = %d, want %d", got, len(requiredClauses))
 	}
 	for _, result := range decision.Clauses() {
-		if result.Verdict != NotEvaluated {
-			t.Fatalf("clause %v = %v, want NotEvaluated", result.Clause, result.Verdict)
+		if result.Verdict() != NotEvaluated {
+			t.Fatalf("clause %v = %v, want NotEvaluated", result.Clause(), result.Verdict())
 		}
 	}
 }
@@ -49,7 +53,7 @@ func TestAnEmptyDecisionRefuses(t *testing.T) {
 func TestAuthorizationWalksTheClauseListRatherThanTheSuppliedVerdicts(t *testing.T) {
 	// One clause, passing. Under a map-walking implementation this authorizes.
 	decision := decide(1, map[Clause]ClauseResult{
-		ClauseStaticValidation: {Clause: ClauseStaticValidation, Verdict: Pass},
+		ClauseStaticValidation: Passed(ClauseStaticValidation),
 	})
 	if decision.Authorized() {
 		t.Fatal("a single passing clause authorized publication")
@@ -88,10 +92,10 @@ func TestEveryDeclaredClauseIsRequired(t *testing.T) {
 func TestAVerdictCannotBeAttributedToAnotherClause(t *testing.T) {
 	decision := decide(1, map[Clause]ClauseResult{
 		// Keyed as the assessment clause, but labelled as static validation.
-		ClauseReadyAssessment: {Clause: ClauseStaticValidation, Verdict: Pass},
+		ClauseReadyAssessment: Passed(ClauseStaticValidation),
 	})
 	for _, result := range decision.Clauses() {
-		if result.Clause == ClauseStaticValidation && result.Verdict == Pass {
+		if result.Clause() == ClauseStaticValidation && result.Verdict() == Pass {
 			t.Fatal("a verdict keyed to one clause was reported under another")
 		}
 	}
@@ -103,40 +107,36 @@ func TestAVerdictCannotBeAttributedToAnotherClause(t *testing.T) {
 // supply something.
 func TestRefusalDistinguishesUnevaluatedFromFailed(t *testing.T) {
 	decision := decide(7, map[Clause]ClauseResult{
-		ClauseReadyAssessment: {Verdict: Fail},
-		ClauseComparisonCorpus: {
-			Verdict: NotEvaluated, Unevaluated: UnsupportedByBuild,
-		},
-		ClauseProtectedInvariants: {
-			Verdict: NotEvaluated, Unevaluated: InformationAbsent,
-		},
+		ClauseReadyAssessment:     Failed(ClauseReadyAssessment),
+		ClauseComparisonCorpus:    Unsupported(ClauseComparisonCorpus),
+		ClauseProtectedInvariants: Unestablished(ClauseProtectedInvariants),
 	})
 
 	byClause := map[Clause]ClauseResult{}
 	for _, result := range decision.Clauses() {
-		byClause[result.Clause] = result
+		byClause[result.Clause()] = result
 	}
 
 	failed := byClause[ClauseReadyAssessment]
-	if failed.Verdict != Fail {
-		t.Fatalf("assessment clause = %v, want Fail", failed.Verdict)
+	if failed.Verdict() != Fail {
+		t.Fatalf("assessment clause = %v, want Fail", failed.Verdict())
 	}
 	// A failed clause says nothing about evaluability, so the reason axis must be
 	// inert rather than carrying a value a caller might render.
-	if failed.Unevaluated != UnevaluatedNotApplicable {
-		t.Fatalf("a failed clause carried reason %v", failed.Unevaluated)
+	if failed.Unevaluated() != UnevaluatedNotApplicable {
+		t.Fatalf("a failed clause carried reason %v", failed.Unevaluated())
 	}
 
 	unsupported := byClause[ClauseComparisonCorpus]
-	if unsupported.Verdict != NotEvaluated || unsupported.Unevaluated != UnsupportedByBuild {
+	if unsupported.Verdict() != NotEvaluated || unsupported.Unevaluated() != UnsupportedByBuild {
 		t.Fatalf("comparison clause = %v/%v, want NotEvaluated/UnsupportedByBuild",
-			unsupported.Verdict, unsupported.Unevaluated)
+			unsupported.Verdict(), unsupported.Unevaluated())
 	}
 
 	absent := byClause[ClauseProtectedInvariants]
-	if absent.Verdict != NotEvaluated || absent.Unevaluated != InformationAbsent {
+	if absent.Verdict() != NotEvaluated || absent.Unevaluated() != InformationAbsent {
 		t.Fatalf("invariants clause = %v/%v, want NotEvaluated/InformationAbsent",
-			absent.Verdict, absent.Unevaluated)
+			absent.Verdict(), absent.Unevaluated())
 	}
 
 	if decision.PolicyVersion() != 7 {
@@ -150,28 +150,136 @@ func TestClauseOrderIsStable(t *testing.T) {
 	first := decide(1, nil).Clauses()
 	second := decide(1, nil).Clauses()
 	for i := range first {
-		if first[i].Clause != second[i].Clause {
+		if first[i].Clause() != second[i].Clause() {
 			t.Fatalf("clause order differs at %d: %v then %v",
-				i, first[i].Clause, second[i].Clause)
+				i, first[i].Clause(), second[i].Clause())
 		}
-		if first[i].Clause != requiredClauses[i] {
-			t.Fatalf("clause %d = %v, want %v", i, first[i].Clause, requiredClauses[i])
+		if first[i].Clause() != requiredClauses[i] {
+			t.Fatalf("clause %d = %v, want %v", i, first[i].Clause(), requiredClauses[i])
 		}
 	}
 }
 
-// Clauses must be a copy, or a caller could rewrite a recorded decision.
+// Clauses must be a copy. A caller cannot alter a result's fields any more --
+// they are unexported -- but it can still replace whole elements of the returned
+// slice, which would rewrite a recorded decision if the slice were shared.
 func TestClausesCannotBeMutatedThroughTheReturnedSlice(t *testing.T) {
 	decision := decide(1, map[Clause]ClauseResult{
-		ClauseStaticValidation: {Verdict: Pass},
+		ClauseStaticValidation: Passed(ClauseStaticValidation),
 	})
 	returned := decision.Clauses()
 	for i := range returned {
-		returned[i].Verdict = Pass
+		returned[i] = Passed(returned[i].Clause())
 	}
 	for _, result := range decision.Clauses() {
-		if result.Clause != ClauseStaticValidation && result.Verdict == Pass {
-			t.Fatal("mutating the returned slice altered the decision")
+		if result.Clause() != ClauseStaticValidation && result.Verdict() == Pass {
+			t.Fatal("replacing elements of the returned slice altered the decision")
 		}
+	}
+	if decision.Authorized() {
+		t.Fatal("the decision became authorized through its returned slice")
+	}
+}
+
+// Production break caught by owner review: with exported fields,
+// ClauseResult{Verdict: Pass, Unevaluated: InformationAbsent} was constructible,
+// and decide would authorize it because authorization reads only the verdict. The
+// zero-value guarantee was structural while "the reason axis is meaningful only
+// alongside NotEvaluated" remained disciplinary.
+//
+// The fields are unexported now, so that combination is unrepresentable outside
+// this package. Inside it, the constructors are the only path, and this asserts
+// they cannot produce an incoherent pair.
+func TestTheConstructorsCannotProduceAContradiction(t *testing.T) {
+	for _, result := range []ClauseResult{
+		Passed(ClauseStaticValidation),
+		Failed(ClauseStaticValidation),
+		Unsupported(ClauseStaticValidation),
+		Unestablished(ClauseStaticValidation),
+	} {
+		if !result.coherent() {
+			t.Fatalf("%v/%v is incoherent", result.Verdict(), result.Unevaluated())
+		}
+	}
+	// An evaluated clause must carry no reason, because a reason on a decided
+	// clause is a value a caller might render and act on.
+	for _, result := range []ClauseResult{
+		Passed(ClauseStaticValidation), Failed(ClauseStaticValidation),
+	} {
+		if result.Unevaluated() != UnevaluatedNotApplicable {
+			t.Fatalf("%v carried reason %v", result.Verdict(), result.Unevaluated())
+		}
+	}
+	// An unevaluated clause must carry one, or it refuses without saying whether
+	// engineering or evidence is missing.
+	for _, result := range []ClauseResult{
+		Unsupported(ClauseStaticValidation), Unestablished(ClauseStaticValidation),
+	} {
+		if result.Unevaluated() == UnevaluatedNotApplicable {
+			t.Fatal("an unevaluated clause carried no reason")
+		}
+	}
+}
+
+// A contradictory result reaching decide must refuse rather than authorize.
+// Unreachable through the constructors, which is why decide checks instead of
+// trusting: "unreachable" is a claim about today's code.
+func TestDecideRefusesAnIncoherentResult(t *testing.T) {
+	contradiction := ClauseResult{
+		clause: ClauseStaticValidation, verdict: Pass, unevaluated: InformationAbsent,
+	}
+	decision := decide(1, map[Clause]ClauseResult{ClauseStaticValidation: contradiction})
+	if decision.Authorized() {
+		t.Fatal("an incoherent result authorized its clause")
+	}
+	for _, result := range decision.Clauses() {
+		if result.Clause() != ClauseStaticValidation {
+			continue
+		}
+		if result.Verdict() == Pass {
+			t.Fatal("an incoherent result kept its Pass")
+		}
+		// Nothing the contradictory value asserted is carried forward, because a
+		// result whose axes disagree is not evidence of anything.
+		if result.Unevaluated() != InformationAbsent {
+			t.Fatalf("reason = %v, want the collapsed InformationAbsent", result.Unevaluated())
+		}
+	}
+}
+
+// Production break caught by owner review: an out-of-range value must not render
+// as a legitimate vocabulary word. Authorization still fails closed for one, since
+// anything but Pass refuses, but an audit-oriented system must not report
+// corruption as a recognized state.
+func TestOutOfRangeValuesRenderAsUnknown(t *testing.T) {
+	if got := Verdict(255).String(); got != "unknown" {
+		t.Fatalf("Verdict(255) = %q, want unknown", got)
+	}
+	if got := Unevaluated(255).String(); got != "unknown" {
+		t.Fatalf("Unevaluated(255) = %q, want unknown", got)
+	}
+	// The valid zero values still render as themselves rather than falling into
+	// the default case.
+	if got := NotEvaluated.String(); got != "not_evaluated" {
+		t.Fatalf("NotEvaluated = %q", got)
+	}
+	if got := UnevaluatedNotApplicable.String(); got != "not_applicable" {
+		t.Fatalf("UnevaluatedNotApplicable = %q", got)
+	}
+	// An out-of-range verdict must still refuse.
+	if decide(1, map[Clause]ClauseResult{
+		ClauseStaticValidation: {clause: ClauseStaticValidation, verdict: Verdict(255)},
+	}).Authorized() {
+		t.Fatal("an out-of-range verdict authorized its clause")
+	}
+}
+
+// The policy version keeps its type rather than being erased to an integer at
+// this boundary, so an ordinary number cannot reach a place a policy version
+// belongs.
+func TestPolicyVersionKeepsItsType(t *testing.T) {
+	var version ports.PolicyVersion = 7
+	if got := decide(version, nil).PolicyVersion(); got != version {
+		t.Fatalf("policy version = %d, want %d", got, version)
 	}
 }

@@ -13,6 +13,8 @@
 // the storage layer.
 package promotion
 
+import "github.com/optimaldynamics/maiden-lane/internal/ports"
+
 // Verdict is the ratified gate vocabulary (HLD §14).
 //
 // NotEvaluated is the ZERO VALUE, and that is the single most important
@@ -37,14 +39,23 @@ const (
 	Fail
 )
 
+// String enumerates every valid value and reserves default for "unknown".
+//
+// NotEvaluated has an explicit case rather than falling through, because a
+// default that rendered it would translate an out-of-range value such as
+// Verdict(255) into a legitimate vocabulary word. Authorization still fails
+// closed for such a value, since anything but Pass refuses, but an
+// audit-oriented system must not report corruption as a recognized state.
 func (v Verdict) String() string {
 	switch v {
+	case NotEvaluated:
+		return "not_evaluated"
 	case Pass:
 		return "pass"
 	case Fail:
 		return "fail"
 	default:
-		return "not_evaluated"
+		return "unknown"
 	}
 }
 
@@ -71,14 +82,18 @@ const (
 	InformationAbsent
 )
 
+// String enumerates every valid value, reserving default for "unknown", for the
+// same reason Verdict.String does.
 func (u Unevaluated) String() string {
 	switch u {
+	case UnevaluatedNotApplicable:
+		return "not_applicable"
 	case UnsupportedByBuild:
 		return "unsupported_by_build"
 	case InformationAbsent:
 		return "information_absent"
 	default:
-		return "not_applicable"
+		return "unknown"
 	}
 }
 
@@ -147,10 +162,67 @@ func (c Clause) String() string {
 }
 
 // ClauseResult is one clause's outcome.
+//
+// Its fields are unexported and reachable only through the constructors below,
+// which makes a contradictory result unrepresentable rather than merely unwise.
+// With exported fields, ClauseResult{Verdict: Pass, Unevaluated: InformationAbsent}
+// was constructible and would authorize the clause, because authorization reads
+// only the verdict: the zero-value guarantee was structural while "Unevaluated is
+// meaningful only alongside NotEvaluated" stayed disciplinary. A package that has
+// gone to the trouble of making illegal omissions refuse should give contradictory
+// combinations the same treatment.
 type ClauseResult struct {
-	Clause      Clause
-	Verdict     Verdict
-	Unevaluated Unevaluated
+	clause      Clause
+	verdict     Verdict
+	unevaluated Unevaluated
+}
+
+// Passed records a clause that was evaluated and holds.
+func Passed(clause Clause) ClauseResult {
+	return ClauseResult{clause: clause, verdict: Pass}
+}
+
+// Failed records a clause evaluated with the information it needed, which the
+// candidate does not satisfy. This is the only refusal that says something
+// adverse about the candidate.
+func Failed(clause Clause) ClauseResult {
+	return ClauseResult{clause: clause, verdict: Fail}
+}
+
+// Unsupported records a clause this build cannot answer, because the concept it
+// refers to is not implemented. No candidate satisfies it and no input helps:
+// engineering has to change.
+func Unsupported(clause Clause) ClauseResult {
+	return ClauseResult{clause: clause, verdict: NotEvaluated, unevaluated: UnsupportedByBuild}
+}
+
+// Unestablished records a clause that is implemented but whose evidence was not
+// supplied. Unlike Unsupported, the machinery exists and a candidate carrying the
+// evidence would be evaluated.
+func Unestablished(clause Clause) ClauseResult {
+	return ClauseResult{clause: clause, verdict: NotEvaluated, unevaluated: InformationAbsent}
+}
+
+// Clause identifies which requirement this result is for.
+func (r ClauseResult) Clause() Clause { return r.clause }
+
+// Verdict is the clause's outcome.
+func (r ClauseResult) Verdict() Verdict { return r.verdict }
+
+// Unevaluated explains why the clause could not be established, and is
+// UnevaluatedNotApplicable whenever the verdict is not NotEvaluated.
+func (r ClauseResult) Unevaluated() Unevaluated { return r.unevaluated }
+
+// coherent reports whether a result's two axes agree.
+//
+// Unreachable through the constructors, which is the point of having them. It is
+// still checked, because "unreachable" is a claim about today's code and decide
+// refuses rather than trusting it.
+func (r ClauseResult) coherent() bool {
+	if r.verdict == NotEvaluated {
+		return r.unevaluated == UnsupportedByBuild || r.unevaluated == InformationAbsent
+	}
+	return r.unevaluated == UnevaluatedNotApplicable
 }
 
 // Decision is the gate's complete answer.
@@ -162,7 +234,7 @@ type ClauseResult struct {
 // version participates in no semantic identity and never reaches the kernel.
 type Decision struct {
 	clauses       []ClauseResult
-	policyVersion uint64
+	policyVersion ports.PolicyVersion
 	authorized    bool
 }
 
@@ -170,7 +242,13 @@ type Decision struct {
 func (d Decision) Authorized() bool { return d.authorized }
 
 // PolicyVersion is the target policy version this decision was made under.
-func (d Decision) PolicyVersion() uint64 { return d.policyVersion }
+//
+// It keeps ports.PolicyVersion rather than erasing to an integer at this
+// boundary. Importing the type does not make the gate impure — ports declares
+// interfaces and values, and nothing here calls a store — and the distinct type
+// exists precisely to stop ordinary integers reaching places a policy version
+// belongs.
+func (d Decision) PolicyVersion() ports.PolicyVersion { return d.policyVersion }
 
 // Clauses returns the per-clause results in the order of requiredClauses, so a
 // rendering of a refusal is stable rather than dependent on evaluation order.
@@ -183,7 +261,7 @@ func (d Decision) Clauses() []ClauseResult {
 func (d Decision) Refusals() []ClauseResult {
 	refused := make([]ClauseResult, 0, len(d.clauses))
 	for _, result := range d.clauses {
-		if result.Verdict != Pass {
+		if result.verdict != Pass {
 			refused = append(refused, result)
 		}
 	}
@@ -196,7 +274,7 @@ func (d Decision) Refusals() []ClauseResult {
 // entry is NotEvaluated and refuses. Authorization requires an explicit Pass on
 // every clause; there is no path by which an absent, defaulted, or zero value
 // becomes an approval.
-func decide(policyVersion uint64, verdicts map[Clause]ClauseResult) Decision {
+func decide(policyVersion ports.PolicyVersion, verdicts map[Clause]ClauseResult) Decision {
 	decision := Decision{
 		policyVersion: policyVersion,
 		clauses:       make([]ClauseResult, 0, len(requiredClauses)),
@@ -204,13 +282,17 @@ func decide(policyVersion uint64, verdicts map[Clause]ClauseResult) Decision {
 	}
 	for _, clause := range requiredClauses {
 		result, present := verdicts[clause]
-		if !present {
-			result = ClauseResult{Clause: clause, Verdict: NotEvaluated}
+		if !present || !result.coherent() {
+			// Absent, or claiming two things at once. Both refuse, and both
+			// collapse to the same unevaluated state: a result whose axes
+			// disagree is not evidence of anything, so nothing it asserted is
+			// carried forward.
+			result = Unestablished(clause)
 		}
 		// Guard against a verdict recorded under the wrong key, which would
 		// otherwise let one clause's pass stand in for another's.
-		result.Clause = clause
-		if result.Verdict != Pass {
+		result.clause = clause
+		if result.verdict != Pass {
 			decision.authorized = false
 		}
 		decision.clauses = append(decision.clauses, result)
