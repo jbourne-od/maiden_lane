@@ -1,0 +1,38 @@
+{
+  "planID": "sha256:50209570a7d87e7ff39b24c6c9ab9cf8c6602967730716869b0e68949ff05b79",
+  "initialState": {
+    "lineage": {
+      "namespace": "maiden-lane.sanitized-fixture",
+      "rootKey": "team-hos-team-ab"
+    },
+    "entities": [
+      {
+        "kind": "driver",
+        "canonicalSourceKey": "A",
+        "fields": {
+          "assignment_key": { "kind": "string", "string": "X" },
+          "hos_anchor": { "kind": "atom", "atom": "T0" },
+          "hos_elapsed_hours": { "kind": "int64", "int64": 10 },
+          "hos_driving_hours": { "kind": "int64", "int64": 8 }
+        }
+      },
+      {
+        "kind": "driver",
+        "canonicalSourceKey": "B",
+        "fields": {
+          "assignment_key": { "kind": "string", "string": "X" },
+          "hos_anchor": { "kind": "atom", "atom": "T0" },
+          "hos_elapsed_hours": { "kind": "int64", "int64": 7 },
+          "hos_driving_hours": { "kind": "int64", "int64": 6 }
+        }
+      }
+    ],
+    "relations": []
+  },
+  "world": { "references": [] },
+  "executorIdentity": {
+    "backend": "go",
+    "version": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "provenancePolicy": "changes.v1"
+}
