@@ -13,9 +13,14 @@ walking-skeleton design, written as the API actually receives them.
 Both executions name the plan `plan.json` compiles to, so post the plan first.
 
 ```sh
-make demo                                   # start a throwaway server and walk through it
-scripts/demo.sh http://127.0.0.1:8080       # or narrate against a server you are running
+make demo                                # browser client at http://127.0.0.1:8090
+make demo-terminal                       # the same walkthrough as terminal output
+scripts/demo.sh http://127.0.0.1:8080    # narrate against a server you started
 ```
+
+Both demos start from these files. The browser client loads them at startup and lets
+the driver observations be edited, so what you see first is exactly what is committed
+here.
 
 ## Why the two executions differ by one field
 

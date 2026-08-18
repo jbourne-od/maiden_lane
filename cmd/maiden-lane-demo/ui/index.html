@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Maiden Lane — semantic run explorer</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-text">
+    <h1>Maiden Lane</h1>
+    <p class="tagline">
+      A transformation engine that will not produce a number it cannot defend.
+      Change an observation below and watch what it does.
+    </p>
+  </div>
+  <div class="masthead-meta" id="masthead-meta"></div>
+</header>
+
+<details class="primer" id="primer">
+  <summary>What you are looking at</summary>
+  <div class="primer-body">
+    <p>
+      Two truck drivers are reporting hours-of-service observations. The task is to
+      combine them into one <em>team</em> HOS record. That is only meaningful if the
+      two reports actually describe the same thing — the same assignment, the same
+      duty period, internally consistent hours. When they do not, the honest output
+      is not an average. It is a refusal.
+    </p>
+    <ol class="primer-steps">
+      <li>
+        <strong>A declared program, not code.</strong> The rules, checkpoints, and
+        completeness profiles are declarations. The compiler turns them into a
+        <em>plan</em> whose identity is derived from its content, so the same program
+        always has the same name.
+      </li>
+      <li>
+        <strong>A pinned observation.</strong> The input is fixed and identified by
+        content too. A different observation is a different run, never the same run
+        with different data.
+      </li>
+      <li>
+        <strong>Transitions commit one at a time.</strong> Each rule either commits
+        or is refused. At declared boundaries the engine <em>seals a checkpoint</em>:
+        an immutable, replay-verified record of everything accepted so far.
+      </li>
+      <li>
+        <strong>Refusal is specific and keeps what was earned.</strong> A refused
+        boundary names a closed code. Checkpoints sealed before it stay sealed.
+      </li>
+      <li>
+        <strong>Readiness is asked per consumer.</strong> The same sealed checkpoint
+        can be complete enough to publish to one system and not another. Both answers
+        are real answers.
+      </li>
+    </ol>
+    <p class="primer-note">
+      Everything on this page comes from the documented HTTP API. Open your browser's
+      network tab — the requests you will see are <code>POST /v1/plans</code>,
+      <code>POST /v1/executions</code>, and <code>GET /v1/executions/{id}</code>.
+      Nothing is precomputed and there is no demo path through the engine.
+    </p>
+  </div>
+</details>
+
+<main>
+  <section class="panel panel-input">
+    <h2><span class="step-number">1</span> The observation</h2>
+    <p class="panel-lede">
+      Edit any value, or start from one of these. Each preset is a real input that
+      the engine answers differently.
+    </p>
+    <div class="presets" id="presets"></div>
+    <div class="drivers" id="drivers"></div>
+    <div class="run-row">
+      <button id="run" class="primary">Run this observation</button>
+      <span class="run-status" id="run-status"></span>
+    </div>
+  </section>
+
+  <section class="panel panel-output">
+    <h2><span class="step-number">2</span> What the engine did</h2>
+    <p class="panel-lede" id="outcome-lede">
+      Run an observation to see the transitions, the checkpoints it sealed, and the
+      readiness answers.
+    </p>
+    <div id="verdict"></div>
+    <ol class="timeline" id="timeline"></ol>
+  </section>
+
+  <section class="panel panel-readiness">
+    <h2><span class="step-number">3</span> Is it ready to publish?</h2>
+    <p class="panel-lede">
+      Each sealed checkpoint is assessed against each completeness profile. A
+      <code>needs_input</code> answer names exactly which requirements are missing —
+      it is not a failure, it is a different question answered honestly.
+    </p>
+    <div id="readiness"><p class="empty">Nothing assessed yet.</p></div>
+  </section>
+
+  <section class="panel panel-identity">
+    <h2><span class="step-number">4</span> What it is called</h2>
+    <p class="panel-lede">
+      Every artifact is named by a digest of its content. That is what makes replay
+      exact and makes "did the meaning change?" an answerable question rather than a
+      matter of trust.
+    </p>
+    <div id="identities"><p class="empty">Nothing named yet.</p></div>
+    <div id="trace-link"></div>
+  </section>
+
+  <section class="panel panel-raw">
+    <h2><span class="step-number">5</span> The actual exchange</h2>
+    <p class="panel-lede">
+      The request this page sent and the response the service returned, verbatim.
+    </p>
+    <div class="raw-tabs" id="raw-tabs"></div>
+    <pre class="raw" id="raw"><code>Nothing sent yet.</code></pre>
+  </section>
+</main>
+
+<footer>
+  <span id="footer-source"></span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

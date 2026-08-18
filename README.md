@@ -113,23 +113,38 @@ go run ./cmd/maiden-lane serve --listen-address=127.0.0.1:8080
 To see what the system does rather than read about it:
 
 ```bash
-make demo
+make demo          # then open http://127.0.0.1:8090
 ```
 
-That builds the binary, starts a throwaway in-memory server, and walks one
-semantic run end to end over the public HTTP API: compiling declarations into a
-content-addressed plan, executing it over a pinned observation, sealing two
-checkpoints, asking two completeness profiles for a readiness verdict and getting
-different answers, and then changing a single observation so the aggregation
-boundary deterministically refuses with a closed code while keeping the prefix
-that was justified.
+That starts the service and a browser client for it, and stays up until Ctrl-C.
 
-It uses nothing but the committed payloads in [`examples/teamhos`](examples/teamhos)
-and the documented API — there is no demo mode in the binary and no special path
-through the code, because a demo that took a shortcut would be evidence about the
-shortcut. Run it against a server of your own with
-`scripts/demo.sh http://127.0.0.1:8080`, and start the observability stack first
-(`make observe-up`) to watch the same runs arrive as traces.
+The page puts two drivers' hours-of-service observations in front of you and lets you
+change them. Pick a preset or edit any field, run it, and watch what the engine does
+with it: which rules committed, which checkpoints it sealed, whether each completeness
+profile considers the result ready, and what everything is named. Change one driver's
+duty anchor and the aggregation boundary refuses with a closed code, keeping the
+checkpoint that was already justified — which is the behaviour the whole design exists
+to produce.
+
+The client is a separate binary (`cmd/maiden-lane-demo`) that serves a static page and
+reverse-proxies `/v1` to the real server. It exercises only the documented API, so the
+browser's network tab is a truthful record of what the service was asked; there is no
+demo mode in the service and no special path through the engine. The page's starting
+payloads are the committed ones in [`examples/teamhos`](examples/teamhos), which
+`internal/httpapi/examples_test.go` pins to the ratified fixture's identities.
+
+Useful variations:
+
+```bash
+make observe-up                            # traces; make demo then exports to it
+make demo ML_DEMO_PORT=8199 ML_DEMO_UI_PORT=8190   # if those ports are taken
+make demo-terminal                         # the same walkthrough as terminal output
+scripts/demo.sh http://127.0.0.1:8080      # narrate against a server you started
+```
+
+Open the page directly on a particular case with
+`http://127.0.0.1:8090/?preset=anchor&run=1` — the presets are `consistent`,
+`anchor`, `duration`, `negative`, `incomplete`, and `assignment`.
 
 The current HTTP surface is:
 
