@@ -1,0 +1,279 @@
+{
+  "compilerSemanticsVersion": "maiden-lane.compiler-semantics.v1",
+  "profiles": [
+    {
+      "aggregation": "all_selected",
+      "implies": [],
+      "key": "cm.v1",
+      "requirements": [
+        {
+          "code": "TEAM_ASSIGNMENT_KEY_REQUIRED",
+          "field": "team.assignment_key",
+          "kind": "field_present"
+        }
+      ],
+      "scope": {
+        "entityKind": "team",
+        "kind": "all_entities_of_kind"
+      }
+    },
+    {
+      "aggregation": "all_selected",
+      "implies": [
+        "cm.v1"
+      ],
+      "key": "optimizer.v1",
+      "requirements": [
+        {
+          "code": "TEAM_AGGREGATION_ANCHOR_REQUIRED",
+          "field": "team.aggregation_anchor",
+          "kind": "field_present"
+        },
+        {
+          "code": "TEAM_ASSIGNMENT_KEY_REQUIRED",
+          "field": "team.assignment_key",
+          "kind": "field_present"
+        },
+        {
+          "code": "TEAM_DRIVING_DURATION_REQUIRED",
+          "field": "team.driving_duration_hours",
+          "kind": "field_present"
+        },
+        {
+          "code": "TEAM_ELAPSED_DURATION_REQUIRED",
+          "field": "team.elapsed_duration_hours",
+          "kind": "field_present"
+        }
+      ],
+      "scope": {
+        "entityKind": "team",
+        "kind": "all_entities_of_kind"
+      }
+    }
+  ],
+  "rules": {
+    "checkpoints": [
+      {
+        "after": "form_team.v1",
+        "key": "team_formed.v1"
+      },
+      {
+        "after": "aggregate_team_hos.v1",
+        "key": "team_hos_aggregated.v1"
+      }
+    ],
+    "transformations": [
+      {
+        "after": [],
+        "declaredReads": [
+          "driver.assignment_key"
+        ],
+        "declaredWrites": [
+          "team.assignment_key"
+        ],
+        "form": {
+          "copiedFields": [
+            {
+              "destination": "team.assignment_key",
+              "source": "driver.assignment_key"
+            }
+          ],
+          "groupingField": "driver.assignment_key",
+          "outputKey": {
+            "field": "driver.assignment_key",
+            "kind": "common_source_field"
+          },
+          "outputKind": "team",
+          "outputSlot": "team",
+          "relationKind": "member",
+          "sourceCount": 2,
+          "sourceKind": "driver",
+          "sources": [
+            {
+              "canonicalSourceKey": "A",
+              "kind": "driver"
+            },
+            {
+              "canonicalSourceKey": "B",
+              "kind": "driver"
+            }
+          ]
+        },
+        "id": "form_team.v1",
+        "operator": "form_related_entity"
+      },
+      {
+        "after": [],
+        "aggregate": {
+          "anchor": {
+            "destination": "team.aggregation_anchor",
+            "source": "driver.hos_anchor"
+          },
+          "predicates": [
+            {
+              "fields": [
+                "driver.hos_anchor",
+                "driver.hos_driving_hours",
+                "driver.hos_elapsed_hours"
+              ],
+              "kind": "complete_tuple"
+            },
+            {
+              "fields": [
+                "driver.hos_driving_hours"
+              ],
+              "kind": "non_negative_int"
+            },
+            {
+              "fields": [
+                "driver.hos_elapsed_hours"
+              ],
+              "kind": "non_negative_int"
+            },
+            {
+              "fields": [
+                "driver.hos_anchor"
+              ],
+              "kind": "equal_field_across_sources"
+            },
+            {
+              "fields": [
+                "driver.hos_driving_hours",
+                "driver.hos_elapsed_hours"
+              ],
+              "kind": "less_or_equal_fields"
+            }
+          ],
+          "reductions": [
+            {
+              "destination": "team.driving_duration_hours",
+              "kind": "reduce_int64_max",
+              "source": "driver.hos_driving_hours"
+            },
+            {
+              "destination": "team.elapsed_duration_hours",
+              "kind": "reduce_int64_max",
+              "source": "driver.hos_elapsed_hours"
+            }
+          ],
+          "relationKind": "member",
+          "requiredSourceTuple": [
+            "driver.hos_anchor",
+            "driver.hos_driving_hours",
+            "driver.hos_elapsed_hours"
+          ],
+          "resultPredicates": [
+            {
+              "fields": [
+                "team.aggregation_anchor",
+                "team.driving_duration_hours",
+                "team.elapsed_duration_hours"
+              ],
+              "kind": "complete_tuple"
+            },
+            {
+              "fields": [
+                "team.driving_duration_hours"
+              ],
+              "kind": "non_negative_int"
+            },
+            {
+              "fields": [
+                "team.elapsed_duration_hours"
+              ],
+              "kind": "non_negative_int"
+            },
+            {
+              "fields": [
+                "team.driving_duration_hours",
+                "team.elapsed_duration_hours"
+              ],
+              "kind": "less_or_equal_fields"
+            }
+          ],
+          "sourceKind": "driver",
+          "target": {
+            "rule": "form_team.v1",
+            "slot": "team"
+          }
+        },
+        "declaredReads": [
+          "driver.hos_anchor",
+          "driver.hos_driving_hours",
+          "driver.hos_elapsed_hours",
+          "team.aggregation_anchor",
+          "team.driving_duration_hours",
+          "team.elapsed_duration_hours"
+        ],
+        "declaredWrites": [
+          "team.aggregation_anchor",
+          "team.driving_duration_hours",
+          "team.elapsed_duration_hours"
+        ],
+        "id": "aggregate_team_hos.v1",
+        "operator": "aggregate_related_fields"
+      }
+    ]
+  },
+  "schema": {
+    "entities": [
+      {
+        "fields": [
+          {
+            "kind": "string",
+            "name": "assignment_key",
+            "requiredAtConstruction": false
+          },
+          {
+            "kind": "atom",
+            "name": "hos_anchor",
+            "requiredAtConstruction": false
+          },
+          {
+            "kind": "int64",
+            "name": "hos_driving_hours",
+            "requiredAtConstruction": false
+          },
+          {
+            "kind": "int64",
+            "name": "hos_elapsed_hours",
+            "requiredAtConstruction": false
+          }
+        ],
+        "kind": "driver"
+      },
+      {
+        "fields": [
+          {
+            "kind": "atom",
+            "name": "aggregation_anchor",
+            "requiredAtConstruction": false
+          },
+          {
+            "kind": "string",
+            "name": "assignment_key",
+            "requiredAtConstruction": false
+          },
+          {
+            "kind": "int64",
+            "name": "driving_duration_hours",
+            "requiredAtConstruction": false
+          },
+          {
+            "kind": "int64",
+            "name": "elapsed_duration_hours",
+            "requiredAtConstruction": false
+          }
+        ],
+        "kind": "team"
+      }
+    ],
+    "relations": [
+      {
+        "fromKind": "team",
+        "kind": "member",
+        "toKind": "driver"
+      }
+    ]
+  }
+}

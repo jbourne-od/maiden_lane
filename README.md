@@ -110,6 +110,27 @@ make verify
 go run ./cmd/maiden-lane serve --listen-address=127.0.0.1:8080
 ```
 
+To see what the system does rather than read about it:
+
+```bash
+make demo
+```
+
+That builds the binary, starts a throwaway in-memory server, and walks one
+semantic run end to end over the public HTTP API: compiling declarations into a
+content-addressed plan, executing it over a pinned observation, sealing two
+checkpoints, asking two completeness profiles for a readiness verdict and getting
+different answers, and then changing a single observation so the aggregation
+boundary deterministically refuses with a closed code while keeping the prefix
+that was justified.
+
+It uses nothing but the committed payloads in [`examples/teamhos`](examples/teamhos)
+and the documented API — there is no demo mode in the binary and no special path
+through the code, because a demo that took a shortcut would be evidence about the
+shortcut. Run it against a server of your own with
+`scripts/demo.sh http://127.0.0.1:8080`, and start the observability stack first
+(`make observe-up`) to watch the same runs arrive as traces.
+
 The current HTTP surface is:
 
 | Operation | Meaning |
@@ -257,12 +278,14 @@ make verify
 make store-check
 make container-check
 make observe-up
+make demo
 ```
 
 `make verify` needs no Docker and no database. `make store-check` runs the
 PostgreSQL adapter against a throwaway container, `make container-check`
-builds and smoke-tests the image, and `make observe-up` starts the local
-observability stack.
+builds and smoke-tests the image, `make observe-up` starts the local
+observability stack, and `make demo` walks one semantic run against a
+throwaway local server.
 
 `make verify` is the authoritative complete local verification command. Its
 `Makefile` recipe enforces formatting and module tidiness, verifies the pinned

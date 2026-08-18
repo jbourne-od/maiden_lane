@@ -5,7 +5,7 @@ BINARY_DIR ?= bin
 BINARY ?= $(BINARY_DIR)/maiden-lane
 IMAGE ?= maiden-lane:local
 
-.PHONY: help fmt fmt-check mod-check tool-versions openapi openapi-check vet staticcheck test test-race vulncheck build verify migrate migrate-status store-check container-build container-smoke container-check observe-preflight observe-up observe-down observe-logs
+.PHONY: help fmt fmt-check mod-check tool-versions openapi openapi-check vet staticcheck test test-race vulncheck build verify migrate migrate-status store-check container-build container-smoke container-check observe-preflight observe-up observe-down observe-logs demo
 
 help:
 	@echo "fmt              format Go source"
@@ -28,6 +28,7 @@ help:
 	@echo "observe-up       start the local collector, Tempo, Prometheus, and Grafana"
 	@echo "observe-down     stop the observability stack and discard its data"
 	@echo "observe-logs     follow the observability stack logs"
+	@echo "demo             build, then walk one semantic run against a local server"
 
 fmt:
 	@gofmt="$$( $(GO) env GOROOT)/bin/gofmt"; \
@@ -293,3 +294,70 @@ observe-down:
 
 observe-logs:
 	@docker compose --file $(OBSERVE_COMPOSE) logs --follow --tail 40
+
+# `demo` is a guided walk through one semantic run, for showing someone what this
+# system does. It starts a throwaway in-memory server on an unused port, drives it
+# with the committed example payloads over the public HTTP API, and stops it again.
+#
+# In-memory rather than PostgreSQL on purpose: the demo needs no Docker and leaves
+# nothing behind, and durability is not what it is demonstrating. To narrate the
+# same runs against real storage, start `serve` yourself with a database URL and
+# pass the address:  scripts/demo.sh http://127.0.0.1:8080
+#
+# Traces and metrics are exported only when the local collector is reachable.
+# Enabling them unconditionally would make the common case -- no stack running --
+# wait on a connection that is not there, and that delay would read as the demo
+# hanging rather than as telemetry being unavailable.
+#
+# The port is checked for an existing listener before the server starts, and the
+# demo refuses rather than proceeding. This repo already paid for the alternative
+# once: a bind that appears to succeed while another process holds the port
+# produces symptoms that all point at our own code. Override with
+# `make demo ML_DEMO_PORT=8123`.
+#
+# `go run` is deliberately not used to start the server. It compiles to a cache
+# path and execs a CHILD process, so the PID a trap can kill is only the wrapper:
+# the server survived teardown, kept the port, and the next run refused to start
+# because "something already answers" -- which was our own leaked server.
+DEMO_URL ?=
+ML_DEMO_PORT ?= 8099
+
+demo: build
+	@set -eu; \
+	if [ -n "$(DEMO_URL)" ]; then \
+		exec scripts/demo.sh "$(DEMO_URL)"; \
+	fi; \
+	port="$(ML_DEMO_PORT)"; \
+	if curl --silent --connect-timeout 0.25 --max-time 0.5 --output /dev/null \
+		"http://127.0.0.1:$$port/healthz" 2>/dev/null; then \
+		echo "something already answers on 127.0.0.1:$$port."; \
+		echo "if it is a maiden-lane server, run: scripts/demo.sh http://127.0.0.1:$$port"; \
+		echo "otherwise choose another port: make demo ML_DEMO_PORT=8123"; \
+		exit 1; \
+	fi; \
+	log="$$(mktemp -t maiden-lane-demo)"; \
+	if curl --silent --connect-timeout 0.25 --max-time 0.5 --output /dev/null \
+		"http://127.0.0.1:$(ML_OTLP_HTTP_PORT)/v1/traces" 2>/dev/null; then \
+		echo "collector reachable on $(ML_OTLP_HTTP_PORT); exporting traces and metrics"; \
+		OTEL_TRACES_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp \
+		OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:$(ML_OTLP_HTTP_PORT)" \
+		OTEL_EXPORTER_OTLP_INSECURE=true \
+		$(BINARY) serve --listen-address "127.0.0.1:$$port" >"$$log" 2>&1 & \
+	else \
+		$(BINARY) serve --listen-address "127.0.0.1:$$port" >"$$log" 2>&1 & \
+	fi; \
+	server=$$!; \
+	trap 'kill $$server 2>/dev/null || true; rm -f "$$log"' EXIT INT TERM; \
+	ready=""; \
+	attempt=0; \
+	while [ "$$attempt" -lt 120 ]; do \
+		if [ "$$(curl --silent --connect-timeout 0.25 --max-time 0.5 --output /dev/null \
+			--write-out '%{http_code}' "http://127.0.0.1:$$port/healthz" || true)" = "204" ]; then \
+			ready="yes"; break; \
+		fi; \
+		kill -0 $$server 2>/dev/null || { echo "the demo server exited:"; cat "$$log"; exit 1; }; \
+		attempt=$$((attempt + 1)); \
+		sleep 0.25; \
+	done; \
+	test -n "$$ready" || { echo "the demo server did not become ready"; cat "$$log"; exit 1; }; \
+	scripts/demo.sh "http://127.0.0.1:$$port"
