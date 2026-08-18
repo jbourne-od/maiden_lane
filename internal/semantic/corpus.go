@@ -133,6 +133,21 @@ func (c Corpus) CanonicalBytes() []byte { return bytes.Clone(c.canonical) }
 // both sides of a comparison naming the same corpus and world are provably running over
 // the same inputs rather than asserting that they are.
 func (c Corpus) InputIdentities(world World) ([]InputID, error) {
+	// A corpus nobody constructed must not name zero inputs successfully.
+	//
+	// NewCorpus refuses an empty corpus specifically so clause 6 cannot be satisfied by
+	// being vacuously true, and the zero value would reintroduce exactly that state
+	// through the one method that asserts semantic input identity: it would iterate
+	// nothing and report success. The constructor's refusal has to hold here or it is
+	// not a refusal, it is a suggestion about how to build one.
+	//
+	// The other accessors are deliberately left alone. ID() == "", Len() == 0, and
+	// Case() reporting absence are harmless descriptions of an empty value; this is the
+	// method that makes a claim about what inputs exist.
+	if err := c.established(); err != nil {
+		return nil, err
+	}
+
 	identities := make([]InputID, 0, len(c.digests))
 	for _, digest := range c.digests {
 		encoded, err := encodeInputIdentity(digest, world.ID())
@@ -142,4 +157,16 @@ func (c Corpus) InputIdentities(world World) ([]InputID, error) {
 		identities = append(identities, InputID(canonicalDigest(encoded)))
 	}
 	return identities, nil
+}
+
+// established reports whether this is a corpus the constructor produced.
+//
+// It is a method rather than an inline check because the comparison contract needs the
+// same question answered, and a second implementation of "is this a real corpus" is a
+// second chance to answer it differently.
+func (c Corpus) established() error {
+	if c.id == "" || len(c.digests) == 0 {
+		return fmt.Errorf("replay corpus was not constructed")
+	}
+	return nil
 }

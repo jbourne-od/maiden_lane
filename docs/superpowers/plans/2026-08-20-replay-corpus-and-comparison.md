@@ -137,22 +137,48 @@ assessed `ready` under *that* profile. This is the same distinction the readines
 already draws: an assessment under a different profile establishes nothing about the one
 required, so it is `not_evaluated` rather than a pass.
 
-## What this costs, and why it is affordable
+## What this costs
 
-A corpus of *n* cases requires *n* executions per side. That is the real cost of this
-programme and it should be stated rather than discovered.
+A corpus of *n* cases requires *n* executions per side. That is the headline cost, and
+the rest of this section exists because an earlier draft of it was wrong in a way that
+would have become an architectural assumption.
 
-It is affordable for one reason: execution is deterministic and identity is derived, so
-a case that has already been executed under a given `ExecutionID` never needs executing
-again — the stored result is reproducible and, since the rehydration slice, verifiably
-so. A corpus therefore costs *n* executions once, and comparisons over it afterwards
-cost lookups. A comparison over a corpus whose cases have never run is expensive and
-honest about being expensive.
+That draft said a corpus costs *n* executions once and comparisons over it afterwards
+cost lookups. It does not, and the reason is a decision this programme inherits rather
+than one it can revisit. Comparison must consume authenticated artifacts, and the
+rehydration slice established that recovering authenticated kernel values from stored
+history means **re-executing the stored inputs**: kernel values cannot be rebuilt from
+bytes, and recomputing an identity from stored components proves only that a stored
+tuple agrees with itself. So the true shape is:
 
-This is also where the rehydration decision earns its keep a second time. Comparison
-consumes artifacts from past executions, and it must consume authenticated ones, so it
-re-derives rather than reading projections — the same rule that rules out trusting a
-stored gate verdict.
+| | cost |
+|---|---|
+| A case never executed | one execution, which produces and stores it |
+| A case already executed, compared later | a lookup **plus a deterministic re-execution to authenticate it** |
+
+A comparison performed immediately, in the process that ran the cases, can use the live
+kernel artifacts it already holds. A comparison performed later, over persisted history,
+cannot — so comparing two sides of a persisted corpus costs roughly **2n re-executions**,
+not 2n once followed by cheap lookups.
+
+Three distinctions must stay separate, because collapsing them is how the wrong version
+of this paragraph gets rebuilt as infrastructure:
+
+1. **Execution reuse.** A derived `ExecutionID` means a case already executed is never
+   enqueued or stored a second time. This is real and it is what makes a corpus
+   accumulate rather than repeat.
+2. **Authentication cost.** Recovering kernel artifacts from stored history currently
+   costs a re-execution. This is not a missing optimization; it is the price of refusing
+   to let a stored projection carry authorization weight.
+3. **Any future cache.** Something that makes authentication cheaper would need its own
+   trust argument, and it may not simply promote the stored projection to authority. That
+   is the option already rejected, and it does not become correct by being called a cache.
+
+None of this makes the programme intractable. Hundreds of deterministic executions are
+affordable, and determinism is precisely what makes them safe to repeat. But the
+affordability argument has to rest on the real number, because a later slice that
+"optimizes" comparison by reading stored results would be reintroducing the trust model
+this system spent three slices removing.
 
 ## Where this code belongs
 
@@ -209,6 +235,13 @@ one where determinism does the work: a case already executed is already done.
   and its identity is re-derived and required to match — the pattern plans already use.
 - **A refusal is an answer.** Comparability that cannot be established is a reported
   result with a reason, not an error and not an empty success.
+- **A comparison identity names the question, not the evidence.** `ComparisonID`
+  identifies the semantic comparison being asked: two checkpoint declarations, a profile,
+  a world, a corpus, and a correspondence. The *n* `ExecutionID`s and
+  `CheckpointArtifactID`s that answered it are evidence, and must not be folded into it
+  for auditability. Doing so would collapse question and evidence — the same category
+  error as storing a gate verdict beside the artifacts it summarizes — and would make a
+  comparison's identity change every time it was re-evidenced.
 - **Deliberate omissions get written down.** Anything this programme could plausibly
   include and does not — protected metrics above all — is recorded as absent rather than
   left to be assumed present.

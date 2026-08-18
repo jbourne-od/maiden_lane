@@ -273,3 +273,46 @@ func corpusRepeat(character string, count int) string {
 	}
 	return string(out)
 }
+
+// PRODUCTION BREAK CAUGHT BY OWNER REVIEW: the constructor refuses an empty corpus so
+// clause 6 cannot be satisfied by being vacuously true, and the zero value walked
+// straight back into that state through the one method that asserts what inputs exist.
+// It iterated nothing and reported success, so "this corpus names zero inputs" came back
+// with a nil error from a corpus NewCorpus would never have produced.
+//
+// The other accessors are intentionally not covered here. ID(), Len(), and Case() only
+// describe an empty value; this is the method that makes a claim.
+func TestAnUnconstructedCorpusNamesNoInputs(t *testing.T) {
+	world, err := NewWorld(nil)
+	if err != nil {
+		t.Fatalf("NewWorld: %v", err)
+	}
+
+	var zero Corpus
+	identities, err := zero.InputIdentities(world)
+	if err == nil {
+		t.Fatalf("a corpus the constructor would refuse named %d inputs successfully",
+			len(identities))
+	}
+	if identities != nil {
+		t.Fatal("a refused corpus returned identities alongside its error")
+	}
+
+	// Harmless zero-value description, asserted so a later change that made these error
+	// is a deliberate decision rather than a side effect of this one.
+	if zero.ID() != "" || zero.Len() != 0 {
+		t.Fatalf("the zero corpus describes itself as %q with %d cases", zero.ID(), zero.Len())
+	}
+	if _, ok := zero.Case(0); ok {
+		t.Fatal("the zero corpus reported a case")
+	}
+
+	// A constructed corpus still works, or the guard has broken the operation it guards.
+	corpus, err := NewCorpus(corpusCases(t, 2))
+	if err != nil {
+		t.Fatalf("NewCorpus: %v", err)
+	}
+	if _, err := corpus.InputIdentities(world); err != nil {
+		t.Fatalf("a real corpus was refused: %v", err)
+	}
+}
