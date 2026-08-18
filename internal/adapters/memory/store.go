@@ -55,6 +55,15 @@ type Store struct {
 	// missing entry rather than an absence inferred from a scan finding nothing.
 	policies       map[policyKey]ports.TargetPolicy
 	policyVersions map[targetKey]ports.PolicyVersion
+
+	// Publications are append-only for the same reason, and hold their current
+	// version for the same two: appending does not scan for it, and a target that
+	// has never been published to is a missing entry rather than an absence
+	// inferred from a scan. The highest version is what is published; every lower
+	// one is superseded and stays readable, which is what makes an old decision
+	// explainable.
+	publications        map[publicationKey]ports.Publication
+	publicationVersions map[targetKey]ports.PublicationVersion
 }
 
 // NewStore returns an empty store ready for concurrent use.
@@ -64,6 +73,9 @@ func NewStore() *Store {
 		executions:     map[executionKey]*executionEntry{},
 		policies:       map[policyKey]ports.TargetPolicy{},
 		policyVersions: map[targetKey]ports.PolicyVersion{},
+
+		publications:        map[publicationKey]ports.Publication{},
+		publicationVersions: map[targetKey]ports.PublicationVersion{},
 	}
 }
 
