@@ -20,6 +20,13 @@ type Dependencies struct {
 	Executions ports.ExecutionStore
 	Observer   app.Observer
 
+	// Policies and Publications serve the promotion gate and the publication
+	// pointer. Both are optional: a nil store makes the publication routes report
+	// the feature as unavailable rather than panicking, which is what lets a
+	// deployment serve the semantic surface without a control plane configured.
+	Policies     ports.PolicyStore
+	Publications ports.PublicationStore
+
 	// Instrumenter wraps versioned routes in HTTP telemetry. It is optional:
 	// a nil instrumenter serves the same routes untelemetered, which is what
 	// handler tests use. Health probes are never wrapped.

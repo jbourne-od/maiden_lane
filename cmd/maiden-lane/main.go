@@ -57,6 +57,8 @@ type serveCommand func(context.Context, string, *slog.Logger, http.Handler, *log
 type planStore interface {
 	ports.PlanStore
 	ports.ExecutionStore
+	ports.PolicyStore
+	ports.PublicationStore
 }
 
 // productionSpineRunner adapts the application use case to the worker's
@@ -186,8 +188,12 @@ func execute(ctx context.Context, args []string, stdout, stderr io.Writer, deps 
 	}
 
 	apiDependencies := httpapi.Dependencies{
-		Plans:        planStore,
-		Executions:   planStore,
+		Plans:      planStore,
+		Executions: planStore,
+		// One adapter serves every port, so the publication pointer and the
+		// executions it references cannot end up in different stores.
+		Policies:     planStore,
+		Publications: planStore,
 		Observer:     runtime.SemanticObserver(),
 		Instrumenter: runtime,
 	}

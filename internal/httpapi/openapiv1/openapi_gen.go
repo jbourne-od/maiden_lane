@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -149,6 +150,87 @@ func (e FieldReductionKind) Valid() bool {
 	}
 }
 
+// Defines values for GateClauseResultClause.
+const (
+	GateClauseResultClauseCertifiedBackend     GateClauseResultClause = "certified_backend"
+	GateClauseResultClauseComparisonCorpus     GateClauseResultClause = "comparison_corpus"
+	GateClauseResultClauseDigestConsistency    GateClauseResultClause = "digest_consistency"
+	GateClauseResultClauseNoMetricRegression   GateClauseResultClause = "no_metric_regression"
+	GateClauseResultClausePinnedIdentities     GateClauseResultClause = "pinned_identities"
+	GateClauseResultClauseProtectedInvariants  GateClauseResultClause = "protected_invariants"
+	GateClauseResultClauseReadyAssessment      GateClauseResultClause = "ready_assessment"
+	GateClauseResultClauseSealedWithProvenance GateClauseResultClause = "sealed_with_provenance"
+	GateClauseResultClauseStaticValidation     GateClauseResultClause = "static_validation"
+)
+
+// Valid indicates whether the value is a known member of the GateClauseResultClause enum.
+func (e GateClauseResultClause) Valid() bool {
+	switch e {
+	case GateClauseResultClauseCertifiedBackend:
+		return true
+	case GateClauseResultClauseComparisonCorpus:
+		return true
+	case GateClauseResultClauseDigestConsistency:
+		return true
+	case GateClauseResultClauseNoMetricRegression:
+		return true
+	case GateClauseResultClausePinnedIdentities:
+		return true
+	case GateClauseResultClauseProtectedInvariants:
+		return true
+	case GateClauseResultClauseReadyAssessment:
+		return true
+	case GateClauseResultClauseSealedWithProvenance:
+		return true
+	case GateClauseResultClauseStaticValidation:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GateUnevaluatedReason.
+const (
+	GateUnevaluatedReasonInformationAbsent  GateUnevaluatedReason = "information_absent"
+	GateUnevaluatedReasonNotApplicable      GateUnevaluatedReason = "not_applicable"
+	GateUnevaluatedReasonUnsupportedByBuild GateUnevaluatedReason = "unsupported_by_build"
+)
+
+// Valid indicates whether the value is a known member of the GateUnevaluatedReason enum.
+func (e GateUnevaluatedReason) Valid() bool {
+	switch e {
+	case GateUnevaluatedReasonInformationAbsent:
+		return true
+	case GateUnevaluatedReasonNotApplicable:
+		return true
+	case GateUnevaluatedReasonUnsupportedByBuild:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GateVerdict.
+const (
+	GateVerdictFail         GateVerdict = "fail"
+	GateVerdictNotEvaluated GateVerdict = "not_evaluated"
+	GateVerdictPass         GateVerdict = "pass"
+)
+
+// Valid indicates whether the value is a known member of the GateVerdict enum.
+func (e GateVerdict) Valid() bool {
+	switch e {
+	case GateVerdictFail:
+		return true
+	case GateVerdictNotEvaluated:
+		return true
+	case GateVerdictPass:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OutputKeyExpressionKind.
 const (
 	OutputKeyExpressionKindCommonSourceField OutputKeyExpressionKind = "common_source_field"
@@ -188,6 +270,48 @@ const (
 func (e ProfileDeclarationScopeKind) Valid() bool {
 	switch e {
 	case ProfileDeclarationScopeKindAllEntitiesOfKind:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PublicationOutcome.
+const (
+	PublicationOutcomeRecorded  PublicationOutcome = "recorded"
+	PublicationOutcomeRefused   PublicationOutcome = "refused"
+	PublicationOutcomeUnchanged PublicationOutcome = "unchanged"
+)
+
+// Valid indicates whether the value is a known member of the PublicationOutcome enum.
+func (e PublicationOutcome) Valid() bool {
+	switch e {
+	case PublicationOutcomeRecorded:
+		return true
+	case PublicationOutcomeRefused:
+		return true
+	case PublicationOutcomeUnchanged:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PublicationStatus.
+const (
+	PublicationStatusPublished   PublicationStatus = "published"
+	PublicationStatusSuperseded  PublicationStatus = "superseded"
+	PublicationStatusUnpublished PublicationStatus = "unpublished"
+)
+
+// Valid indicates whether the value is a known member of the PublicationStatus enum.
+func (e PublicationStatus) Valid() bool {
+	switch e {
+	case PublicationStatusPublished:
+		return true
+	case PublicationStatusSuperseded:
+		return true
+	case PublicationStatusUnpublished:
 		return true
 	default:
 		return false
@@ -402,6 +526,34 @@ type CreateExecutionRequest struct {
 // CreateExecutionRequestProvenancePolicy defines model for CreateExecutionRequest.ProvenancePolicy.
 type CreateExecutionRequestProvenancePolicy string
 
+// CreatePublicationRequest Identities naming the evidence to evaluate, not the evidence itself. The
+// service re-derives the artifacts from the stored execution, because
+// authorization rests on values the kernel produced and those cannot be
+// transmitted.
+type CreatePublicationRequest struct {
+	// AssessmentID The readiness assessment relied on. It must be one taken against the
+	// named checkpoint, and its profile is what the gate compares to the
+	// target's required profile.
+	AssessmentID Digest `json:"assessmentID"`
+
+	// CheckpointArtifactID The sealed checkpoint to publish. It must be one the named execution retained.
+	CheckpointArtifactID Digest `json:"checkpointArtifactID"`
+
+	// CustomerID The customer whose target is being published to.
+	CustomerID string `json:"customerID"`
+
+	// ExecutionID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	ExecutionID Digest `json:"executionID"`
+
+	// ExpectedCurrentVersion The target's publication version the caller decided against. Zero means
+	// the caller believes the target has never been published to. Publication
+	// advances only from exactly this version.
+	ExpectedCurrentVersion int64 `json:"expectedCurrentVersion"`
+
+	// Target The publication target.
+	Target string `json:"target"`
+}
+
 // Digest A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
 type Digest = string
 
@@ -553,6 +705,39 @@ type FormRelatedEntity struct {
 	Sources       []SourceReference    `json:"sources"`
 }
 
+// GateClauseResult One clause of HLD §14.1's nine-clause gate.
+type GateClauseResult struct {
+	// Clause The clause identifier, from the closed §14.1 list.
+	Clause GateClauseResultClause `json:"clause"`
+
+	// UnevaluatedReason Why a clause could not be established, present only alongside
+	// `not_evaluated`. The distinction is operational: `unsupported_by_build`
+	// means no candidate satisfies the clause and no input would help, so
+	// engineering must change; `information_absent` means the machinery exists
+	// but evidence it needed was not supplied.
+	UnevaluatedReason GateUnevaluatedReason `json:"unevaluatedReason"`
+
+	// Verdict HLD §14's ratified gate vocabulary. `not_evaluated` and `fail` both refuse
+	// and are deliberately distinct: only `fail` says something adverse about the
+	// candidate, while `not_evaluated` says the clause could not be established.
+	Verdict GateVerdict `json:"verdict"`
+}
+
+// GateClauseResultClause The clause identifier, from the closed §14.1 list.
+type GateClauseResultClause string
+
+// GateUnevaluatedReason Why a clause could not be established, present only alongside
+// `not_evaluated`. The distinction is operational: `unsupported_by_build`
+// means no candidate satisfies the clause and no input would help, so
+// engineering must change; `information_absent` means the machinery exists
+// but evidence it needed was not supplied.
+type GateUnevaluatedReason string
+
+// GateVerdict HLD §14's ratified gate vocabulary. `not_evaluated` and `fail` both refuse
+// and are deliberately distinct: only `fail` says something adverse about the
+// candidate, while `not_evaluated` says the clause could not be established.
+type GateVerdict string
+
 // InputLineage Pins the observation load that produced the initial state. Entity identities are derived from it, so a different lineage is a different input.
 type InputLineage struct {
 	Namespace string `json:"namespace"`
@@ -648,6 +833,89 @@ type ProfileDeclarationAggregation string
 
 // ProfileDeclarationScopeKind defines model for ProfileDeclaration.Scope.Kind.
 type ProfileDeclarationScopeKind string
+
+// Publication One immutable record of a sealed checkpoint published to a target. Every
+// field after the version is an identity the authorization rested on, which is
+// what makes the record auditable: the decision can be re-derived from exactly
+// these. The gate's verdict is deliberately not stored, because a summary able
+// to disagree with the artifacts it summarizes could not be resolved.
+type Publication struct {
+	// AssessmentID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	AssessmentID Digest `json:"assessmentID"`
+
+	// CheckpointArtifactID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CheckpointArtifactID Digest `json:"checkpointArtifactID"`
+
+	// ExecutionID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	ExecutionID Digest `json:"executionID"`
+
+	// PolicyVersion The immutable target policy version that authorized this publication.
+	PolicyVersion int64 `json:"policyVersion"`
+
+	// ProfileID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	ProfileID Digest `json:"profileID"`
+
+	// SemanticRunID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	SemanticRunID Digest `json:"semanticRunID"`
+
+	// Status HLD §14's ratified publication vocabulary, derived from the target's history
+	// rather than stored: no record is `unpublished`, the highest version is
+	// `published`, and any lower version is `superseded`.
+	Status PublicationStatus `json:"status"`
+
+	// Version The target's publication version this record holds.
+	Version int64 `json:"version"`
+}
+
+// PublicationDecision The gate's complete answer. Every clause appears whether or not it passed,
+// in a stable order, so a rendered refusal does not reorder itself between
+// evaluations of the same candidate.
+type PublicationDecision struct {
+	// Authorized Whether every clause passed. False whenever any clause did not.
+	Authorized bool               `json:"authorized"`
+	Clauses    []GateClauseResult `json:"clauses"`
+
+	// Outcome What the request did. `refused` means a clause did not pass and nothing was
+	// published; `recorded` means the pointer advanced; `unchanged` means the
+	// target already publishes exactly this, which an at-least-once execution
+	// retry legitimately produces.
+	Outcome PublicationOutcome `json:"outcome"`
+
+	// PolicyVersion The target policy version the decision was judged under. Zero means the
+	// target has no usable policy, which refuses every clause for want of a
+	// rule rather than for anything about the candidate.
+	PolicyVersion int64 `json:"policyVersion"`
+
+	// Publication Present only when the gate authorized. A refusal carries none.
+	Publication *Publication `json:"publication,omitempty"`
+}
+
+// PublicationOutcome What the request did. `refused` means a clause did not pass and nothing was
+// published; `recorded` means the pointer advanced; `unchanged` means the
+// target already publishes exactly this, which an at-least-once execution
+// retry legitimately produces.
+type PublicationOutcome string
+
+// PublicationState What is published to a target. A target that has never been published to
+// reports `unpublished` with no publication, which is the ordinary initial
+// state of every target rather than an absence.
+type PublicationState struct {
+	CustomerID string `json:"customerID"`
+
+	// Publication Absent when the target has never been published to.
+	Publication *Publication `json:"publication,omitempty"`
+
+	// Status HLD §14's ratified publication vocabulary, derived from the target's history
+	// rather than stored: no record is `unpublished`, the highest version is
+	// `published`, and any lower version is `superseded`.
+	Status PublicationStatus `json:"status"`
+	Target string            `json:"target"`
+}
+
+// PublicationStatus HLD §14's ratified publication vocabulary, derived from the target's history
+// rather than stored: no record is `unpublished`, the highest version is
+// `published`, and any lower version is `superseded`.
+type PublicationStatus string
 
 // ReadinessVerdict A readiness answer. `needs_input` is a successful assessment, not a failure.
 type ReadinessVerdict string
@@ -793,6 +1061,9 @@ type MethodNotAllowed = Problem
 // NotFound An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type NotFound = Problem
 
+// PublicationConflict An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
+type PublicationConflict = Problem
+
 // UnprocessableEntity An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type UnprocessableEntity = Problem
 
@@ -827,11 +1098,32 @@ type GetPlanParams struct {
 	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
 }
 
+// CreatePublicationParams defines parameters for CreatePublication.
+type CreatePublicationParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
+// GetPublicationParams defines parameters for GetPublication.
+type GetPublicationParams struct {
+	// Version A specific publication version, which is how a superseded publication
+	// stays explainable. Absent, the current publication is returned.
+	Version *int64 `form:"version,omitempty" json:"version,omitempty"`
+
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
 // CreateExecutionJSONRequestBody defines body for CreateExecution for application/json ContentType.
 type CreateExecutionJSONRequestBody = CreateExecutionRequest
 
 // CreatePlanJSONRequestBody defines body for CreatePlan for application/json ContentType.
 type CreatePlanJSONRequestBody = PlanDeclarations
+
+// CreatePublicationJSONRequestBody defines body for CreatePublication for application/json ContentType.
+type CreatePublicationJSONRequestBody = CreatePublicationRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -853,6 +1145,12 @@ type ServerInterface interface {
 	// GetPlan Retrieve a compiled plan
 	// (GET /v1/plans/{planID})
 	GetPlan(w http.ResponseWriter, r *http.Request, planID Digest, params GetPlanParams)
+	// CreatePublication Evaluate the promotion gate and publish if it authorizes
+	// (POST /v1/publications)
+	CreatePublication(w http.ResponseWriter, r *http.Request, params CreatePublicationParams)
+	// GetPublication Report what is published to a target
+	// (GET /v1/publications/{customerID}/{target})
+	GetPublication(w http.ResponseWriter, r *http.Request, customerID string, target string, params GetPublicationParams)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -892,6 +1190,18 @@ func (_ Unimplemented) CreatePlan(w http.ResponseWriter, r *http.Request, params
 // GetPlan Retrieve a compiled plan
 // (GET /v1/plans/{planID})
 func (_ Unimplemented) GetPlan(w http.ResponseWriter, r *http.Request, planID Digest, params GetPlanParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// CreatePublication Evaluate the promotion gate and publish if it authorizes
+// (POST /v1/publications)
+func (_ Unimplemented) CreatePublication(w http.ResponseWriter, r *http.Request, params CreatePublicationParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetPublication Report what is published to a target
+// (GET /v1/publications/{customerID}/{target})
+func (_ Unimplemented) GetPublication(w http.ResponseWriter, r *http.Request, customerID string, target string, params GetPublicationParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1130,6 +1440,127 @@ func (siw *ServerInterfaceWrapper) GetPlan(w http.ResponseWriter, r *http.Reques
 	handler.ServeHTTP(w, r)
 }
 
+// CreatePublication operation middleware
+func (siw *ServerInterfaceWrapper) CreatePublication(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreatePublicationParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Maiden-Lane-Tenant" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Maiden-Lane-Tenant")]; found {
+		var XMaidenLaneTenant TenantHeader
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Maiden-Lane-Tenant", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Maiden-Lane-Tenant", valueList[0], &XMaidenLaneTenant, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+			return
+		}
+
+		params.XMaidenLaneTenant = XMaidenLaneTenant
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Maiden-Lane-Tenant is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreatePublication(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetPublication operation middleware
+func (siw *ServerInterfaceWrapper) GetPublication(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "customerID" -------------
+	var customerID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "customerID", chi.URLParam(r, "customerID"), &customerID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "customerID", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "target" -------------
+	var target string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "target", chi.URLParam(r, "target"), &target, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "target", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetPublicationParams
+
+	// ------------- Optional query parameter "version" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "version", r.URL.Query(), &params.Version, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "version"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "version", Err: err})
+		}
+		return
+	}
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Maiden-Lane-Tenant" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Maiden-Lane-Tenant")]; found {
+		var XMaidenLaneTenant TenantHeader
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Maiden-Lane-Tenant", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Maiden-Lane-Tenant", valueList[0], &XMaidenLaneTenant, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+			return
+		}
+
+		params.XMaidenLaneTenant = XMaidenLaneTenant
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Maiden-Lane-Tenant is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetPublication(w, r, customerID, target, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -1259,6 +1690,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/v1/executions", wrapper.CreateExecution)
 	})
 	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/v1/publications", wrapper.CreatePublication)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/v1/publications/{customerID}/{target}", wrapper.GetPublication)
+	})
+	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/v1/executions/{executionID}", wrapper.GetExecution)
 	})
 
@@ -1274,6 +1711,8 @@ type InternalErrorApplicationProblemPlusJSONResponse Problem
 type MethodNotAllowedApplicationProblemPlusJSONResponse Problem
 
 type NotFoundApplicationProblemPlusJSONResponse Problem
+
+type PublicationConflictApplicationProblemPlusJSONResponse Problem
 
 type UnprocessableEntityApplicationProblemPlusJSONResponse Problem
 
@@ -1753,6 +2192,255 @@ func (response GetPlan500ApplicationProblemPlusJSONResponse) VisitGetPlanRespons
 	return err
 }
 
+type CreatePublicationRequestObject struct {
+	Params CreatePublicationParams
+	Body   *CreatePublicationJSONRequestBody
+}
+
+type CreatePublicationResponseObject interface {
+	VisitCreatePublicationResponse(w http.ResponseWriter) error
+}
+
+type CreatePublication200JSONResponse PublicationDecision
+
+func (response CreatePublication200JSONResponse) VisitCreatePublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePublication201JSONResponse PublicationDecision
+
+func (response CreatePublication201JSONResponse) VisitCreatePublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePublication400ApplicationProblemPlusJSONResponse struct {
+	BadRequestApplicationProblemPlusJSONResponse
+}
+
+func (response CreatePublication400ApplicationProblemPlusJSONResponse) VisitCreatePublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePublication404ApplicationProblemPlusJSONResponse Problem
+
+func (response CreatePublication404ApplicationProblemPlusJSONResponse) VisitCreatePublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePublication405ApplicationProblemPlusJSONResponse struct {
+	MethodNotAllowedApplicationProblemPlusJSONResponse
+}
+
+func (response CreatePublication405ApplicationProblemPlusJSONResponse) VisitCreatePublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(405)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePublication409ApplicationProblemPlusJSONResponse struct {
+	PublicationConflictApplicationProblemPlusJSONResponse
+}
+
+func (response CreatePublication409ApplicationProblemPlusJSONResponse) VisitCreatePublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePublication415ApplicationProblemPlusJSONResponse struct {
+	UnsupportedMediaTypeApplicationProblemPlusJSONResponse
+}
+
+func (response CreatePublication415ApplicationProblemPlusJSONResponse) VisitCreatePublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(415)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePublication422ApplicationProblemPlusJSONResponse struct {
+	UnprocessableEntityApplicationProblemPlusJSONResponse
+}
+
+func (response CreatePublication422ApplicationProblemPlusJSONResponse) VisitCreatePublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePublication500ApplicationProblemPlusJSONResponse struct {
+	InternalErrorApplicationProblemPlusJSONResponse
+}
+
+func (response CreatePublication500ApplicationProblemPlusJSONResponse) VisitCreatePublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreatePublication503ApplicationProblemPlusJSONResponse struct {
+	DependencyUnavailableApplicationProblemPlusJSONResponse
+}
+
+func (response CreatePublication503ApplicationProblemPlusJSONResponse) VisitCreatePublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPublicationRequestObject struct {
+	CustomerID string `json:"customerID"`
+	Target     string `json:"target"`
+	Params     GetPublicationParams
+}
+
+type GetPublicationResponseObject interface {
+	VisitGetPublicationResponse(w http.ResponseWriter) error
+}
+
+type GetPublication200JSONResponse PublicationState
+
+func (response GetPublication200JSONResponse) VisitGetPublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPublication400ApplicationProblemPlusJSONResponse struct {
+	BadRequestApplicationProblemPlusJSONResponse
+}
+
+func (response GetPublication400ApplicationProblemPlusJSONResponse) VisitGetPublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPublication404ApplicationProblemPlusJSONResponse Problem
+
+func (response GetPublication404ApplicationProblemPlusJSONResponse) VisitGetPublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPublication405ApplicationProblemPlusJSONResponse struct {
+	MethodNotAllowedApplicationProblemPlusJSONResponse
+}
+
+func (response GetPublication405ApplicationProblemPlusJSONResponse) VisitGetPublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(405)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPublication500ApplicationProblemPlusJSONResponse struct {
+	InternalErrorApplicationProblemPlusJSONResponse
+}
+
+func (response GetPublication500ApplicationProblemPlusJSONResponse) VisitGetPublicationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// GetHealth Report process liveness
@@ -1773,6 +2461,12 @@ type StrictServerInterface interface {
 	// GetPlan Retrieve a compiled plan
 	// (GET /v1/plans/{planID})
 	GetPlan(ctx context.Context, request GetPlanRequestObject) (GetPlanResponseObject, error)
+	// CreatePublication Evaluate the promotion gate and publish if it authorizes
+	// (POST /v1/publications)
+	CreatePublication(ctx context.Context, request CreatePublicationRequestObject) (CreatePublicationResponseObject, error)
+	// GetPublication Report what is published to a target
+	// (GET /v1/publications/{customerID}/{target})
+	GetPublication(ctx context.Context, request GetPublicationRequestObject) (GetPublicationResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -1982,111 +2676,219 @@ func (sh *strictHandler) GetPlan(w http.ResponseWriter, r *http.Request, planID 
 	}
 }
 
+// CreatePublication operation middleware
+func (sh *strictHandler) CreatePublication(w http.ResponseWriter, r *http.Request, params CreatePublicationParams) {
+	var request CreatePublicationRequestObject
+
+	request.Params = params
+
+	var body CreatePublicationJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreatePublication(ctx, request.(CreatePublicationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreatePublication")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreatePublicationResponseObject); ok {
+		if err := validResponse.VisitCreatePublicationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetPublication operation middleware
+func (sh *strictHandler) GetPublication(w http.ResponseWriter, r *http.Request, customerID string, target string, params GetPublicationParams) {
+	var request GetPublicationRequestObject
+
+	request.CustomerID = customerID
+	request.Target = target
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetPublication(ctx, request.(GetPublicationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetPublication")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetPublicationResponseObject); ok {
+		if err := validResponse.VisitGetPublicationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // Base64 encoded, compressed with deflate, json marshaled OpenAPI spec.
 // Stored as a slice of fixed-width chunks rather than one concatenated
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
+	"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",
+	"SoHFzZFv0wFJnrwnmWqyh/cP/z8AAP//",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

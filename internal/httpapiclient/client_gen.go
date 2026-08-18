@@ -145,6 +145,87 @@ func (e FieldReductionKind) Valid() bool {
 	}
 }
 
+// Defines values for GateClauseResultClause.
+const (
+	GateClauseResultClauseCertifiedBackend     GateClauseResultClause = "certified_backend"
+	GateClauseResultClauseComparisonCorpus     GateClauseResultClause = "comparison_corpus"
+	GateClauseResultClauseDigestConsistency    GateClauseResultClause = "digest_consistency"
+	GateClauseResultClauseNoMetricRegression   GateClauseResultClause = "no_metric_regression"
+	GateClauseResultClausePinnedIdentities     GateClauseResultClause = "pinned_identities"
+	GateClauseResultClauseProtectedInvariants  GateClauseResultClause = "protected_invariants"
+	GateClauseResultClauseReadyAssessment      GateClauseResultClause = "ready_assessment"
+	GateClauseResultClauseSealedWithProvenance GateClauseResultClause = "sealed_with_provenance"
+	GateClauseResultClauseStaticValidation     GateClauseResultClause = "static_validation"
+)
+
+// Valid indicates whether the value is a known member of the GateClauseResultClause enum.
+func (e GateClauseResultClause) Valid() bool {
+	switch e {
+	case GateClauseResultClauseCertifiedBackend:
+		return true
+	case GateClauseResultClauseComparisonCorpus:
+		return true
+	case GateClauseResultClauseDigestConsistency:
+		return true
+	case GateClauseResultClauseNoMetricRegression:
+		return true
+	case GateClauseResultClausePinnedIdentities:
+		return true
+	case GateClauseResultClauseProtectedInvariants:
+		return true
+	case GateClauseResultClauseReadyAssessment:
+		return true
+	case GateClauseResultClauseSealedWithProvenance:
+		return true
+	case GateClauseResultClauseStaticValidation:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GateUnevaluatedReason.
+const (
+	GateUnevaluatedReasonInformationAbsent  GateUnevaluatedReason = "information_absent"
+	GateUnevaluatedReasonNotApplicable      GateUnevaluatedReason = "not_applicable"
+	GateUnevaluatedReasonUnsupportedByBuild GateUnevaluatedReason = "unsupported_by_build"
+)
+
+// Valid indicates whether the value is a known member of the GateUnevaluatedReason enum.
+func (e GateUnevaluatedReason) Valid() bool {
+	switch e {
+	case GateUnevaluatedReasonInformationAbsent:
+		return true
+	case GateUnevaluatedReasonNotApplicable:
+		return true
+	case GateUnevaluatedReasonUnsupportedByBuild:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GateVerdict.
+const (
+	GateVerdictFail         GateVerdict = "fail"
+	GateVerdictNotEvaluated GateVerdict = "not_evaluated"
+	GateVerdictPass         GateVerdict = "pass"
+)
+
+// Valid indicates whether the value is a known member of the GateVerdict enum.
+func (e GateVerdict) Valid() bool {
+	switch e {
+	case GateVerdictFail:
+		return true
+	case GateVerdictNotEvaluated:
+		return true
+	case GateVerdictPass:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for OutputKeyExpressionKind.
 const (
 	OutputKeyExpressionKindCommonSourceField OutputKeyExpressionKind = "common_source_field"
@@ -184,6 +265,48 @@ const (
 func (e ProfileDeclarationScopeKind) Valid() bool {
 	switch e {
 	case ProfileDeclarationScopeKindAllEntitiesOfKind:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PublicationOutcome.
+const (
+	PublicationOutcomeRecorded  PublicationOutcome = "recorded"
+	PublicationOutcomeRefused   PublicationOutcome = "refused"
+	PublicationOutcomeUnchanged PublicationOutcome = "unchanged"
+)
+
+// Valid indicates whether the value is a known member of the PublicationOutcome enum.
+func (e PublicationOutcome) Valid() bool {
+	switch e {
+	case PublicationOutcomeRecorded:
+		return true
+	case PublicationOutcomeRefused:
+		return true
+	case PublicationOutcomeUnchanged:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PublicationStatus.
+const (
+	PublicationStatusPublished   PublicationStatus = "published"
+	PublicationStatusSuperseded  PublicationStatus = "superseded"
+	PublicationStatusUnpublished PublicationStatus = "unpublished"
+)
+
+// Valid indicates whether the value is a known member of the PublicationStatus enum.
+func (e PublicationStatus) Valid() bool {
+	switch e {
+	case PublicationStatusPublished:
+		return true
+	case PublicationStatusSuperseded:
+		return true
+	case PublicationStatusUnpublished:
 		return true
 	default:
 		return false
@@ -398,6 +521,34 @@ type CreateExecutionRequest struct {
 // CreateExecutionRequestProvenancePolicy defines model for CreateExecutionRequest.ProvenancePolicy.
 type CreateExecutionRequestProvenancePolicy string
 
+// CreatePublicationRequest Identities naming the evidence to evaluate, not the evidence itself. The
+// service re-derives the artifacts from the stored execution, because
+// authorization rests on values the kernel produced and those cannot be
+// transmitted.
+type CreatePublicationRequest struct {
+	// AssessmentID The readiness assessment relied on. It must be one taken against the
+	// named checkpoint, and its profile is what the gate compares to the
+	// target's required profile.
+	AssessmentID Digest `json:"assessmentID"`
+
+	// CheckpointArtifactID The sealed checkpoint to publish. It must be one the named execution retained.
+	CheckpointArtifactID Digest `json:"checkpointArtifactID"`
+
+	// CustomerID The customer whose target is being published to.
+	CustomerID string `json:"customerID"`
+
+	// ExecutionID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	ExecutionID Digest `json:"executionID"`
+
+	// ExpectedCurrentVersion The target's publication version the caller decided against. Zero means
+	// the caller believes the target has never been published to. Publication
+	// advances only from exactly this version.
+	ExpectedCurrentVersion int64 `json:"expectedCurrentVersion"`
+
+	// Target The publication target.
+	Target string `json:"target"`
+}
+
 // Digest A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
 type Digest = string
 
@@ -549,6 +700,39 @@ type FormRelatedEntity struct {
 	Sources       []SourceReference    `json:"sources"`
 }
 
+// GateClauseResult One clause of HLD §14.1's nine-clause gate.
+type GateClauseResult struct {
+	// Clause The clause identifier, from the closed §14.1 list.
+	Clause GateClauseResultClause `json:"clause"`
+
+	// UnevaluatedReason Why a clause could not be established, present only alongside
+	// `not_evaluated`. The distinction is operational: `unsupported_by_build`
+	// means no candidate satisfies the clause and no input would help, so
+	// engineering must change; `information_absent` means the machinery exists
+	// but evidence it needed was not supplied.
+	UnevaluatedReason GateUnevaluatedReason `json:"unevaluatedReason"`
+
+	// Verdict HLD §14's ratified gate vocabulary. `not_evaluated` and `fail` both refuse
+	// and are deliberately distinct: only `fail` says something adverse about the
+	// candidate, while `not_evaluated` says the clause could not be established.
+	Verdict GateVerdict `json:"verdict"`
+}
+
+// GateClauseResultClause The clause identifier, from the closed §14.1 list.
+type GateClauseResultClause string
+
+// GateUnevaluatedReason Why a clause could not be established, present only alongside
+// `not_evaluated`. The distinction is operational: `unsupported_by_build`
+// means no candidate satisfies the clause and no input would help, so
+// engineering must change; `information_absent` means the machinery exists
+// but evidence it needed was not supplied.
+type GateUnevaluatedReason string
+
+// GateVerdict HLD §14's ratified gate vocabulary. `not_evaluated` and `fail` both refuse
+// and are deliberately distinct: only `fail` says something adverse about the
+// candidate, while `not_evaluated` says the clause could not be established.
+type GateVerdict string
+
 // InputLineage Pins the observation load that produced the initial state. Entity identities are derived from it, so a different lineage is a different input.
 type InputLineage struct {
 	Namespace string `json:"namespace"`
@@ -644,6 +828,89 @@ type ProfileDeclarationAggregation string
 
 // ProfileDeclarationScopeKind defines model for ProfileDeclaration.Scope.Kind.
 type ProfileDeclarationScopeKind string
+
+// Publication One immutable record of a sealed checkpoint published to a target. Every
+// field after the version is an identity the authorization rested on, which is
+// what makes the record auditable: the decision can be re-derived from exactly
+// these. The gate's verdict is deliberately not stored, because a summary able
+// to disagree with the artifacts it summarizes could not be resolved.
+type Publication struct {
+	// AssessmentID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	AssessmentID Digest `json:"assessmentID"`
+
+	// CheckpointArtifactID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CheckpointArtifactID Digest `json:"checkpointArtifactID"`
+
+	// ExecutionID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	ExecutionID Digest `json:"executionID"`
+
+	// PolicyVersion The immutable target policy version that authorized this publication.
+	PolicyVersion int64 `json:"policyVersion"`
+
+	// ProfileID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	ProfileID Digest `json:"profileID"`
+
+	// SemanticRunID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	SemanticRunID Digest `json:"semanticRunID"`
+
+	// Status HLD §14's ratified publication vocabulary, derived from the target's history
+	// rather than stored: no record is `unpublished`, the highest version is
+	// `published`, and any lower version is `superseded`.
+	Status PublicationStatus `json:"status"`
+
+	// Version The target's publication version this record holds.
+	Version int64 `json:"version"`
+}
+
+// PublicationDecision The gate's complete answer. Every clause appears whether or not it passed,
+// in a stable order, so a rendered refusal does not reorder itself between
+// evaluations of the same candidate.
+type PublicationDecision struct {
+	// Authorized Whether every clause passed. False whenever any clause did not.
+	Authorized bool               `json:"authorized"`
+	Clauses    []GateClauseResult `json:"clauses"`
+
+	// Outcome What the request did. `refused` means a clause did not pass and nothing was
+	// published; `recorded` means the pointer advanced; `unchanged` means the
+	// target already publishes exactly this, which an at-least-once execution
+	// retry legitimately produces.
+	Outcome PublicationOutcome `json:"outcome"`
+
+	// PolicyVersion The target policy version the decision was judged under. Zero means the
+	// target has no usable policy, which refuses every clause for want of a
+	// rule rather than for anything about the candidate.
+	PolicyVersion int64 `json:"policyVersion"`
+
+	// Publication Present only when the gate authorized. A refusal carries none.
+	Publication *Publication `json:"publication,omitempty"`
+}
+
+// PublicationOutcome What the request did. `refused` means a clause did not pass and nothing was
+// published; `recorded` means the pointer advanced; `unchanged` means the
+// target already publishes exactly this, which an at-least-once execution
+// retry legitimately produces.
+type PublicationOutcome string
+
+// PublicationState What is published to a target. A target that has never been published to
+// reports `unpublished` with no publication, which is the ordinary initial
+// state of every target rather than an absence.
+type PublicationState struct {
+	CustomerID string `json:"customerID"`
+
+	// Publication Absent when the target has never been published to.
+	Publication *Publication `json:"publication,omitempty"`
+
+	// Status HLD §14's ratified publication vocabulary, derived from the target's history
+	// rather than stored: no record is `unpublished`, the highest version is
+	// `published`, and any lower version is `superseded`.
+	Status PublicationStatus `json:"status"`
+	Target string            `json:"target"`
+}
+
+// PublicationStatus HLD §14's ratified publication vocabulary, derived from the target's history
+// rather than stored: no record is `unpublished`, the highest version is
+// `published`, and any lower version is `superseded`.
+type PublicationStatus string
 
 // ReadinessVerdict A readiness answer. `needs_input` is a successful assessment, not a failure.
 type ReadinessVerdict string
@@ -789,6 +1056,9 @@ type MethodNotAllowed = Problem
 // NotFound An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type NotFound = Problem
 
+// PublicationConflict An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
+type PublicationConflict = Problem
+
 // UnprocessableEntity An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type UnprocessableEntity = Problem
 
@@ -823,11 +1093,32 @@ type GetPlanParams struct {
 	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
 }
 
+// CreatePublicationParams defines parameters for CreatePublication.
+type CreatePublicationParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
+// GetPublicationParams defines parameters for GetPublication.
+type GetPublicationParams struct {
+	// Version A specific publication version, which is how a superseded publication
+	// stays explainable. Absent, the current publication is returned.
+	Version *int64 `form:"version,omitempty" json:"version,omitempty"`
+
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
 // CreateExecutionJSONRequestBody defines body for CreateExecution for application/json ContentType.
 type CreateExecutionJSONRequestBody = CreateExecutionRequest
 
 // CreatePlanJSONRequestBody defines body for CreatePlan for application/json ContentType.
 type CreatePlanJSONRequestBody = PlanDeclarations
+
+// CreatePublicationJSONRequestBody defines body for CreatePublication for application/json ContentType.
+type CreatePublicationJSONRequestBody = CreatePublicationRequest
 
 // RequestEditorFn is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -1002,6 +1293,88 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /v1/plans/{planID} (the `GetPlan` operationId).
 	GetPlan(ctx context.Context, planID Digest, params *GetPlanParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreatePublicationWithBody Evaluate the promotion gate and publish if it authorizes
+	//
+	// Evaluates HLD §14.1's promotion gate for one sealed checkpoint against a
+	// target's policy, and advances the target's publication pointer only if
+	// every clause passes.
+	//
+	// **A refusal is a successful response, not a problem.** The gate produces a
+	// per-clause result and returning `200` with it is the whole point: an
+	// operator told only "refused" cannot act, while a clause list says which
+	// requirement was not met and whether the answer was `fail` or
+	// `not_evaluated`. This follows the same rule as a `needs_input` readiness
+	// verdict, for the same reason — the computation produced a real answer.
+	//
+	// **Nothing publishes in this build.** Three of the nine clauses name
+	// concepts that do not exist yet — comparison over a replay corpus, protected
+	// metric regression, and backend certification — so every decision contains a
+	// `not_evaluated` and refuses. That is deliberate: the gate ships refusing and
+	// each clause becomes real on its own evidence.
+	//
+	// The request names identities rather than carrying artifacts. Authorization
+	// rests on artifacts the kernel produced, which cannot be transmitted or
+	// reconstructed from bytes, so the service re-derives them from the stored
+	// execution and requires everything it recorded to match. A client cannot
+	// supply evidence, only say which evidence to use.
+	//
+	// `expectedCurrentVersion` is the caller's compare-and-swap token, required by
+	// §16. Publication advances only from exactly that version, so a publisher
+	// whose view of the target went stale between deciding and publishing loses
+	// rather than overwriting a result it never saw.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /v1/publications (the `CreatePublication` operationId).
+	CreatePublicationWithBody(ctx context.Context, params *CreatePublicationParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreatePublication Evaluate the promotion gate and publish if it authorizes
+	//
+	// Evaluates HLD §14.1's promotion gate for one sealed checkpoint against a
+	// target's policy, and advances the target's publication pointer only if
+	// every clause passes.
+	//
+	// **A refusal is a successful response, not a problem.** The gate produces a
+	// per-clause result and returning `200` with it is the whole point: an
+	// operator told only "refused" cannot act, while a clause list says which
+	// requirement was not met and whether the answer was `fail` or
+	// `not_evaluated`. This follows the same rule as a `needs_input` readiness
+	// verdict, for the same reason — the computation produced a real answer.
+	//
+	// **Nothing publishes in this build.** Three of the nine clauses name
+	// concepts that do not exist yet — comparison over a replay corpus, protected
+	// metric regression, and backend certification — so every decision contains a
+	// `not_evaluated` and refuses. That is deliberate: the gate ships refusing and
+	// each clause becomes real on its own evidence.
+	//
+	// The request names identities rather than carrying artifacts. Authorization
+	// rests on artifacts the kernel produced, which cannot be transmitted or
+	// reconstructed from bytes, so the service re-derives them from the stored
+	// execution and requires everything it recorded to match. A client cannot
+	// supply evidence, only say which evidence to use.
+	//
+	// `expectedCurrentVersion` is the caller's compare-and-swap token, required by
+	// §16. Publication advances only from exactly that version, so a publisher
+	// whose view of the target went stale between deciding and publishing loses
+	// rather than overwriting a result it never saw.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /v1/publications (the `CreatePublication` operationId).
+	CreatePublication(ctx context.Context, params *CreatePublicationParams, body CreatePublicationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetPublication Report what is published to a target
+	//
+	// Returns the target's current publication, or its state when there is none.
+	//
+	// `status` follows HLD §14's ratified vocabulary and is derived rather than
+	// stored: a target with no record is `unpublished`, its highest version is
+	// `published`, and every lower version is `superseded`. Storing the status
+	// would add a value able to disagree with the history it summarizes.
+	//
+	// Corresponds with GET /v1/publications/{customerID}/{target} (the `GetPublication` operationId).
+	GetPublication(ctx context.Context, customerID string, target string, params *GetPublicationParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 // GetHealth Report process liveness
@@ -1174,6 +1547,118 @@ func (c *Client) CreatePlan(ctx context.Context, params *CreatePlanParams, body 
 // Corresponds with GET /v1/plans/{planID} (the `GetPlan` operationId).
 func (c *Client) GetPlan(ctx context.Context, planID Digest, params *GetPlanParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetPlanRequest(c.Server, planID, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreatePublicationWithBody Evaluate the promotion gate and publish if it authorizes
+//
+// Evaluates HLD §14.1's promotion gate for one sealed checkpoint against a
+// target's policy, and advances the target's publication pointer only if
+// every clause passes.
+//
+// **A refusal is a successful response, not a problem.** The gate produces a
+// per-clause result and returning `200` with it is the whole point: an
+// operator told only "refused" cannot act, while a clause list says which
+// requirement was not met and whether the answer was `fail` or
+// `not_evaluated`. This follows the same rule as a `needs_input` readiness
+// verdict, for the same reason — the computation produced a real answer.
+//
+// **Nothing publishes in this build.** Three of the nine clauses name
+// concepts that do not exist yet — comparison over a replay corpus, protected
+// metric regression, and backend certification — so every decision contains a
+// `not_evaluated` and refuses. That is deliberate: the gate ships refusing and
+// each clause becomes real on its own evidence.
+//
+// The request names identities rather than carrying artifacts. Authorization
+// rests on artifacts the kernel produced, which cannot be transmitted or
+// reconstructed from bytes, so the service re-derives them from the stored
+// execution and requires everything it recorded to match. A client cannot
+// supply evidence, only say which evidence to use.
+//
+// `expectedCurrentVersion` is the caller's compare-and-swap token, required by
+// §16. Publication advances only from exactly that version, so a publisher
+// whose view of the target went stale between deciding and publishing loses
+// rather than overwriting a result it never saw.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /v1/publications (the `CreatePublication` operationId).
+func (c *Client) CreatePublicationWithBody(ctx context.Context, params *CreatePublicationParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePublicationRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreatePublication Evaluate the promotion gate and publish if it authorizes
+//
+// Evaluates HLD §14.1's promotion gate for one sealed checkpoint against a
+// target's policy, and advances the target's publication pointer only if
+// every clause passes.
+//
+// **A refusal is a successful response, not a problem.** The gate produces a
+// per-clause result and returning `200` with it is the whole point: an
+// operator told only "refused" cannot act, while a clause list says which
+// requirement was not met and whether the answer was `fail` or
+// `not_evaluated`. This follows the same rule as a `needs_input` readiness
+// verdict, for the same reason — the computation produced a real answer.
+//
+// **Nothing publishes in this build.** Three of the nine clauses name
+// concepts that do not exist yet — comparison over a replay corpus, protected
+// metric regression, and backend certification — so every decision contains a
+// `not_evaluated` and refuses. That is deliberate: the gate ships refusing and
+// each clause becomes real on its own evidence.
+//
+// The request names identities rather than carrying artifacts. Authorization
+// rests on artifacts the kernel produced, which cannot be transmitted or
+// reconstructed from bytes, so the service re-derives them from the stored
+// execution and requires everything it recorded to match. A client cannot
+// supply evidence, only say which evidence to use.
+//
+// `expectedCurrentVersion` is the caller's compare-and-swap token, required by
+// §16. Publication advances only from exactly that version, so a publisher
+// whose view of the target went stale between deciding and publishing loses
+// rather than overwriting a result it never saw.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /v1/publications (the `CreatePublication` operationId).
+func (c *Client) CreatePublication(ctx context.Context, params *CreatePublicationParams, body CreatePublicationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreatePublicationRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetPublication Report what is published to a target
+//
+// Returns the target's current publication, or its state when there is none.
+//
+// `status` follows HLD §14's ratified vocabulary and is derived rather than
+// stored: a target with no record is `unpublished`, its highest version is
+// `published`, and every lower version is `superseded`. Storing the status
+// would add a value able to disagree with the history it summarizes.
+//
+// Corresponds with GET /v1/publications/{customerID}/{target} (the `GetPublication` operationId).
+func (c *Client) GetPublication(ctx context.Context, customerID string, target string, params *GetPublicationParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetPublicationRequest(c.Server, customerID, target, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1438,6 +1923,140 @@ func NewGetPlanRequest(server string, planID Digest, params *GetPlanParams) (*ht
 	return req, nil
 }
 
+// NewCreatePublicationRequest calls the generic CreatePublication builder with application/json body
+func NewCreatePublicationRequest(server string, params *CreatePublicationParams, body CreatePublicationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreatePublicationRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreatePublicationRequestWithBody constructs an http.Request for the CreatePublication method, with any body, and a specified content type
+func NewCreatePublicationRequestWithBody(server string, params *CreatePublicationParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/publications")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Maiden-Lane-Tenant", params.XMaidenLaneTenant, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Maiden-Lane-Tenant", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetPublicationRequest constructs an http.Request for the GetPublication method
+func NewGetPublicationRequest(server string, customerID string, target string, params *GetPublicationParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "customerID", customerID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "target", target, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/publications/%s/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Version != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "version", *params.Version, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: "int64"}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Maiden-Lane-Tenant", params.XMaidenLaneTenant, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Maiden-Lane-Tenant", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -1589,6 +2208,90 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /v1/plans/{planID} (the `GetPlan` operationId).
 	GetPlanWithResponse(ctx context.Context, planID Digest, params *GetPlanParams, reqEditors ...RequestEditorFn) (*GetPlanResponse, error)
+
+	// CreatePublicationWithBodyWithResponse Evaluate the promotion gate and publish if it authorizes
+	//
+	// Evaluates HLD §14.1's promotion gate for one sealed checkpoint against a
+	// target's policy, and advances the target's publication pointer only if
+	// every clause passes.
+	//
+	// **A refusal is a successful response, not a problem.** The gate produces a
+	// per-clause result and returning `200` with it is the whole point: an
+	// operator told only "refused" cannot act, while a clause list says which
+	// requirement was not met and whether the answer was `fail` or
+	// `not_evaluated`. This follows the same rule as a `needs_input` readiness
+	// verdict, for the same reason — the computation produced a real answer.
+	//
+	// **Nothing publishes in this build.** Three of the nine clauses name
+	// concepts that do not exist yet — comparison over a replay corpus, protected
+	// metric regression, and backend certification — so every decision contains a
+	// `not_evaluated` and refuses. That is deliberate: the gate ships refusing and
+	// each clause becomes real on its own evidence.
+	//
+	// The request names identities rather than carrying artifacts. Authorization
+	// rests on artifacts the kernel produced, which cannot be transmitted or
+	// reconstructed from bytes, so the service re-derives them from the stored
+	// execution and requires everything it recorded to match. A client cannot
+	// supply evidence, only say which evidence to use.
+	//
+	// `expectedCurrentVersion` is the caller's compare-and-swap token, required by
+	// §16. Publication advances only from exactly that version, so a publisher
+	// whose view of the target went stale between deciding and publishing loses
+	// rather than overwriting a result it never saw.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /v1/publications (the `CreatePublication` operationId).
+	CreatePublicationWithBodyWithResponse(ctx context.Context, params *CreatePublicationParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePublicationResponse, error)
+
+	// CreatePublicationWithResponse Evaluate the promotion gate and publish if it authorizes
+	//
+	// Evaluates HLD §14.1's promotion gate for one sealed checkpoint against a
+	// target's policy, and advances the target's publication pointer only if
+	// every clause passes.
+	//
+	// **A refusal is a successful response, not a problem.** The gate produces a
+	// per-clause result and returning `200` with it is the whole point: an
+	// operator told only "refused" cannot act, while a clause list says which
+	// requirement was not met and whether the answer was `fail` or
+	// `not_evaluated`. This follows the same rule as a `needs_input` readiness
+	// verdict, for the same reason — the computation produced a real answer.
+	//
+	// **Nothing publishes in this build.** Three of the nine clauses name
+	// concepts that do not exist yet — comparison over a replay corpus, protected
+	// metric regression, and backend certification — so every decision contains a
+	// `not_evaluated` and refuses. That is deliberate: the gate ships refusing and
+	// each clause becomes real on its own evidence.
+	//
+	// The request names identities rather than carrying artifacts. Authorization
+	// rests on artifacts the kernel produced, which cannot be transmitted or
+	// reconstructed from bytes, so the service re-derives them from the stored
+	// execution and requires everything it recorded to match. A client cannot
+	// supply evidence, only say which evidence to use.
+	//
+	// `expectedCurrentVersion` is the caller's compare-and-swap token, required by
+	// §16. Publication advances only from exactly that version, so a publisher
+	// whose view of the target went stale between deciding and publishing loses
+	// rather than overwriting a result it never saw.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /v1/publications (the `CreatePublication` operationId).
+	CreatePublicationWithResponse(ctx context.Context, params *CreatePublicationParams, body CreatePublicationJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePublicationResponse, error)
+
+	// GetPublicationWithResponse Report what is published to a target
+	//
+	// Returns the target's current publication, or its state when there is none.
+	//
+	// `status` follows HLD §14's ratified vocabulary and is derived rather than
+	// stored: a target with no record is `unpublished`, its highest version is
+	// `published`, and every lower version is `superseded`. Storing the status
+	// would add a value able to disagree with the history it summarizes.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /v1/publications/{customerID}/{target} (the `GetPublication` operationId).
+	GetPublicationWithResponse(ctx context.Context, customerID string, target string, params *GetPublicationParams, reqEditors ...RequestEditorFn) (*GetPublicationResponse, error)
 }
 
 type GetHealthResponse struct {
@@ -1977,6 +2680,179 @@ func (r GetPlanResponse) ContentType() string {
 	return ""
 }
 
+type CreatePublicationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *PublicationDecision
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *PublicationDecision
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *Problem
+	// ApplicationproblemJSON405 the response for an HTTP 405 `application/problem+json` response
+	ApplicationproblemJSON405 *MethodNotAllowed
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *PublicationConflict
+	// ApplicationproblemJSON415 the response for an HTTP 415 `application/problem+json` response
+	ApplicationproblemJSON415 *UnsupportedMediaType
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *UnprocessableEntity
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *DependencyUnavailable
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r CreatePublicationResponse) GetJSON200() *PublicationDecision {
+	return r.JSON200
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r CreatePublicationResponse) GetJSON201() *PublicationDecision {
+	return r.JSON201
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r CreatePublicationResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r CreatePublicationResponse) GetApplicationproblemJSON404() *Problem {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON405 returns the response for an HTTP 405 `application/problem+json` response
+func (r CreatePublicationResponse) GetApplicationproblemJSON405() *MethodNotAllowed {
+	return r.ApplicationproblemJSON405
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r CreatePublicationResponse) GetApplicationproblemJSON409() *PublicationConflict {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON415 returns the response for an HTTP 415 `application/problem+json` response
+func (r CreatePublicationResponse) GetApplicationproblemJSON415() *UnsupportedMediaType {
+	return r.ApplicationproblemJSON415
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r CreatePublicationResponse) GetApplicationproblemJSON422() *UnprocessableEntity {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r CreatePublicationResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r CreatePublicationResponse) GetApplicationproblemJSON503() *DependencyUnavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r CreatePublicationResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CreatePublicationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreatePublicationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreatePublicationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetPublicationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *PublicationState
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *Problem
+	// ApplicationproblemJSON405 the response for an HTTP 405 `application/problem+json` response
+	ApplicationproblemJSON405 *MethodNotAllowed
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetPublicationResponse) GetJSON200() *PublicationState {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r GetPublicationResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r GetPublicationResponse) GetApplicationproblemJSON404() *Problem {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON405 returns the response for an HTTP 405 `application/problem+json` response
+func (r GetPublicationResponse) GetApplicationproblemJSON405() *MethodNotAllowed {
+	return r.ApplicationproblemJSON405
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r GetPublicationResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetBody returns the raw response body bytes
+func (r GetPublicationResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetPublicationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetPublicationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetPublicationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 // GetHealthWithResponse Report process liveness
 //
 // Returns a wrapper object for the known response body format(s).
@@ -2131,6 +3007,108 @@ func (c *ClientWithResponses) GetPlanWithResponse(ctx context.Context, planID Di
 		return nil, err
 	}
 	return ParseGetPlanResponse(rsp)
+}
+
+// CreatePublicationWithBodyWithResponse Evaluate the promotion gate and publish if it authorizes
+//
+// Evaluates HLD §14.1's promotion gate for one sealed checkpoint against a
+// target's policy, and advances the target's publication pointer only if
+// every clause passes.
+//
+// **A refusal is a successful response, not a problem.** The gate produces a
+// per-clause result and returning `200` with it is the whole point: an
+// operator told only "refused" cannot act, while a clause list says which
+// requirement was not met and whether the answer was `fail` or
+// `not_evaluated`. This follows the same rule as a `needs_input` readiness
+// verdict, for the same reason — the computation produced a real answer.
+//
+// **Nothing publishes in this build.** Three of the nine clauses name
+// concepts that do not exist yet — comparison over a replay corpus, protected
+// metric regression, and backend certification — so every decision contains a
+// `not_evaluated` and refuses. That is deliberate: the gate ships refusing and
+// each clause becomes real on its own evidence.
+//
+// The request names identities rather than carrying artifacts. Authorization
+// rests on artifacts the kernel produced, which cannot be transmitted or
+// reconstructed from bytes, so the service re-derives them from the stored
+// execution and requires everything it recorded to match. A client cannot
+// supply evidence, only say which evidence to use.
+//
+// `expectedCurrentVersion` is the caller's compare-and-swap token, required by
+// §16. Publication advances only from exactly that version, so a publisher
+// whose view of the target went stale between deciding and publishing loses
+// rather than overwriting a result it never saw.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /v1/publications (the `CreatePublication` operationId).
+func (c *ClientWithResponses) CreatePublicationWithBodyWithResponse(ctx context.Context, params *CreatePublicationParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreatePublicationResponse, error) {
+	rsp, err := c.CreatePublicationWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePublicationResponse(rsp)
+}
+
+// CreatePublicationWithResponse Evaluate the promotion gate and publish if it authorizes
+//
+// Evaluates HLD §14.1's promotion gate for one sealed checkpoint against a
+// target's policy, and advances the target's publication pointer only if
+// every clause passes.
+//
+// **A refusal is a successful response, not a problem.** The gate produces a
+// per-clause result and returning `200` with it is the whole point: an
+// operator told only "refused" cannot act, while a clause list says which
+// requirement was not met and whether the answer was `fail` or
+// `not_evaluated`. This follows the same rule as a `needs_input` readiness
+// verdict, for the same reason — the computation produced a real answer.
+//
+// **Nothing publishes in this build.** Three of the nine clauses name
+// concepts that do not exist yet — comparison over a replay corpus, protected
+// metric regression, and backend certification — so every decision contains a
+// `not_evaluated` and refuses. That is deliberate: the gate ships refusing and
+// each clause becomes real on its own evidence.
+//
+// The request names identities rather than carrying artifacts. Authorization
+// rests on artifacts the kernel produced, which cannot be transmitted or
+// reconstructed from bytes, so the service re-derives them from the stored
+// execution and requires everything it recorded to match. A client cannot
+// supply evidence, only say which evidence to use.
+//
+// `expectedCurrentVersion` is the caller's compare-and-swap token, required by
+// §16. Publication advances only from exactly that version, so a publisher
+// whose view of the target went stale between deciding and publishing loses
+// rather than overwriting a result it never saw.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /v1/publications (the `CreatePublication` operationId).
+func (c *ClientWithResponses) CreatePublicationWithResponse(ctx context.Context, params *CreatePublicationParams, body CreatePublicationJSONRequestBody, reqEditors ...RequestEditorFn) (*CreatePublicationResponse, error) {
+	rsp, err := c.CreatePublication(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreatePublicationResponse(rsp)
+}
+
+// GetPublicationWithResponse Report what is published to a target
+//
+// Returns the target's current publication, or its state when there is none.
+//
+// `status` follows HLD §14's ratified vocabulary and is derived rather than
+// stored: a target with no record is `unpublished`, its highest version is
+// `published`, and every lower version is `superseded`. Storing the status
+// would add a value able to disagree with the history it summarizes.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /v1/publications/{customerID}/{target} (the `GetPublication` operationId).
+func (c *ClientWithResponses) GetPublicationWithResponse(ctx context.Context, customerID string, target string, params *GetPublicationParams, reqEditors ...RequestEditorFn) (*GetPublicationResponse, error) {
+	rsp, err := c.GetPublication(ctx, customerID, target, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetPublicationResponse(rsp)
 }
 
 // ParseGetHealthResponse parses an HTTP response from a GetHealthWithResponse call
@@ -2411,6 +3389,149 @@ func ParseGetPlanResponse(rsp *http.Response) (*GetPlanResponse, error) {
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
 		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 405:
+		var dest MethodNotAllowed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON405 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreatePublicationResponse parses an HTTP response from a CreatePublicationWithResponse call
+func ParseCreatePublicationResponse(rsp *http.Response) (*CreatePublicationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreatePublicationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest PublicationDecision
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest PublicationDecision
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Problem
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 405:
+		var dest MethodNotAllowed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON405 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest PublicationConflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 415:
+		var dest UnsupportedMediaType
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON415 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest UnprocessableEntity
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest DependencyUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetPublicationResponse parses an HTTP response from a GetPublicationWithResponse call
+func ParseGetPublicationResponse(rsp *http.Response) (*GetPublicationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetPublicationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest PublicationState
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Problem
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}

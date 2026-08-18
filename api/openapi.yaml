@@ -165,6 +165,130 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
 
+  /v1/publications:
+    post:
+      operationId: createPublication
+      tags: [publications]
+      summary: Evaluate the promotion gate and publish if it authorizes
+      description: |
+        Evaluates HLD §14.1's promotion gate for one sealed checkpoint against a
+        target's policy, and advances the target's publication pointer only if
+        every clause passes.
+
+        **A refusal is a successful response, not a problem.** The gate produces a
+        per-clause result and returning `200` with it is the whole point: an
+        operator told only "refused" cannot act, while a clause list says which
+        requirement was not met and whether the answer was `fail` or
+        `not_evaluated`. This follows the same rule as a `needs_input` readiness
+        verdict, for the same reason — the computation produced a real answer.
+
+        **Nothing publishes in this build.** Three of the nine clauses name
+        concepts that do not exist yet — comparison over a replay corpus, protected
+        metric regression, and backend certification — so every decision contains a
+        `not_evaluated` and refuses. That is deliberate: the gate ships refusing and
+        each clause becomes real on its own evidence.
+
+        The request names identities rather than carrying artifacts. Authorization
+        rests on artifacts the kernel produced, which cannot be transmitted or
+        reconstructed from bytes, so the service re-derives them from the stored
+        execution and requires everything it recorded to match. A client cannot
+        supply evidence, only say which evidence to use.
+
+        `expectedCurrentVersion` is the caller's compare-and-swap token, required by
+        §16. Publication advances only from exactly that version, so a publisher
+        whose view of the target went stale between deciding and publishing loses
+        rather than overwriting a result it never saw.
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePublicationRequest"
+      responses:
+        "200":
+          description: |
+            The gate was evaluated. `outcome` says what happened: `refused` when a
+            clause did not pass and nothing was published, or `unchanged` when the
+            target already publishes exactly this.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicationDecision"
+        "201":
+          description: The gate authorized and the target's publication pointer advanced.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicationDecision"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404":
+          description: |
+            No such execution, checkpoint, or assessment exists for this tenant. A
+            target with no policy is NOT reported here: an unconfigured destination
+            is an ordinary state and the gate reports it as a refusal.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "409": { $ref: "#/components/responses/PublicationConflict" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+
+  /v1/publications/{customerID}/{target}:
+    get:
+      operationId: getPublication
+      tags: [publications]
+      summary: Report what is published to a target
+      description: |
+        Returns the target's current publication, or its state when there is none.
+
+        `status` follows HLD §14's ratified vocabulary and is derived rather than
+        stored: a target with no record is `unpublished`, its highest version is
+        `published`, and every lower version is `superseded`. Storing the status
+        would add a value able to disagree with the history it summarizes.
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+        - name: customerID
+          in: path
+          required: true
+          description: The customer the target belongs to.
+          schema: { type: string, minLength: 1, maxLength: 128 }
+        - name: target
+          in: path
+          required: true
+          description: The publication target.
+          schema: { type: string, minLength: 1, maxLength: 128 }
+        - name: version
+          in: query
+          required: false
+          description: |
+            A specific publication version, which is how a superseded publication
+            stays explainable. Absent, the current publication is returned.
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        "200":
+          description: |
+            The target's publication state. A target that has never been published
+            to returns `200` with status `unpublished` and no publication, because
+            that is the ordinary initial state of every target rather than an
+            absence.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublicationState"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404":
+          description: No such publication version exists for this target.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
   /v1/executions/{executionID}:
     get:
       operationId: getExecution
@@ -250,6 +374,15 @@ components:
           schema: { $ref: "#/components/schemas/Problem" }
     DependencyUnavailable:
       description: A required dependency was unavailable. The request may be retried.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    PublicationConflict:
+      description: |
+        The target is not at the expected version, so the decision was formed
+        against a state that no longer holds. This is a problem rather than a
+        refusal: the gate said nothing about the candidate, and the fix is to read
+        the target again and decide afresh.
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
@@ -758,6 +891,178 @@ components:
             identity; the accepted rule list plus the closed code identify the
             boundary that refused, without inventing a field the kernel cannot
             populate truthfully.
+      additionalProperties: false
+
+    CreatePublicationRequest:
+      type: object
+      description: |
+        Identities naming the evidence to evaluate, not the evidence itself. The
+        service re-derives the artifacts from the stored execution, because
+        authorization rests on values the kernel produced and those cannot be
+        transmitted.
+      required: [customerID, target, executionID, checkpointArtifactID, assessmentID, expectedCurrentVersion]
+      properties:
+        customerID:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The customer whose target is being published to.
+        target:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: The publication target.
+        executionID: { $ref: "#/components/schemas/Digest" }
+        checkpointArtifactID:
+          allOf: [{ $ref: "#/components/schemas/Digest" }]
+          description: The sealed checkpoint to publish. It must be one the named execution retained.
+        assessmentID:
+          allOf: [{ $ref: "#/components/schemas/Digest" }]
+          description: |
+            The readiness assessment relied on. It must be one taken against the
+            named checkpoint, and its profile is what the gate compares to the
+            target's required profile.
+        expectedCurrentVersion:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            The target's publication version the caller decided against. Zero means
+            the caller believes the target has never been published to. Publication
+            advances only from exactly this version.
+      additionalProperties: false
+
+    PublicationOutcome:
+      type: string
+      description: |
+        What the request did. `refused` means a clause did not pass and nothing was
+        published; `recorded` means the pointer advanced; `unchanged` means the
+        target already publishes exactly this, which an at-least-once execution
+        retry legitimately produces.
+      enum: [refused, recorded, unchanged]
+
+    GateVerdict:
+      type: string
+      description: |
+        HLD §14's ratified gate vocabulary. `not_evaluated` and `fail` both refuse
+        and are deliberately distinct: only `fail` says something adverse about the
+        candidate, while `not_evaluated` says the clause could not be established.
+      enum: [not_evaluated, pass, fail]
+
+    GateUnevaluatedReason:
+      type: string
+      description: |
+        Why a clause could not be established, present only alongside
+        `not_evaluated`. The distinction is operational: `unsupported_by_build`
+        means no candidate satisfies the clause and no input would help, so
+        engineering must change; `information_absent` means the machinery exists
+        but evidence it needed was not supplied.
+      enum: [not_applicable, unsupported_by_build, information_absent]
+
+    GateClauseResult:
+      type: object
+      description: One clause of HLD §14.1's nine-clause gate.
+      required: [clause, verdict, unevaluatedReason]
+      properties:
+        clause:
+          type: string
+          description: The clause identifier, from the closed §14.1 list.
+          enum:
+            - static_validation
+            - sealed_with_provenance
+            - protected_invariants
+            - ready_assessment
+            - pinned_identities
+            - comparison_corpus
+            - no_metric_regression
+            - digest_consistency
+            - certified_backend
+        verdict: { $ref: "#/components/schemas/GateVerdict" }
+        unevaluatedReason: { $ref: "#/components/schemas/GateUnevaluatedReason" }
+      additionalProperties: false
+
+    PublicationDecision:
+      type: object
+      description: |
+        The gate's complete answer. Every clause appears whether or not it passed,
+        in a stable order, so a rendered refusal does not reorder itself between
+        evaluations of the same candidate.
+      required: [outcome, authorized, policyVersion, clauses]
+      properties:
+        outcome: { $ref: "#/components/schemas/PublicationOutcome" }
+        authorized:
+          type: boolean
+          description: Whether every clause passed. False whenever any clause did not.
+        policyVersion:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            The target policy version the decision was judged under. Zero means the
+            target has no usable policy, which refuses every clause for want of a
+            rule rather than for anything about the candidate.
+        clauses:
+          type: array
+          minItems: 9
+          maxItems: 9
+          items: { $ref: "#/components/schemas/GateClauseResult" }
+        publication:
+          allOf: [{ $ref: "#/components/schemas/Publication" }]
+          description: Present only when the gate authorized. A refusal carries none.
+      additionalProperties: false
+
+    PublicationStatus:
+      type: string
+      description: |
+        HLD §14's ratified publication vocabulary, derived from the target's history
+        rather than stored: no record is `unpublished`, the highest version is
+        `published`, and any lower version is `superseded`.
+      enum: [unpublished, published, superseded]
+
+    Publication:
+      type: object
+      description: |
+        One immutable record of a sealed checkpoint published to a target. Every
+        field after the version is an identity the authorization rested on, which is
+        what makes the record auditable: the decision can be re-derived from exactly
+        these. The gate's verdict is deliberately not stored, because a summary able
+        to disagree with the artifacts it summarizes could not be resolved.
+      required:
+        [version, status, policyVersion, profileID, assessmentID,
+         checkpointArtifactID, semanticRunID, executionID]
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The target's publication version this record holds.
+        status: { $ref: "#/components/schemas/PublicationStatus" }
+        policyVersion:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The immutable target policy version that authorized this publication.
+        profileID: { $ref: "#/components/schemas/Digest" }
+        assessmentID: { $ref: "#/components/schemas/Digest" }
+        checkpointArtifactID: { $ref: "#/components/schemas/Digest" }
+        semanticRunID: { $ref: "#/components/schemas/Digest" }
+        executionID: { $ref: "#/components/schemas/Digest" }
+      additionalProperties: false
+
+    PublicationState:
+      type: object
+      description: |
+        What is published to a target. A target that has never been published to
+        reports `unpublished` with no publication, which is the ordinary initial
+        state of every target rather than an absence.
+      required: [customerID, target, status]
+      properties:
+        customerID: { type: string }
+        target: { type: string }
+        status: { $ref: "#/components/schemas/PublicationStatus" }
+        publication:
+          allOf: [{ $ref: "#/components/schemas/Publication" }]
+          description: Absent when the target has never been published to.
       additionalProperties: false
 
     ExecutionAccepted:
