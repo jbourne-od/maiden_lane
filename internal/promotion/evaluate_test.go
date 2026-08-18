@@ -2,49 +2,101 @@ package promotion
 
 import (
 	"bytes"
+	"slices"
 	"testing"
 
 	"github.com/optimaldynamics/maiden-lane/internal/fixtures/teamhos"
 	"github.com/optimaldynamics/maiden-lane/internal/ports"
+	"github.com/optimaldynamics/maiden-lane/internal/semantic"
 )
 
-// A candidate carrying everything the two implemented clauses need must have
-// exactly those two evaluated, and must still refuse: seven clauses this build
-// cannot answer remain, and a nine-clause gate that authorized on two would be a
-// nine-clause gate in name only.
+// A candidate carrying everything the six implemented clauses need must have exactly
+// those six evaluated, and must still refuse: three clauses this build cannot answer
+// remain, and a nine-clause gate that authorized on six would be a nine-clause gate in
+// name only.
 func TestTheImplementedClausesPassAndTheGateStillRefuses(t *testing.T) {
-	decision := Evaluate(samplePolicy(), wholeCandidate(t))
+	sealed := sealTeamHOS(t)
+	candidate := candidateFrom(sealed[0])
+	// The second checkpoint is assessed ready under the CM profile; the first is only
+	// ready under CM too, so either serves. Bind the policy to the profile the
+	// assessment actually used, or the readiness clause answers about its own missing
+	// evidence rather than about this candidate.
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+
+	decision := Evaluate(policy, candidate)
 	if decision.Authorized() {
-		t.Fatal("publication was authorized while seven clauses are unanswerable")
+		t.Fatal("publication was authorized while three clauses are unanswerable")
 	}
 
 	byClause := clauseIndex(decision)
-	for _, clause := range []Clause{ClauseProtectedInvariants, ClauseDigestConsistency} {
-		if got := byClause[clause].Verdict(); got != Pass {
-			t.Fatalf("clause %v = %v, want Pass", clause, got)
+	for _, clause := range implementedClauses {
+		result := byClause[clause]
+		if result.Verdict() != Pass {
+			t.Fatalf("clause %v = %v/%v, want Pass", clause, result.Verdict(), result.Unevaluated())
 		}
-		if got := byClause[clause].Unevaluated(); got != UnevaluatedNotApplicable {
-			t.Fatalf("passing clause %v carried reason %v", clause, got)
+		if result.Unevaluated() != UnevaluatedNotApplicable {
+			t.Fatalf("passing clause %v carried reason %v", clause, result.Unevaluated())
 		}
 	}
-	for _, clause := range []Clause{
-		ClauseStaticValidation, ClauseSealedWithProvenance, ClauseReadyAssessment,
-		ClausePinnedIdentities, ClauseComparisonCorpus, ClauseNoMetricRegression,
-		ClauseCertifiedBackend,
-	} {
+	for _, clause := range unsupportedClauses {
 		result := byClause[clause]
 		if result.Verdict() != NotEvaluated {
 			t.Fatalf("clause %v = %v, want NotEvaluated", clause, result.Verdict())
 		}
 		// UnsupportedByBuild rather than InformationAbsent: no candidate satisfies
-		// these and no extra evidence would help, so an operator must be told to
-		// wait for engineering rather than sent looking for inputs.
+		// these and no extra evidence would help, so an operator must be told to wait
+		// for engineering rather than sent looking for inputs.
 		if result.Unevaluated() != UnsupportedByBuild {
 			t.Fatalf("clause %v reason = %v, want UnsupportedByBuild", clause, result.Unevaluated())
 		}
 	}
-	if got := len(decision.Refusals()); got != 7 {
-		t.Fatalf("refusals = %d, want the 7 unsupported clauses", got)
+	if got := len(decision.Refusals()); got != len(unsupportedClauses) {
+		t.Fatalf("refusals = %d, want the %d unsupported clauses", got, len(unsupportedClauses))
+	}
+}
+
+// implementedClauses and unsupportedClauses are the two halves of §14.1 in this build.
+// Together they must be every required clause, which a test below asserts: a clause
+// that fell out of both lists would stop being covered without any test failing.
+var implementedClauses = []Clause{
+	ClauseStaticValidation,
+	ClauseSealedWithProvenance,
+	ClauseProtectedInvariants,
+	ClauseReadyAssessment,
+	ClausePinnedIdentities,
+	ClauseDigestConsistency,
+}
+
+// The three that name a concept this codebase does not have: a replay corpus with
+// §14.2 comparison identity, a protected-metric regression policy, and executor
+// certification against a reference implementation. Each is a programme, not a task.
+var unsupportedClauses = []Clause{
+	ClauseComparisonCorpus,
+	ClauseNoMetricRegression,
+	ClauseCertifiedBackend,
+}
+
+// Production break caught by construction: if a clause were dropped from both lists,
+// every test above would still pass while nothing asserted anything about it.
+func TestTheTwoClauseListsCoverEveryRequiredClause(t *testing.T) {
+	covered := map[Clause]int{}
+	for _, clause := range implementedClauses {
+		covered[clause]++
+	}
+	for _, clause := range unsupportedClauses {
+		covered[clause]++
+	}
+	for _, clause := range requiredClauses {
+		switch covered[clause] {
+		case 0:
+			t.Errorf("clause %v is in neither list, so no test covers it", clause)
+		case 1:
+		default:
+			t.Errorf("clause %v is in both lists", clause)
+		}
+	}
+	if got := len(implementedClauses) + len(unsupportedClauses); got != len(requiredClauses) {
+		t.Fatalf("the lists hold %d clauses, want %d", got, len(requiredClauses))
 	}
 }
 
@@ -246,10 +298,10 @@ func TestEvaluateDispositionsEveryRequiredClause(t *testing.T) {
 		if !present {
 			t.Fatalf("clause %v has no result", clause)
 		}
-		// Only the two implemented clauses may report InformationAbsent, and only
-		// because their evidence is genuinely absent from this empty candidate.
-		if result.Unevaluated() == InformationAbsent &&
-			clause != ClauseProtectedInvariants && clause != ClauseDigestConsistency {
+		// Only an implemented clause may report InformationAbsent, and only because its
+		// evidence is genuinely absent from this empty candidate. An unsupported clause
+		// reporting it would send an operator looking for evidence nothing reads.
+		if result.Unevaluated() == InformationAbsent && !slices.Contains(implementedClauses, clause) {
 			t.Fatalf("clause %v reports InformationAbsent, so Evaluate does not "+
 				"disposition it and an operator is sent looking for evidence "+
 				"nothing reads", clause)
@@ -328,5 +380,242 @@ func TestAProtectedInvariantFailureSealsNothingToJudge(t *testing.T) {
 	if got := byClause[ClauseProtectedInvariants].Verdict(); got != Pass {
 		t.Fatalf("the prefix sealed before the failure = %v, want Pass: the clause is "+
 			"scoped to the checkpoint prefix, not to the whole run", got)
+	}
+}
+
+// ── the four clauses wired in this slice ────────────────────────────────────
+
+// Static validation is established by a compiled plan existing, not by re-running
+// validation. But the plan must be the one the checkpoint was sealed under: a plan
+// supplied that is not that one is a definite disagreement about which program produced
+// this checkpoint, which is adverse rather than merely unknown.
+func TestStaticValidationRequiresThePlanTheCheckpointWasSealedUnder(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+
+	t.Run("no plan is unevaluated", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		candidate.Plan = semantic.Plan{}
+		result := clauseIndex(Evaluate(policy, candidate))[ClauseStaticValidation]
+		if result.Verdict() != NotEvaluated || result.Unevaluated() != InformationAbsent {
+			t.Fatalf("= %v/%v, want NotEvaluated/InformationAbsent",
+				result.Verdict(), result.Unevaluated())
+		}
+	})
+
+	t.Run("another program's plan fails", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		candidate.Plan = otherPlan(t)
+		if candidate.Plan.ID() == candidate.Checkpoint.PlanID() {
+			t.Fatal("the fixture is wrong: this must be a different plan")
+		}
+		result := clauseIndex(Evaluate(policy, candidate))[ClauseStaticValidation]
+		if result.Verdict() != Fail {
+			t.Fatalf("= %v, want Fail: the plan is not the one this checkpoint was "+
+				"sealed under, which is adverse rather than unknown", result.Verdict())
+		}
+	})
+}
+
+// The readiness clause has three distinct answers and conflating any two would
+// authorize or condemn wrongly. This is the clause where the three-valued verdict
+// vocabulary earns its existence.
+func TestReadyAssessmentDistinguishesWrongProfileFromNotReady(t *testing.T) {
+	sealed := sealTeamHOS(t)
+
+	// The first checkpoint is ready under CM and needs_input under the optimizer, which
+	// is the natural pair for this test: the same artifact, two real answers.
+	var ready, needsInput semantic.Assessment
+	for _, assessment := range sealed[0].assessments {
+		switch assessment.Verdict() {
+		case semantic.Ready:
+			ready = assessment
+		case semantic.NeedsInput:
+			needsInput = assessment
+		}
+	}
+	if ready.ID() == "" || needsInput.ID() == "" {
+		t.Fatal("the fixture must supply both a ready and a needs_input assessment")
+	}
+
+	t.Run("ready under the required profile passes", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		candidate.Assessment = ready
+		result := clauseIndex(Evaluate(policyRequiring(ready.ProfileID()), candidate))[ClauseReadyAssessment]
+		if result.Verdict() != Pass {
+			t.Fatalf("= %v/%v, want Pass", result.Verdict(), result.Unevaluated())
+		}
+	})
+
+	t.Run("needs_input under the required profile fails", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		candidate.Assessment = needsInput
+		result := clauseIndex(Evaluate(policyRequiring(needsInput.ProfileID()), candidate))[ClauseReadyAssessment]
+		// A real, adverse answer about this candidate: it was assessed under the profile
+		// the target requires and found incomplete.
+		if result.Verdict() != Fail {
+			t.Fatalf("= %v, want Fail", result.Verdict())
+		}
+	})
+
+	t.Run("ready under a different profile is unevaluated, not passed", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		candidate.Assessment = ready
+		// The target requires the profile this checkpoint is NOT ready under.
+		result := clauseIndex(Evaluate(policyRequiring(needsInput.ProfileID()), candidate))[ClauseReadyAssessment]
+		if result.Verdict() == Pass {
+			t.Fatal("a ready verdict under another profile satisfied the clause, so the " +
+				"gate would authorize on a question nobody asked")
+		}
+		if result.Verdict() != NotEvaluated || result.Unevaluated() != InformationAbsent {
+			t.Fatalf("= %v/%v, want NotEvaluated/InformationAbsent: nothing is known "+
+				"about the required profile", result.Verdict(), result.Unevaluated())
+		}
+	})
+
+	t.Run("an assessment of another checkpoint is unevaluated", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		candidate.Assessment = sealed[1].assessments[0]
+		result := clauseIndex(Evaluate(
+			policyRequiring(sealed[1].assessments[0].ProfileID()), candidate))[ClauseReadyAssessment]
+		if result.Verdict() == Pass {
+			t.Fatal("another checkpoint's assessment satisfied this checkpoint's clause")
+		}
+	})
+
+	t.Run("a policy binding no profile is unevaluated", func(t *testing.T) {
+		// Evaluate refuses an unestablished policy before any clause runs, so the guard
+		// inside this clause is unreachable through it. Called directly, for the same
+		// reason app.advancePointer is: a guard that cannot be reached today becomes
+		// load-bearing the moment the policy shape changes, and an empty required
+		// profile compared against an assessment's would match nothing while looking
+		// like a comparison.
+		//
+		// An earlier version of this subtest went through Evaluate and therefore
+		// asserted the short-circuit rather than the guard.
+		policy := policyRequiring(ready.ProfileID())
+		policy.RequiredProfileID = ""
+		result := readyAssessment(policy, candidateFrom(sealed[0]))
+		if result.Verdict() != NotEvaluated || result.Unevaluated() != InformationAbsent {
+			t.Fatalf("= %v/%v, want NotEvaluated/InformationAbsent",
+				result.Verdict(), result.Unevaluated())
+		}
+	})
+}
+
+// The pinned-identity clause names ten identities. Only the two a caller supplies --
+// the plan's three parts and the execution identity -- can be absent from an otherwise
+// well-formed candidate, because the other seven come from artifacts that cannot be
+// constructed without them. So this covers those, plus the cross-links, which are the
+// failure a list of non-empty strings cannot detect.
+//
+// Saying that plainly matters: an earlier comment here claimed every identity was
+// individually covered, which was true of the code and not of the test.
+func TestPinnedIdentitiesRequiresEveryNamedIdentity(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+
+	t.Run("a complete candidate passes", func(t *testing.T) {
+		result := clauseIndex(Evaluate(policy, candidateFrom(sealed[0])))[ClausePinnedIdentities]
+		if result.Verdict() != Pass {
+			t.Fatalf("= %v/%v, want Pass", result.Verdict(), result.Unevaluated())
+		}
+	})
+
+	// Only the identities a caller supplies can be blanked; the seven the kernel derives
+	// cannot be, which is the point of them coming from authenticated artifacts. Those
+	// are covered by the absent-artifact cases instead.
+	t.Run("no execution identity is unevaluated", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		candidate.ExecutionID = ""
+		result := clauseIndex(Evaluate(policy, candidate))[ClausePinnedIdentities]
+		if result.Verdict() != NotEvaluated || result.Unevaluated() != InformationAbsent {
+			t.Fatalf("= %v/%v, want NotEvaluated/InformationAbsent",
+				result.Verdict(), result.Unevaluated())
+		}
+	})
+
+	t.Run("no plan is unevaluated", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		candidate.Plan = semantic.Plan{}
+		result := clauseIndex(Evaluate(policy, candidate))[ClausePinnedIdentities]
+		if result.Verdict() != NotEvaluated {
+			t.Fatalf("= %v, want NotEvaluated", result.Verdict())
+		}
+	})
+
+	// Every identity can be present while the links between them contradict, which a
+	// list of non-empty strings cannot rule out. That is adverse, not unknown.
+	t.Run("a contradicting plan link fails", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		candidate.Plan = otherPlan(t)
+		result := clauseIndex(Evaluate(policy, candidate))[ClausePinnedIdentities]
+		if result.Verdict() != Fail {
+			t.Fatalf("= %v, want Fail", result.Verdict())
+		}
+	})
+
+	t.Run("a contradicting assessment link fails", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		candidate.Assessment = sealed[1].assessments[0]
+		result := clauseIndex(Evaluate(policy, candidate))[ClausePinnedIdentities]
+		if result.Verdict() != Fail {
+			t.Fatalf("= %v, want Fail", result.Verdict())
+		}
+	})
+}
+
+// The provenance clause rests on the kernel refusing any policy but `changes`, which is
+// a theorem rather than a comparison this clause performs. Asserted against the kernel
+// so the caveat in its comment is anchored to something that would fail if it stopped
+// being true.
+func TestProvenanceIsEstablishedByTheKernelRefusingAnythingElse(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+
+	result := clauseIndex(Evaluate(policy, candidateFrom(sealed[0])))[ClauseSealedWithProvenance]
+	if result.Verdict() != Pass {
+		t.Fatalf("= %v/%v, want Pass", result.Verdict(), result.Unevaluated())
+	}
+
+	// The theorem the clause rests on: binding refuses any other provenance policy, and
+	// Seal requires a binding, so no sealed artifact can carry anything else.
+	//
+	// The request below is otherwise valid and differs only in its policy, which the
+	// first draft of this test got wrong: it passed a zero-valued request, which BindRun
+	// refuses for a dozen reasons unrelated to provenance, so it would have passed with
+	// the policy check deleted. Isolating the one field is what makes this an assertion.
+	//
+	// Verified by mutation, and the result is worth writing down: the kernel refuses a
+	// foreign provenance policy in THREE independent places -- the binding request check,
+	// the binding validity check, and the canonical encoder -- so this fails only when
+	// all three are removed. That is the correct granularity. The theorem this clause
+	// rests on is a property of BindRun's observable behaviour, not of any one check, and
+	// it survives as long as any of them stands.
+	inputs, err := teamhos.New(teamhos.Passing)
+	if err != nil {
+		t.Fatalf("teamhos.New: %v", err)
+	}
+	compilation, err := semantic.Compile(inputs.Compilation)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	plan, ok := compilation.Plan()
+	if !ok {
+		t.Fatal("the fixture did not compile")
+	}
+	valid := semantic.RunBindingRequest{
+		Plan: plan, InitialState: inputs.InitialState, World: inputs.World,
+		ExecutorIdentity: inputs.ExecutorIdentity, Policy: inputs.Policy,
+	}
+	if _, err := semantic.BindRun(valid); err != nil {
+		t.Fatalf("the control case must succeed, or the next assertion proves nothing: %v", err)
+	}
+
+	other := valid
+	other.Policy = semantic.ProvenancePolicy(2)
+	if _, err := semantic.BindRun(other); err == nil {
+		t.Fatal("BindRun accepted a provenance policy other than changes, so " +
+			"'at least changes' is now a comparison this clause does not perform")
 	}
 }

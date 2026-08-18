@@ -20,6 +20,13 @@ import (
 type sealedFixture struct {
 	artifact    semantic.CheckpointArtifact
 	assessments []semantic.Assessment
+
+	// The plan and the execution identity the checkpoint was produced under. The
+	// pinned-identity and static-validation clauses need both, and neither is
+	// recoverable from the artifact: PlanID commits to the plan without exposing its
+	// parts, and executor identity is excluded from checkpoint identity entirely.
+	plan        semantic.Plan
+	executionID semantic.ExecutionID
 }
 
 // sealTeamHOS runs the kernel over the passing golden fixture and returns every
@@ -132,7 +139,10 @@ func sealTeamHOSVariant(t *testing.T, variant teamhos.Variant) ([]sealedFixture,
 				assessments = append(assessments, assessment)
 				knownAssessments = append(knownAssessments, assessment)
 			}
-			sealed = append(sealed, sealedFixture{artifact: artifact, assessments: assessments})
+			sealed = append(sealed, sealedFixture{
+				artifact: artifact, assessments: assessments,
+				plan: plan, executionID: binding.ExecutionID(),
+			})
 		}
 	}
 
@@ -149,21 +159,29 @@ func sealTeamHOSVariant(t *testing.T, variant teamhos.Variant) ([]sealedFixture,
 func wholeCandidate(t *testing.T) Candidate {
 	t.Helper()
 	sealed := sealTeamHOS(t)
+	return candidateFrom(sealed[0])
+}
+
+// candidateFrom assembles the complete candidate for one sealed checkpoint: the
+// artifact, the plan it was sealed under, the assessment bound to it, the witness it
+// commits to, and the execution that produced it.
+func candidateFrom(sealed sealedFixture) Candidate {
 	return Candidate{
-		Checkpoint:               sealed[0].artifact,
-		Assessment:               sealed[0].assessments[0],
-		RetainedInvariantWitness: sealed[0].artifact.InvariantResultCanonicalBytes(),
+		Checkpoint:               sealed.artifact,
+		Plan:                     sealed.plan,
+		Assessment:               sealed.assessments[0],
+		RetainedInvariantWitness: sealed.artifact.InvariantResultCanonicalBytes(),
+		ExecutionID:              sealed.executionID,
 	}
 }
 
 // samplePolicy is a complete policy at a version other than 1, so a decision that
 // reported a hardcoded or defaulted version would be visible.
 //
-// The required profile is a literal rather than one of the fixture's compiled
-// ProfileIDs because no clause compares it to anything yet: the gate only requires
-// that a policy bind one. When the readiness clause lands this must become the
-// fixture's real ProfileID, or that clause will be tested against a profile no
-// assessment was ever taken under.
+// Its required profile is a literal, which is now only correct for tests that do not
+// exercise the readiness clause. Use policyRequiring for those: a literal profile makes
+// that clause unevaluated for want of a matching assessment, which is a real answer but
+// not the one most tests mean to ask about.
 func samplePolicy() ports.TargetPolicy {
 	return ports.TargetPolicy{
 		TenantID:          "tenant-a",
@@ -172,6 +190,15 @@ func samplePolicy() ports.TargetPolicy {
 		Version:           7,
 		RequiredProfileID: semantic.ProfileID("sha256:" + strings.Repeat("b", 64)),
 	}
+}
+
+// policyRequiring is samplePolicy bound to a profile an assessment was really taken
+// under, which is what the readiness clause needs to reach an answer about the
+// candidate rather than about its own missing evidence.
+func policyRequiring(profile semantic.ProfileID) ports.TargetPolicy {
+	policy := samplePolicy()
+	policy.RequiredProfileID = profile
+	return policy
 }
 
 // clauseIndex collapses a decision to a lookup, since clause order is stable but
@@ -210,4 +237,35 @@ func withoutTarget(policy ports.TargetPolicy) ports.TargetPolicy {
 func withoutProfile(policy ports.TargetPolicy) ports.TargetPolicy {
 	policy.RequiredProfileID = ""
 	return policy
+}
+
+// otherPlan compiles a genuinely different program, so a test can supply a plan that is
+// real but is not the one a checkpoint was sealed under.
+//
+// It is the anchor-mismatch variant's declarations, which differ from the passing
+// variant only in the initial state -- so this actually compiles to the SAME plan, and
+// that is worth knowing rather than working around. A different program is needed, so
+// this drops a checkpoint declaration, which changes plan identity while still
+// compiling.
+func otherPlan(t *testing.T) semantic.Plan {
+	t.Helper()
+	inputs, err := teamhos.New(teamhos.Passing)
+	if err != nil {
+		t.Fatalf("teamhos.New: %v", err)
+	}
+	request := inputs.Compilation
+	request.Rules.Checkpoints = request.Rules.Checkpoints[:1]
+
+	compilation, err := semantic.Compile(request)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	if failure, refused := compilation.Failure(); refused {
+		t.Fatalf("the altered program did not compile: %v", failure)
+	}
+	plan, ok := compilation.Plan()
+	if !ok {
+		t.Fatal("compilation produced neither plan nor failure")
+	}
+	return plan
 }
