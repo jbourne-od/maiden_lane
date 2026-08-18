@@ -75,18 +75,23 @@ func TestARefusalNamesEveryClauseAndItsReason(t *testing.T) {
 	for _, result := range decision.Clauses() {
 		byClause[result.Clause()] = result
 	}
+	// Six clauses are answered from this candidate, so the refusal is attributable to
+	// the three that name a concept this codebase does not have rather than to weak
+	// evidence. If one of these ever stops passing, this test says which.
 	for _, clause := range []promotion.Clause{
-		promotion.ClauseProtectedInvariants, promotion.ClauseDigestConsistency,
+		promotion.ClauseStaticValidation, promotion.ClauseSealedWithProvenance,
+		promotion.ClauseProtectedInvariants, promotion.ClauseReadyAssessment,
+		promotion.ClausePinnedIdentities, promotion.ClauseDigestConsistency,
 	} {
-		if got := byClause[clause].Verdict(); got != promotion.Pass {
-			t.Fatalf("clause %v = %v, want Pass: this candidate carries the evidence "+
-				"both need, so a refusal here would hide why publication was refused",
-				clause, got)
+		result := byClause[clause]
+		if result.Verdict() != promotion.Pass {
+			t.Fatalf("clause %v = %v/%v, want Pass", clause, result.Verdict(), result.Unevaluated())
 		}
 	}
+
 	refusals := decision.Refusals()
-	if len(refusals) != 7 {
-		t.Fatalf("refusals = %d, want 7", len(refusals))
+	if len(refusals) != 3 {
+		t.Fatalf("refusals = %d, want the 3 clauses this build cannot answer", len(refusals))
 	}
 	for _, result := range refusals {
 		// UnsupportedByBuild rather than InformationAbsent: no evidence would satisfy
@@ -96,6 +101,71 @@ func TestARefusalNamesEveryClauseAndItsReason(t *testing.T) {
 			t.Fatalf("clause %v refused with reason %v, want UnsupportedByBuild",
 				result.Clause(), result.Unevaluated())
 		}
+	}
+}
+
+// The first clause that can refuse on ordinary data rather than on missing
+// engineering: a checkpoint assessed under the target's required profile and found
+// incomplete. The refusal must say Fail, because that is a real adverse answer about
+// this candidate, and must be distinguishable from the three that are merely
+// unimplemented.
+func TestACheckpointNotReadyForTheTargetFailsItsClause(t *testing.T) {
+	fixture := publishFixture(t)
+
+	// The first checkpoint is ready for the CM profile and needs_input for the
+	// optimizer's, which is the point of having two profiles: the same artifact, two
+	// real answers, and a target that demands the stricter one.
+	first := fixture.retained[0]
+	var needsInput semantic.Assessment
+	for _, assessment := range fixture.result.Assessments() {
+		if assessment.CheckpointArtifactID() == first.ID() &&
+			assessment.Verdict() == semantic.NeedsInput {
+			needsInput = assessment
+		}
+	}
+	if needsInput.ID() == "" {
+		t.Fatal("the fixture must include a needs_input assessment of its first checkpoint")
+	}
+
+	store := memory.NewStore()
+	if err := store.PutPolicy(t.Context(), ports.TargetPolicy{
+		TenantID: fixture.tenant, CustomerID: fixture.customer, Target: fixture.target,
+		Version: 1, RequiredProfileID: needsInput.ProfileID(),
+	}); err != nil {
+		t.Fatalf("PutPolicy: %v", err)
+	}
+
+	request := fixture.request
+	request.Receipt = receiptFor(t, fixture, first)
+	request.Candidate = promotion.Candidate{
+		Checkpoint:               first,
+		Plan:                     fixture.plan,
+		Assessment:               needsInput,
+		RetainedInvariantWitness: first.InvariantResultCanonicalBytes(),
+	}
+
+	outcome, err := Publish(t.Context(),
+		PublicationStores{Policies: store, Publications: store}, request)
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if outcome.Authorized() {
+		t.Fatal("a checkpoint the target considers incomplete was authorized")
+	}
+
+	var readiness promotion.ClauseResult
+	for _, result := range outcome.Decision().Clauses() {
+		if result.Clause() == promotion.ClauseReadyAssessment {
+			readiness = result
+		}
+	}
+	if readiness.Verdict() != promotion.Fail {
+		t.Fatalf("readiness = %v/%v, want Fail: it was assessed under the required "+
+			"profile and found incomplete, which is adverse rather than unknown",
+			readiness.Verdict(), readiness.Unevaluated())
+	}
+	if got := len(outcome.Decision().Refusals()); got != 4 {
+		t.Fatalf("refusals = %d, want 4: the three unimplemented plus readiness", got)
 	}
 }
 
@@ -184,6 +254,7 @@ func TestAReceiptDoesNotVouchForAnotherCheckpoint(t *testing.T) {
 	request.Receipt = receipt
 	request.Candidate = promotion.Candidate{
 		Checkpoint:               second,
+		Plan:                     fixture.plan,
 		Assessment:               fixture.assessment,
 		RetainedInvariantWitness: second.InvariantResultCanonicalBytes(),
 	}
@@ -516,6 +587,7 @@ type publishSetup struct {
 	customer   ports.CustomerID
 	target     ports.TargetKey
 	result     SpineResult
+	plan       semantic.Plan
 	retained   []semantic.CheckpointArtifact
 	artifact   semantic.CheckpointArtifact
 	assessment semantic.Assessment
@@ -553,6 +625,11 @@ func publishFixtureFor(t *testing.T, variant teamhos.Variant) publishSetup {
 		t.Fatalf("Run: %v", err)
 	}
 
+	plan, ok := result.Plan()
+	if !ok {
+		t.Fatal("the fixture produced no plan")
+	}
+
 	retained := result.Checkpoints()
 	if len(retained) == 0 {
 		t.Fatal("the fixture retained no checkpoint")
@@ -580,7 +657,7 @@ func publishFixtureFor(t *testing.T, variant teamhos.Variant) publishSetup {
 
 	setup := publishSetup{
 		tenant: "acme", customer: "cust", target: "cm",
-		result: result, retained: retained, artifact: artifact,
+		result: result, plan: plan, retained: retained, artifact: artifact,
 		assessment: assessment, receipt: receipt,
 	}
 	setup.request = PublishRequest{
@@ -589,8 +666,11 @@ func publishFixtureFor(t *testing.T, variant teamhos.Variant) publishSetup {
 		Receipt:                receipt,
 		Candidate: promotion.Candidate{
 			Checkpoint:               artifact,
+			Plan:                     plan,
 			Assessment:               assessment,
 			RetainedInvariantWitness: artifact.InvariantResultCanonicalBytes(),
+			// ExecutionID is deliberately left unset. Publish takes it from the
+			// receipt, so a fixture that supplied one would hide that.
 		},
 	}
 	return setup

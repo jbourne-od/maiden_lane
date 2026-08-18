@@ -26,6 +26,21 @@ type Candidate struct {
 	// Checkpoint is the sealed artifact under consideration.
 	Checkpoint semantic.CheckpointArtifact
 
+	// Plan is the compiled plan the checkpoint was sealed under.
+	//
+	// It is here because the artifact cannot supply what two clauses need. Static
+	// validation is established by a Plan existing at all: Compile returns a plan or
+	// a compilation failure and never both, so a plan with an identity is a plan that
+	// validated. And the pinned-identity clause names the schema, ruleset, and
+	// compiler identities, which PlanID commits to but does not expose — PlanID is a
+	// digest over them, so holding it proves they were fixed without saying what they
+	// were. Plan exposes all three.
+	//
+	// Supplying it does not weaken anything, because it is checked against the
+	// checkpoint rather than trusted: an artifact names its PlanID, so a plan that is
+	// not the one sealed under is detectable rather than assumed away.
+	Plan semantic.Plan
+
 	// Assessment is the readiness answer whose binding to Checkpoint the digest
 	// consistency clause establishes. Whether its verdict is `ready` is a
 	// different clause's question and is not read here.
@@ -45,6 +60,19 @@ type Candidate struct {
 	// These bytes are opaque here and must stay that way. The only operation
 	// defined on them is semantic.VerifyInvariantResultDigest.
 	RetainedInvariantWitness []byte
+
+	// ExecutionID is the execution that produced the checkpoint, which §14.1's
+	// pinned-identity clause requires and no artifact here carries: executor identity
+	// is excluded from checkpoint identity by design, so one semantic run can be
+	// executed by several backends and each produces the same checkpoint.
+	//
+	// This gate cannot authenticate that attribution, and does not pretend to. It
+	// checks the identity is present, and whoever assembles a Candidate is
+	// responsible for having established that this execution produced this
+	// checkpoint — which internal/app does with a receipt its own spine result mints.
+	// Naming the limit here is better than a clause that looks like it verified
+	// something it read from a field.
+	ExecutionID semantic.ExecutionID
 }
 
 // sealed reports whether a real sealed artifact was supplied at all.
@@ -82,11 +110,13 @@ func established(policy ports.TargetPolicy) bool {
 
 // Evaluate produces a gate decision for one candidate under one target policy.
 //
-// Two of HLD §14.1's nine clauses are answered from the candidate. The other
-// seven are UnsupportedByBuild rather than absent: this build has no code that
-// could answer them, so no candidate satisfies them and no additional evidence
+// Six of HLD §14.1's nine clauses are answered from the candidate. The other three
+// are UnsupportedByBuild rather than absent: comparison over a replay corpus,
+// protected metric regression, and backend certification each name a concept this
+// codebase does not have, so no candidate satisfies them and no additional evidence
 // would help. Reporting them as unsupported is what keeps a nine-clause gate from
-// reading as satisfied while checking two.
+// reading as satisfied while checking six, and publication consequently still
+// authorizes nothing.
 //
 // It takes the whole policy rather than just the version it currently reads. The
 // readiness clause needs the required profile, and more importantly a caller
@@ -107,16 +137,147 @@ func Evaluate(policy ports.TargetPolicy, candidate Candidate) Decision {
 		return decide(policy.Version, nil)
 	}
 	return decide(policy.Version, map[Clause]ClauseResult{
-		ClauseStaticValidation:     Unsupported(ClauseStaticValidation),
-		ClauseSealedWithProvenance: Unsupported(ClauseSealedWithProvenance),
+		ClauseStaticValidation:     staticValidation(candidate),
+		ClauseSealedWithProvenance: sealedWithProvenance(candidate),
 		ClauseProtectedInvariants:  protectedInvariants(candidate),
-		ClauseReadyAssessment:      Unsupported(ClauseReadyAssessment),
-		ClausePinnedIdentities:     Unsupported(ClausePinnedIdentities),
+		ClauseReadyAssessment:      readyAssessment(policy, candidate),
+		ClausePinnedIdentities:     pinnedIdentities(candidate),
 		ClauseComparisonCorpus:     Unsupported(ClauseComparisonCorpus),
 		ClauseNoMetricRegression:   Unsupported(ClauseNoMetricRegression),
 		ClauseDigestConsistency:    digestConsistency(candidate),
 		ClauseCertifiedBackend:     Unsupported(ClauseCertifiedBackend),
 	})
+}
+
+// staticValidation establishes HLD §14.1's "successful static plan validation".
+//
+// It is established by a compiled Plan existing, not by re-running validation. Compile
+// returns either a Plan or a CompilationFailure and never both, and Plan has
+// unexported fields with no exported constructor, so outside the kernel a plan with an
+// identity is a plan the compiler accepted. Re-validating here would be a second
+// implementation of the compiler's own judgment, and a second implementation is a
+// second answer.
+//
+// The plan is checked against the checkpoint rather than merely accepted. An artifact
+// names the PlanID it was sealed under, so a plan supplied that is not that one is a
+// definite disagreement about which program produced this checkpoint — adverse, and
+// therefore Fail rather than unevaluated.
+func staticValidation(candidate Candidate) ClauseResult {
+	if !candidate.sealed() || candidate.Plan.ID() == "" {
+		return Unestablished(ClauseStaticValidation)
+	}
+	if candidate.Plan.ID() != candidate.Checkpoint.PlanID() {
+		return Failed(ClauseStaticValidation)
+	}
+	return Passed(ClauseStaticValidation)
+}
+
+// sealedWithProvenance establishes HLD §14.1's "sealed selected checkpoint with at
+// least `changes` provenance".
+//
+// Sealing is established by holding the artifact. Provenance follows from the kernel
+// refusing anything else: BindRun rejects any ProvenancePolicy but ChangesProvenance,
+// Seal requires a binding, and plan identity itself commits to the policy token. So a
+// sealed artifact necessarily carries `changes` provenance, and "at least" is
+// trivially satisfied because it is the only policy that exists.
+//
+// LOAD-BEARING CAVEAT, and it is the same shape as the protected-invariant clause's:
+// this holds only while ChangesProvenance is the sole provenance policy. Introducing a
+// second one — weaker or stronger — makes "at least changes" a real comparison that
+// this clause does not perform, and it would keep returning Pass. Such a change must
+// come with an exported way to compare provenance policy identities, and with this
+// clause rewritten to use it.
+func sealedWithProvenance(candidate Candidate) ClauseResult {
+	if !candidate.sealed() {
+		return Unestablished(ClauseSealedWithProvenance)
+	}
+	if candidate.Checkpoint.ProvenancePolicyID() == "" {
+		// Unreachable through Seal, which derives this from a verified binding.
+		// Checked because "unreachable" is a claim about today's code.
+		return Unestablished(ClauseSealedWithProvenance)
+	}
+	return Passed(ClauseSealedWithProvenance)
+}
+
+// readyAssessment establishes HLD §14.1's "a `ready` assessment under the target's
+// pinned ProfileID".
+//
+// Two things can go wrong and they are not the same answer, which is the whole reason
+// the verdict vocabulary has three values rather than two:
+//
+//   - The assessment is for a DIFFERENT profile. Then nothing is known about the
+//     profile the target requires, so this is unevaluated for want of the right
+//     evidence. Reading a verdict taken under another profile would answer a question
+//     nobody asked and call it authorization.
+//   - The assessment is for the right profile and says needs_input. That is a real,
+//     adverse answer about this candidate: Fail.
+//
+// The assessment must also be bound to this checkpoint. The digest-consistency clause
+// checks that too, and this one cannot lean on it: clause results are independent, so a
+// clause that assumed another had passed would authorize on an assumption.
+func readyAssessment(policy ports.TargetPolicy, candidate Candidate) ClauseResult {
+	assessment := candidate.Assessment
+	if !candidate.sealed() || assessment.ID() == "" || policy.RequiredProfileID == "" {
+		return Unestablished(ClauseReadyAssessment)
+	}
+	if assessment.CheckpointArtifactID() != candidate.Checkpoint.ID() {
+		// An assessment of another checkpoint says nothing about this one.
+		return Unestablished(ClauseReadyAssessment)
+	}
+	if assessment.ProfileID() != policy.RequiredProfileID {
+		return Unestablished(ClauseReadyAssessment)
+	}
+	if assessment.Verdict() != semantic.Ready {
+		return Failed(ClauseReadyAssessment)
+	}
+	return Passed(ClauseReadyAssessment)
+}
+
+// pinnedIdentities establishes HLD §14.1's "pinned input, world, schema, ruleset,
+// compiler, semantic-run, execution, checkpoint, profile, and assessment identities".
+//
+// All ten are named explicitly rather than counted, because the clause's content is
+// that each one is fixed. Seven come from the sealed artifact and the assessment,
+// which cannot be constructed without them; schema, ruleset, and compiler come from
+// the plan, since PlanID is a digest over them and proves they were fixed without
+// saying what they were; and the execution identity comes from the caller, because no
+// artifact here carries it.
+//
+// Absence is unevaluated and disagreement is Fail. A missing identity means the
+// candidate was not fully described; a cross-link that contradicts means the identities
+// present do not describe one thing, which is adverse.
+func pinnedIdentities(candidate Candidate) ClauseResult {
+	if !candidate.sealed() {
+		return Unestablished(ClausePinnedIdentities)
+	}
+	checkpoint, plan, assessment := candidate.Checkpoint, candidate.Plan, candidate.Assessment
+
+	present := []string{
+		string(checkpoint.InputID()),
+		string(checkpoint.WorldID()),
+		string(plan.SchemaDigest()),
+		string(plan.RulesetDigest()),
+		string(plan.CompilerVersion()),
+		string(checkpoint.SemanticRunID()),
+		string(candidate.ExecutionID),
+		string(checkpoint.CheckpointID()),
+		string(assessment.ProfileID()),
+		string(assessment.ID()),
+	}
+	for _, identity := range present {
+		if identity == "" {
+			return Unestablished(ClausePinnedIdentities)
+		}
+	}
+
+	// The identities must describe one thing. Each of these is a link that could
+	// disagree while every field is populated, which is the state a list of non-empty
+	// strings cannot rule out on its own.
+	if plan.ID() != checkpoint.PlanID() ||
+		assessment.CheckpointArtifactID() != checkpoint.ID() {
+		return Failed(ClausePinnedIdentities)
+	}
+	return Passed(ClausePinnedIdentities)
 }
 
 // protectedInvariants establishes HLD §14.1's "all protected dynamic invariants

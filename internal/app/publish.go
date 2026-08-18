@@ -148,7 +148,16 @@ func Publish(
 		return PublicationOutcome{}, fmt.Errorf("app: target policy could not be read: %w", err)
 	}
 
-	decision := promotion.Evaluate(policy, request.Candidate)
+	// The execution identity the gate sees comes from the receipt, never from the
+	// candidate the caller assembled. Both fields exist, so they could disagree, and a
+	// caller-supplied one would be exactly the unauthenticated attribution the receipt
+	// was introduced to eliminate. Overriding is preferred to comparing-and-refusing
+	// because there is nothing for a caller to get right here: the authenticated value
+	// is the only correct one, so the field is not an input.
+	candidate := request.Candidate
+	candidate.ExecutionID = request.Receipt.ExecutionID()
+
+	decision := promotion.Evaluate(policy, candidate)
 	if !decision.Authorized() {
 		return PublicationOutcome{result: PublicationRefused, decision: decision}, nil
 	}
