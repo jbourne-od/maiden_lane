@@ -20,14 +20,14 @@ const (
 	// part or a piece of evidence, so no auditable record could be produced.
 	InputPublishRequestIncomplete InvalidInputCode = "PUBLISH_REQUEST_INCOMPLETE"
 
-	// InputPublishBindingMismatch means the supplied run binding did not produce
+	// InputPublishReceiptMismatch means the supplied execution receipt is not for
 	// the checkpoint being published.
 	//
 	// It is a separate code from the one above for the same reason the gate has two
 	// unevaluated reasons: both refuse, and they call for different action. One is
 	// answered by supplying the missing piece, the other by correcting a pairing
 	// that is complete and wrong.
-	InputPublishBindingMismatch InvalidInputCode = "PUBLISH_BINDING_MISMATCH"
+	InputPublishReceiptMismatch InvalidInputCode = "PUBLISH_RECEIPT_MISMATCH"
 )
 
 // InvalidInputError reports malformed or unsupported canonical input at the
