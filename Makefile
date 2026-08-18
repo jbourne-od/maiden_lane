@@ -6,7 +6,7 @@ BINARY ?= $(BINARY_DIR)/maiden-lane
 DEMO_BINARY ?= $(BINARY_DIR)/maiden-lane-demo
 IMAGE ?= maiden-lane:local
 
-.PHONY: help fmt fmt-check mod-check tool-versions openapi openapi-check vet staticcheck test test-race vulncheck build verify migrate migrate-status store-check container-build container-smoke container-check observe-preflight observe-up observe-down observe-logs demo build-demo demo-terminal
+.PHONY: help fmt fmt-check mod-check tool-versions openapi openapi-check vet staticcheck test test-race vulncheck build verify migrate migrate-status store-check container-build container-smoke container-check observe-preflight observe-up observe-down observe-logs demo build-demo demo-terminal demo-stop
 
 help:
 	@echo "fmt              format Go source"
@@ -31,6 +31,7 @@ help:
 	@echo "observe-logs     follow the observability stack logs"
 	@echo "demo             serve the browser demo and stay up until Ctrl-C"
 	@echo "demo-terminal    the same walkthrough as terminal output"
+	@echo "demo-stop        stop demo servers left behind by an interrupted run"
 
 fmt:
 	@gofmt="$$( $(GO) env GOROOT)/bin/gofmt"; \
@@ -318,10 +319,17 @@ observe-logs:
 # absent connection, and that delay reads as the demo hanging rather than as
 # telemetry being unavailable.
 #
-# Both ports are checked for an existing listener first and the target refuses
-# rather than proceeding, the same rule as observe-preflight and for a failure this
-# repository has already paid for once: a bind that appears to succeed while another
-# process holds the port produces symptoms that all point at our own code.
+# Both ports are probed first, and the answer distinguishes three cases rather than
+# two. A listener is not automatically a conflict: refusing outright was the first
+# version and it was wrong in the most likely situation, which is that the thing on
+# the port is OUR OWN server left from a previous run. So a service answering
+# /healthz with 204 is reused and deliberately not killed on exit, a UI answering
+# /demo/settings is reported as already running, and only a stranger is a refusal.
+# `make demo-stop` clears leftovers.
+#
+# Refusing on a stranger is still the rule, for a failure this repository has already
+# paid for once: a bind that appears to succeed while another process holds the port
+# produces symptoms that all point at our own code.
 #
 # `go run` is deliberately not used. It compiles to a cache path and execs a CHILD
 # process, so the PID a trap can kill is only the wrapper: a server survived
@@ -333,15 +341,32 @@ DEMO_API ?=
 
 demo: build build-demo
 	@set -eu; \
-	for port in $(ML_DEMO_PORT) $(ML_DEMO_UI_PORT); do \
-		if curl --silent --connect-timeout 0.25 --max-time 0.5 --output /dev/null \
-			"http://127.0.0.1:$$port/" 2>/dev/null; then \
-			echo "something already answers on 127.0.0.1:$$port"; \
-			echo "choose other ports: make demo ML_DEMO_PORT=8199 ML_DEMO_UI_PORT=8190"; \
-			exit 1; \
-		fi; \
-	done; \
+	probe() { curl --silent --connect-timeout 0.25 --max-time 0.5 --output /dev/null \
+		--write-out '%{http_code}' "$$1" 2>/dev/null || true; }; \
+	if [ "$$(probe http://127.0.0.1:$(ML_DEMO_UI_PORT)/demo/settings)" = "200" ]; then \
+		echo; \
+		echo "  A demo is already running.  Open  http://127.0.0.1:$(ML_DEMO_UI_PORT)"; \
+		echo; \
+		echo "  To restart it: make demo-stop, then make demo."; \
+		echo; \
+		exit 0; \
+	fi; \
+	if [ "$$(probe http://127.0.0.1:$(ML_DEMO_UI_PORT)/)" != "000" ]; then \
+		echo "127.0.0.1:$(ML_DEMO_UI_PORT) is held by something that is not this demo."; \
+		echo "pick another: make demo ML_DEMO_UI_PORT=8190"; \
+		exit 1; \
+	fi; \
+	reuse=""; \
+	if [ "$$(probe http://127.0.0.1:$(ML_DEMO_PORT)/healthz)" = "204" ]; then \
+		echo "reusing the Maiden Lane server already on $(ML_DEMO_PORT)"; \
+		reuse="yes"; \
+	elif [ "$$(probe http://127.0.0.1:$(ML_DEMO_PORT)/)" != "000" ]; then \
+		echo "127.0.0.1:$(ML_DEMO_PORT) is held by something that is not Maiden Lane."; \
+		echo "pick another: make demo ML_DEMO_PORT=8199"; \
+		exit 1; \
+	fi; \
 	log="$$(mktemp -t maiden-lane-demo)"; \
+	if [ -n "$$reuse" ]; then service=""; else \
 	if curl --silent --connect-timeout 0.25 --max-time 0.5 --output /dev/null \
 		"http://127.0.0.1:$(ML_OTLP_HTTP_PORT)/v1/traces" 2>/dev/null; then \
 		echo "collector reachable on $(ML_OTLP_HTTP_PORT): exporting traces and metrics"; \
@@ -354,15 +379,17 @@ demo: build build-demo
 		$(BINARY) serve --listen-address "127.0.0.1:$(ML_DEMO_PORT)" >"$$log" 2>&1 & \
 	fi; \
 	service=$$!; \
-	trap 'kill $$service $${ui:-} 2>/dev/null || true; rm -f "$$log"' EXIT INT TERM; \
+	fi; \
+	trap 'kill $${service:-} $${ui:-} 2>/dev/null || true; rm -f "$$log"' EXIT INT TERM; \
 	ready=""; \
 	attempt=0; \
 	while [ "$$attempt" -lt 120 ]; do \
-		if [ "$$(curl --silent --connect-timeout 0.25 --max-time 0.5 --output /dev/null \
-			--write-out '%{http_code}' "http://127.0.0.1:$(ML_DEMO_PORT)/healthz" || true)" = "204" ]; then \
+		if [ "$$(probe http://127.0.0.1:$(ML_DEMO_PORT)/healthz)" = "204" ]; then \
 			ready="yes"; break; \
 		fi; \
-		kill -0 $$service 2>/dev/null || { echo "the service exited:"; cat "$$log"; exit 1; }; \
+		if [ -n "$${service:-}" ]; then \
+			kill -0 $$service 2>/dev/null || { echo "the service exited:"; cat "$$log"; exit 1; }; \
+		fi; \
 		attempt=$$((attempt + 1)); \
 		sleep 0.25; \
 	done; \
@@ -375,8 +402,7 @@ demo: build build-demo
 	ui=$$!; \
 	attempt=0; \
 	while [ "$$attempt" -lt 80 ]; do \
-		curl --silent --connect-timeout 0.25 --max-time 0.5 --output /dev/null \
-			"http://127.0.0.1:$(ML_DEMO_UI_PORT)/demo/settings" && break; \
+		[ "$$(probe http://127.0.0.1:$(ML_DEMO_UI_PORT)/demo/settings)" = "200" ] && break; \
 		kill -0 $$ui 2>/dev/null || { echo "the demo UI exited:"; cat "$$log"; exit 1; }; \
 		attempt=$$((attempt + 1)); \
 		sleep 0.25; \
@@ -388,9 +414,24 @@ demo: build build-demo
 	echo "  API calls the page makes are proxied through the UI, so the browser"; \
 	echo "  network tab shows the real /v1 requests."; \
 	echo; \
-	echo "  Ctrl-C to stop both."; \
+	if [ -n "$${service:-}" ]; then \
+		echo "  Ctrl-C to stop both."; \
+	else \
+		echo "  Ctrl-C stops the UI. The server was already running and is left alone."; \
+	fi; \
 	echo; \
-	wait $$service
+	wait $$ui
+
+# Leftover processes are the demo's own likeliest failure: `make demo` backgrounds two
+# servers, and a closed terminal or a killed make does not always run the trap. Then
+# the next run finds its ports held -- by itself.
+demo-stop:
+	@set -eu; \
+	stopped=""; \
+	for pattern in "$(DEMO_BINARY) " "$(BINARY) serve --listen-address 127.0.0.1:$(ML_DEMO_PORT)"; do \
+		if pkill -f "$$pattern" 2>/dev/null; then stopped="yes"; fi; \
+	done; \
+	if [ -n "$$stopped" ]; then echo "stopped the demo servers"; else echo "no demo servers were running"; fi
 
 build-demo:
 	@mkdir -p $(BINARY_DIR)

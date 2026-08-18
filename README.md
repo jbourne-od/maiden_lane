@@ -137,10 +137,16 @@ Useful variations:
 
 ```bash
 make observe-up                            # traces; make demo then exports to it
-make demo ML_DEMO_PORT=8199 ML_DEMO_UI_PORT=8190   # if those ports are taken
+make demo-stop                             # stop servers an interrupted run left behind
 make demo-terminal                         # the same walkthrough as terminal output
 scripts/demo.sh http://127.0.0.1:8080      # narrate against a server you started
+make demo ML_DEMO_PORT=8199 ML_DEMO_UI_PORT=8190   # if a stranger holds those ports
 ```
+
+`make demo` reuses a Maiden Lane server already listening on its port rather than
+refusing, and leaves that server running when it exits, so it composes with a
+`serve` you started yourself. It reports an already-running demo instead of
+starting a second one, and refuses only when a port is held by something else.
 
 Open the page directly on a particular case with
 `http://127.0.0.1:8090/?preset=anchor&run=1` — the presets are `consistent`,
