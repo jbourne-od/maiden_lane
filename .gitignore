@@ -4,6 +4,11 @@
 /bin/
 /coverage.out
 
+# `go build ./cmd/x` writes the binary into the working directory, so a build run
+# without -o lands one of these at the repository root.
+/maiden-lane
+/maiden-lane-demo
+
 # Local configuration may contain credentials and never belongs in Git.
 .env
 .env.*

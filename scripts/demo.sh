@@ -53,8 +53,9 @@ health="$(curl --silent --connect-timeout 1 --max-time 2 \
   --output /dev/null --write-out '%{http_code}' "$BASE/healthz" || true)"
 if [ "$health" != "204" ]; then
   bad "no server at $BASE (health returned ${health:-nothing})"
-  note "start one with:  go run ./cmd/maiden-lane serve"
-  note "or against Postgres, see the README's storage section."
+  note "run 'make demo-terminal', which starts one for you,"
+  note "or 'make demo' for the browser client, or start your own:"
+  note "  go run ./cmd/maiden-lane serve --listen-address=127.0.0.1:8080"
   exit 1
 fi
 
@@ -220,6 +221,10 @@ else
   note "then open http://127.0.0.1:$GRAFANA_PORT"
   note "If Grafana is published elsewhere, set ML_GRAFANA_PORT to match."
 fi
+
+printf '\n%sThere is a browser client for this too:%s  make demo\n' "$BOLD" "$RESET"
+note "It puts the observation in front of you as a form, so you can change a value"
+note "and watch the engine answer differently."
 
 printf '\n%sBoth executions above are still readable at:%s\n' "$BOLD" "$RESET"
 printf '   %s/v1/executions/%s\n' "$BASE" "$execution_id"
