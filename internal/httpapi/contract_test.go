@@ -27,6 +27,8 @@ var wantOperations = []string{
 	"GetPlan",
 	"CreateExecution",
 	"GetExecution",
+	"CreatePublication",
+	"GetPublication",
 }
 
 // Production break caught: adding an operation to the contract without
@@ -54,10 +56,12 @@ func TestGeneratedServerInterfaceMatchesTheContract(t *testing.T) {
 // compiling.
 func TestEveryVersionedOperationRequiresTheTenantHeader(t *testing.T) {
 	tenanted := map[string]bool{
-		"CreatePlanParams":      true,
-		"GetPlanParams":         true,
-		"CreateExecutionParams": true,
-		"GetExecutionParams":    true,
+		"CreatePlanParams":        true,
+		"GetPlanParams":           true,
+		"CreateExecutionParams":   true,
+		"GetExecutionParams":      true,
+		"CreatePublicationParams": true,
+		"GetPublicationParams":    true,
 	}
 	for name := range tenanted {
 		params, ok := paramsTypeByName(name)
@@ -169,6 +173,10 @@ func paramsTypeByName(name string) (reflect.Type, bool) {
 		return reflect.TypeFor[openapiv1.CreateExecutionParams](), true
 	case "GetExecutionParams":
 		return reflect.TypeFor[openapiv1.GetExecutionParams](), true
+	case "CreatePublicationParams":
+		return reflect.TypeFor[openapiv1.CreatePublicationParams](), true
+	case "GetPublicationParams":
+		return reflect.TypeFor[openapiv1.GetPublicationParams](), true
 	default:
 		return nil, false
 	}

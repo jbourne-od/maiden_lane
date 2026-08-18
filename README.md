@@ -162,6 +162,8 @@ The current HTTP surface is:
 | `GET /v1/plans/{planID}` | Retrieve a plan, including the declarations the compiler accepted. |
 | `POST /v1/executions` | Queue an execution of a plan over pinned inputs. Returns `202` with its identities. |
 | `GET /v1/executions/{executionID}` | Report an execution's status and, once finished, its result. |
+| `POST /v1/publications` | Evaluate the promotion gate and publish if it authorizes. |
+| `GET /v1/publications/{customerID}/{target}` | Report what is published to a target. |
 
 Every `/v1` operation requires the `X-Maiden-Lane-Tenant` header and is scoped
 by it. An artifact belonging to another tenant is reported as `404`, never
@@ -196,6 +198,40 @@ derived, an execution that reaches a terminal failure cannot be cleared by
 resubmitting, since the same request resolves to the same record. Retrying a
 terminally failed execution needs an explicit operation, which does not exist
 yet.
+
+### Promotion and publication
+
+`POST /v1/publications` evaluates HLD §14.1's nine-clause promotion gate for one
+sealed checkpoint and advances the target's publication pointer only if every clause
+passes.
+
+**A refusal is a `200`, not a problem.** The response carries a per-clause result,
+because an operator told only "refused" cannot act: the clause list says which
+requirement was not met, and whether the answer was `fail` or `not_evaluated` —
+the difference between "this candidate does not satisfy it" and "this could not be
+established". That is the same rule a `needs_input` readiness verdict follows.
+
+**Nothing publishes in this build, deliberately.** Three clauses name concepts that do
+not exist yet — comparison over a replay corpus, protected metric regression, and
+backend certification — so every decision contains a `not_evaluated` and refuses. Six
+clauses are evaluated for real.
+
+The request names identities rather than carrying artifacts. Authorization rests on
+values the kernel produced, and those cannot be transmitted or rebuilt from bytes, so
+the service re-executes the stored inputs, requires everything it recorded to match,
+and evaluates the artifacts it just derived. A client says which evidence to use; it
+cannot supply evidence.
+
+`expectedCurrentVersion` is the caller's compare-and-swap token. Publication advances
+only from exactly that version, so a publisher whose view of the target went stale
+between deciding and publishing gets a `409` rather than overwriting a result it never
+saw.
+
+One gap worth stating: a **target policy has no HTTP surface**, in §16 or here. A
+policy is control-plane configuration naming which semantic contract a destination
+demands, and it is operator-managed. Until it is configurable, `POST /v1/publications`
+answers every request with every clause unevaluated for want of a policy — which is
+truthful, and is what an unconfigured target should say.
 
 ### Generating a client
 

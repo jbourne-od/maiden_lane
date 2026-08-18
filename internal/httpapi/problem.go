@@ -28,15 +28,17 @@ const problemBaseURI = "https://maiden-lane.optimaldynamics.com/problems/"
 type problemKind string
 
 const (
-	problemInvalidRequest        problemKind = "invalid-request"
-	problemTenantRequired        problemKind = "tenant-required"
-	problemNotFound              problemKind = "not-found"
-	problemMethodNotAllowed      problemKind = "method-not-allowed"
-	problemUnsupportedMediaType  problemKind = "unsupported-media-type"
-	problemInvalidPlan           problemKind = "invalid-plan"
-	problemInvalidSemanticInput  problemKind = "invalid-semantic-input"
-	problemInternalError         problemKind = "internal-error"
-	problemDependencyUnavailable problemKind = "dependency-unavailable"
+	problemInvalidRequest              problemKind = "invalid-request"
+	problemTenantRequired              problemKind = "tenant-required"
+	problemNotFound                    problemKind = "not-found"
+	problemMethodNotAllowed            problemKind = "method-not-allowed"
+	problemUnsupportedMediaType        problemKind = "unsupported-media-type"
+	problemInvalidPlan                 problemKind = "invalid-plan"
+	problemInvalidSemanticInput        problemKind = "invalid-semantic-input"
+	problemInternalError               problemKind = "internal-error"
+	problemDependencyUnavailable       problemKind = "dependency-unavailable"
+	problemPublicationConflict         problemKind = "publication-conflict"
+	problemStoredArtifactsUnverifiable problemKind = "stored-artifacts-unverifiable"
 )
 
 // problemDefinition is the fixed status and text for one kind. Titles and
@@ -57,6 +59,22 @@ var problemCatalog = map[problemKind]problemDefinition{
 		status: http.StatusBadRequest,
 		title:  "Tenant required",
 		detail: "Every versioned operation requires a well-formed tenant identifier header.",
+	},
+	problemPublicationConflict: {
+		status: http.StatusConflict,
+		title:  "Publication conflict",
+		detail: "The target is not at the expected version, so this decision was formed " +
+			"against a state that no longer holds. Read the target again and decide afresh.",
+	},
+	problemStoredArtifactsUnverifiable: {
+		// 500 rather than 422: the request was well formed and every dependency
+		// answered. What failed is the agreement between what a store recorded and
+		// what the kernel derives from the inputs that store also holds, which is
+		// this service's fault to own rather than the caller's to correct.
+		status: http.StatusInternalServerError,
+		title:  "Stored artifacts could not be verified",
+		detail: "The stored execution could not be reproduced from its recorded inputs, " +
+			"so no authenticated evidence exists to evaluate.",
 	},
 	problemNotFound: {
 		status: http.StatusNotFound,
