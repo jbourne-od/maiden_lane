@@ -194,3 +194,75 @@ func (r SpineResult) Checkpoints() []semantic.CheckpointArtifact {
 func (r SpineResult) Assessments() []semantic.Assessment {
 	return slices.Clone(r.assessments)
 }
+
+// CheckpointReceipt is evidence that one execution actually produced one sealed
+// checkpoint.
+//
+// It exists because that relation cannot be recovered from the artifacts. A
+// CheckpointArtifact deliberately carries SemanticRunID and not ExecutionID:
+// executor identity is excluded from checkpoint identity, so one semantic run can
+// be executed by several backends and each produces the same checkpoint. A
+// RunBinding does not supply the missing half either, because BindRun happens
+// BEFORE execution and establishes only that an ExecutionID is a valid execution
+// contract for a SemanticRunID. Holding a binding and a checkpoint whose runs agree
+// therefore proves E → S ← C, which is strictly weaker than E → C: a caller could
+// bind a second executor over the identical semantic request, never execute it, and
+// pair that ExecutionID with a checkpoint some other execution produced. The record
+// would name an execution that did not produce the artifact beside it — complete
+// looking, and auditing to a contradiction.
+//
+// SpineResult is the right authority to mint this because it is the only value that
+// holds both halves as facts: the ExecutionID that ran and the checkpoints that
+// execution actually retained. Its fields are unexported and it is returned only by
+// running the spine, so a receipt cannot be assembled by a caller.
+//
+// This is an in-process receipt. Reconstructing the relation after the process that
+// executed is gone is a separate problem, and the same one as authenticating a
+// checkpoint read back from storage; it is not solved here.
+type CheckpointReceipt struct {
+	executionID   semantic.ExecutionID
+	semanticRunID semantic.SemanticRunID
+	checkpointID  semantic.CheckpointArtifactID
+}
+
+// ExecutionID is the execution that produced the checkpoint.
+func (r CheckpointReceipt) ExecutionID() semantic.ExecutionID { return r.executionID }
+
+// SemanticRunID is the semantic run that execution carried out.
+func (r CheckpointReceipt) SemanticRunID() semantic.SemanticRunID { return r.semanticRunID }
+
+// CheckpointArtifactID is the checkpoint this receipt is for. A receipt is for one
+// checkpoint, not for the run: an execution can retain several, and a receipt that
+// covered all of them would let one checkpoint's evidence stand for another's.
+func (r CheckpointReceipt) CheckpointArtifactID() semantic.CheckpointArtifactID {
+	return r.checkpointID
+}
+
+// ReceiptFor returns evidence that this execution produced the given sealed
+// checkpoint, or reports that it did not.
+//
+// Membership is checked against the checkpoints this result actually retained, by
+// both claim identity and manifest digest. Comparing only the identity would accept
+// an artifact whose manifest differs from the retained one — a state Seal already
+// refuses to produce, so this is redundant today and costs one comparison to stay
+// true if that ever changes.
+//
+// A result that established no execution mints nothing. Nor does a checkpoint that
+// was excluded from the retained frontier, which matters because a checkpoint can be
+// sealed and then dropped when its assessment fails verification: publishing one of
+// those would publish an artifact this run deliberately did not stand behind.
+func (r SpineResult) ReceiptFor(artifact semantic.CheckpointArtifact) (CheckpointReceipt, bool) {
+	if r.executionID == "" || r.semanticRunID == "" || artifact.ID() == "" {
+		return CheckpointReceipt{}, false
+	}
+	for _, retained := range r.checkpoints {
+		if retained.ID() == artifact.ID() && retained.Digest() == artifact.Digest() {
+			return CheckpointReceipt{
+				executionID:   r.executionID,
+				semanticRunID: r.semanticRunID,
+				checkpointID:  artifact.ID(),
+			}, true
+		}
+	}
+	return CheckpointReceipt{}, false
+}
