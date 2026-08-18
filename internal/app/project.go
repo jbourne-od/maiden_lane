@@ -18,7 +18,28 @@ import (
 // projection could disagree. A disagreement there is the worst kind: it would surface
 // either as a false integrity failure on a faithful store, or as a real divergence
 // nobody noticed. One implementation makes the comparison exact by construction.
-func Project(request ports.ExecutionRequest, result SpineResult) ports.ExecutionResult {
+func Project(request ports.ExecutionRequest, result SpineResult) (ports.ExecutionResult, error) {
+	// The claim must not be projected onto artifacts that contradict it.
+	//
+	// This is the write-path half of the same check Rehydrate performs, and it is
+	// currently unreachable: the worker verifies a queued request's identity before
+	// executing it, and the worker is the only caller of Complete. It is checked anyway,
+	// on the same grounds as promotion's coherence check -- "unreachable" is a claim about
+	// today's code, and the guarantee otherwise rests on call order inside one function
+	// rather than on structure.
+	//
+	// The comparison is conditional on the result having established an identity, because
+	// it legitimately may not have: an invalid plan produces a terminal result with no
+	// binding, and that result still has to be stored under the request's identity.
+	if run, ok := result.SemanticRunID(); ok && run != request.RunID {
+		return ports.ExecutionResult{}, IntegrityError{
+			Code: IntegrityResultDiverged, Detail: "request.semanticRunID"}
+	}
+	if execution, ok := result.ExecutionID(); ok && execution != request.ExecutionID {
+		return ports.ExecutionResult{}, IntegrityError{
+			Code: IntegrityResultDiverged, Detail: "request.executionID"}
+	}
+
 	projected := ports.ExecutionResult{
 		TenantID:    request.TenantID,
 		ExecutionID: request.ExecutionID,
@@ -84,7 +105,7 @@ func Project(request ports.ExecutionRequest, result SpineResult) ports.Execution
 	if failure, ok := result.SemanticFailure(); ok {
 		projected.Failure = &ports.StoredFailure{Kind: failure.Kind(), Code: failureCode(failure)}
 	}
-	return projected
+	return projected, nil
 }
 
 // missingRequirements collects the unsatisfied requirement codes, deduplicated

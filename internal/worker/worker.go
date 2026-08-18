@@ -217,7 +217,15 @@ func (w *Worker) attempt(
 
 	// A nil error means the computation produced an answer, including when that
 	// answer is a refusal. Both are completed executions.
-	if err := w.executions.Complete(ctx, app.Project(request, result)); err != nil {
+	projected, err := app.Project(request, result)
+	if err != nil {
+		// The artifacts contradict the identity the row claims. Unreachable given the
+		// pre-execution check above, and refused rather than trusted for that reason.
+		w.logger.ErrorContext(ctx, "projected result contradicts the claimed identity",
+			"code", ReasonIdentityMismatch)
+		return w.fail(ctx, request, ReasonIdentityMismatch)
+	}
+	if err := w.executions.Complete(ctx, projected); err != nil {
 		// The computation answered and the answer was lost. The execution stays
 		// claimable, so this is abandoned: reporting it answered would promise a
 		// result no read can return.

@@ -200,28 +200,46 @@ func TestADivergentStoreIsRefused(t *testing.T) {
 // PRODUCTION BREAK CAUGHT BY CONSTRUCTION: a field the comparison forgets is a field in
 // which storage may diverge undetected, and nothing about the code would look wrong.
 //
-// This walks every field of every struct the comparison covers and requires each to be
-// caught, so adding a field without adding it to divergence fails here rather than
+// This walks every obligation of every struct the comparison covers and requires each to
+// be caught, so adding a field without adding it to divergence fails here rather than
 // quietly widening the hole. It is the reason the comparison can be hand-written at all
 // instead of reaching for reflect.DeepEqual, which would detect everything and diagnose
 // nothing.
+//
+// TWO BASELINES, because one cannot reach everything. The passing run has no semantic
+// failure, so nothing can be altered inside that pointer; the anchor-mismatch run has
+// one, which is what makes StoredFailure's own fields reachable. An obligation must be
+// covered by AT LEAST ONE baseline, and one covered by none is a failure rather than a
+// skip -- an earlier version skipped, which hid uncovered fields behind a green run.
 func TestEveryStoredFieldIsCompared(t *testing.T) {
-	_, record := storedExecution(t, teamhos.Passing)
-	original := *record.Result
+	_, committed := storedExecution(t, teamhos.Passing)
+	_, refused := storedExecution(t, teamhos.AnchorMismatch)
+	baselines := map[string]ports.ExecutionResult{
+		"committed run": *committed.Result,
+		"refused run":   *refused.Result,
+	}
+	if refused.Result.Failure == nil {
+		t.Fatal("the refused baseline must carry a semantic failure, or the pointer's " +
+			"own fields stay unreachable and this guard is not exhaustive")
+	}
 
 	for _, path := range fieldPaths(reflect.TypeOf(ports.ExecutionResult{})) {
 		t.Run(path.name, func(t *testing.T) {
-			altered := cloneResult(original)
-			// A field the walker cannot alter is a field this guard does not cover, so
-			// it fails rather than skipping. Skipping was the first version and it hid
-			// one uncovered field behind a green run.
-			if !path.alter(reflect.ValueOf(&altered).Elem()) {
-				t.Fatalf("no distinct value could be produced for %s, so nothing here "+
-					"asserts that storage diverging in it would be caught", path.name)
+			reachable := false
+			for name, original := range baselines {
+				altered := cloneResult(original)
+				if !path.alter(reflect.ValueOf(&altered).Elem()) {
+					continue
+				}
+				reachable = true
+				if field := divergence(original, altered); field == "" {
+					t.Fatalf("altering %s in the %s was not detected, so storage may "+
+						"diverge there undetected", path.name, name)
+				}
 			}
-			if field := divergence(original, altered); field == "" {
-				t.Fatalf("altering %s was not detected, so storage may diverge there "+
-					"undetected", path.name)
+			if !reachable {
+				t.Fatalf("no baseline could alter %s, so nothing here asserts that "+
+					"storage diverging in it would be caught", path.name)
 			}
 		})
 	}
@@ -252,6 +270,202 @@ func TestAnAbsentExecutionRehydratesToNothing(t *testing.T) {
 				t.Fatal("an absent execution produced a result")
 			}
 		})
+	}
+}
+
+// THE BLOCKER OWNER REVIEW FOUND, and it falsified this file's central claim.
+//
+// Project labels its output with the request's identities, because those key the row it
+// will be written to. So a stored request claiming an execution identity its own inputs do
+// not derive was relabelled to that claim on both write and read, every field compared
+// equal, and Rehydrate returned Verified -- while the live artifacts handed back belonged
+// to the execution the inputs really derive. A caller asked to rehydrate one execution and
+// received authenticated artifacts for another.
+//
+// The case is a same-run, different-executor pair: SemanticRunID is identical and
+// ExecutionID is not, which is exactly the distinction the identity model was introduced
+// to preserve. Nothing but re-deriving the identity and comparing it to the claim catches
+// it, and a store's own checksum cannot: it proves the row has not changed since it was
+// written, not that the claim was ever true.
+func TestAStoredExecutionIdentityMustBeDerivableFromItsInputs(t *testing.T) {
+	inputs, err := teamhos.New(teamhos.Passing)
+	if err != nil {
+		t.Fatalf("teamhos.New: %v", err)
+	}
+	compilation, err := semantic.Compile(inputs.Compilation)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	plan, ok := compilation.Plan()
+	if !ok {
+		t.Fatal("the fixture did not compile")
+	}
+	genuine := bindingFor(t, plan, inputs, inputs.ExecutorIdentity)
+
+	otherExecutor, err := semantic.NewExecutorIdentity("go",
+		semantic.Digest("sha256:"+repeatByte('b', 64)))
+	if err != nil {
+		t.Fatalf("NewExecutorIdentity: %v", err)
+	}
+	claimed := bindingFor(t, plan, inputs, otherExecutor)
+
+	if claimed.SemanticRunID() != genuine.SemanticRunID() {
+		t.Fatal("the fixture is wrong: the semantic run must be identical")
+	}
+	if claimed.ExecutionID() == genuine.ExecutionID() {
+		t.Fatal("the fixture is wrong: the execution identity must differ")
+	}
+
+	for _, test := range []struct {
+		name    string
+		request ports.ExecutionRequest
+		field   string
+	}{
+		{
+			// The inputs derive the genuine execution; the row claims the other one.
+			name:  "an execution identity the inputs do not derive",
+			field: "request.executionID",
+			request: ports.ExecutionRequest{
+				TenantID: "acme", ExecutionID: claimed.ExecutionID(),
+				RunID: genuine.SemanticRunID(), PlanID: plan.ID(),
+				Input: executionInput(inputs),
+			},
+		},
+		{
+			name:  "a semantic run the inputs do not derive",
+			field: "request.semanticRunID",
+			request: ports.ExecutionRequest{
+				TenantID: "acme", ExecutionID: genuine.ExecutionID(),
+				RunID: semantic.SemanticRunID(digestOf("elsewhere")), PlanID: plan.ID(),
+				Input: executionInput(inputs),
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := memory.NewStore()
+			if err := store.PutPlan(t.Context(), ports.PlanRecord{
+				TenantID: "acme", PlanID: plan.ID(), Input: compilation.Input(),
+				Schema: inputs.InitialState.Schema(), Compilation: compilation,
+			}); err != nil {
+				t.Fatalf("PutPlan: %v", err)
+			}
+			if _, err := store.Enqueue(t.Context(), test.request); err != nil {
+				t.Fatalf("Enqueue: %v", err)
+			}
+			result, err := Run(t.Context(), Request{
+				Compilation: inputs.Compilation, InitialState: inputs.InitialState,
+				World: inputs.World, ExecutorIdentity: inputs.ExecutorIdentity,
+				Policy: inputs.Policy,
+			}, nil)
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			// Project now refuses to build this projection, which is the write-path
+			// half of the fix. So the row is forged directly instead -- projecting
+			// under the genuine identity and relabelling. That is the honest threat
+			// model: a record this build would not write, which Rehydrate must still
+			// detect on disk rather than assume away.
+			projected, err := Project(genuineRequest(plan, inputs, genuine), result)
+			if err != nil {
+				t.Fatalf("Project: %v", err)
+			}
+			projected.ExecutionID = test.request.ExecutionID
+			if err := store.Complete(t.Context(), projected); err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+
+			_, err = Rehydrate(t.Context(),
+				RehydrationStores{Plans: store, Executions: store},
+				"acme", test.request.ExecutionID)
+			var integrity IntegrityError
+			if !errors.As(err, &integrity) {
+				t.Fatalf("error = %v, want an IntegrityError: the stored identity is not "+
+					"derivable from the stored inputs", err)
+			}
+			if integrity.Detail != test.field {
+				t.Fatalf("detail = %q, want %q", integrity.Detail, test.field)
+			}
+		})
+	}
+}
+
+// The lifecycle matrix, enumerated. Three of its cells are faults, and folding them into
+// "no result yet" would normalize a malformed row into an ordinary state.
+//
+// The one that motivated this: ExecutionStore.Fail records failed with no result for an
+// execution that could not be attempted, which is terminal. Reporting it as pending left a
+// caller switching on the outcome polling forever for a result nothing will ever write.
+func TestTheLifecycleMatrixIsEnumerated(t *testing.T) {
+	_, record := storedExecution(t, teamhos.Passing)
+	complete := record.Result
+
+	for _, test := range []struct {
+		name    string
+		status  ports.ExecutionStatus
+		result  *ports.ExecutionResult
+		outcome RehydrationOutcome
+		code    IntegrityCode
+	}{
+		{"pending with no result", ports.ExecutionPending, nil, RehydrationPending, ""},
+		{"running with no result", ports.ExecutionRunning, nil, RehydrationPending, ""},
+		{"failed with no result", ports.ExecutionFailed, nil, RehydrationUnattempted, ""},
+		{"succeeded with no result", ports.ExecutionSucceeded, nil, 0, IntegrityLifecycleInconsistent},
+		{"pending with a result", ports.ExecutionPending, complete, 0, IntegrityLifecycleInconsistent},
+		{"running with a result", ports.ExecutionRunning, complete, 0, IntegrityLifecycleInconsistent},
+		{"an unrecognized status", ports.ExecutionStatus("elsewhere"), nil, 0, IntegrityLifecycleInconsistent},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			outcome, err := classifyLifecycle(ports.ExecutionRecord{
+				Request: record.Request, Status: test.status, Result: test.result,
+			})
+			if test.code != "" {
+				var integrity IntegrityError
+				if !errors.As(err, &integrity) {
+					t.Fatalf("error = %v, want an IntegrityError", err)
+				}
+				if integrity.Code != test.code {
+					t.Fatalf("code = %s, want %s", integrity.Code, test.code)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("classifyLifecycle: %v", err)
+			}
+			if outcome != test.outcome {
+				t.Fatalf("outcome = %v, want %v", outcome, test.outcome)
+			}
+		})
+	}
+}
+
+// A terminally unattempted execution must be reported as such through the public boundary,
+// not only by classifyLifecycle. A caller that polls on the outcome has to be able to stop.
+func TestATerminallyUnattemptedExecutionIsNotPending(t *testing.T) {
+	store := memory.NewStore()
+	request := storedRequest(t, teamhos.Passing)
+	if _, err := store.Enqueue(t.Context(), request); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	// The worker records this when an execution could not be attempted at all.
+	if err := store.Fail(t.Context(), request.TenantID, request.ExecutionID, "plan_absent"); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+
+	rehydrated, err := Rehydrate(t.Context(),
+		RehydrationStores{Plans: store, Executions: store},
+		request.TenantID, request.ExecutionID)
+	if err != nil {
+		t.Fatalf("Rehydrate: %v", err)
+	}
+	if rehydrated.Outcome() == RehydrationPending {
+		t.Fatal("a terminally failed execution reported as pending, so a caller polling " +
+			"on the outcome would wait forever for a result nothing will write")
+	}
+	if rehydrated.Outcome() != RehydrationUnattempted {
+		t.Fatalf("outcome = %v, want unattempted", rehydrated.Outcome())
+	}
+	if rehydrated.Status() != ports.ExecutionFailed {
+		t.Fatalf("status = %s, want failed", rehydrated.Status())
 	}
 }
 
@@ -396,7 +610,11 @@ func storedExecution(t *testing.T, variant teamhos.Variant) (RehydrationStores, 
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if err := store.Complete(t.Context(), Project(request, result)); err != nil {
+	projected, err := Project(request, result)
+	if err != nil {
+		t.Fatalf("Project: %v", err)
+	}
+	if err := store.Complete(t.Context(), projected); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 
@@ -505,41 +723,76 @@ func cloneResult(result ports.ExecutionResult) ports.ExecutionResult {
 	return clone
 }
 
-// fieldPath names one alterable leaf of a stored result and knows how to change it.
+// fieldPath names one obligation the divergence comparison must meet, and knows how to
+// violate it.
 type fieldPath struct {
 	name  string
 	alter func(reflect.Value) bool
 }
 
-// fieldPaths enumerates every field the divergence comparison must cover, walking the
-// struct rather than listing them, so a field added to ports.ExecutionResult and its
-// nested types appears here automatically.
+// fieldPaths enumerates every obligation, treating containers as having TWO: their
+// cardinality and their contents.
+//
+// OWNER REVIEW FOUND BOTH OMISSIONS. The first version recursed into a slice's element
+// zero and returned, emitting no cardinality path -- so deleting the assessments length
+// check evaded the guard entirely. And for a pointer it only toggled nil, never
+// descending -- so deleting the failure kind or code check evaded it too. Both were
+// verified by deletion: the "exhaustive" guard stayed green.
+//
+// A container therefore contributes:
+//
+//	Assessments.length        the structural obligation
+//	Assessments[0].ProfileID  the content obligations
+//	Failure.presence          the structural obligation
+//	Failure.Kind              the content obligations
 func fieldPaths(t reflect.Type) []fieldPath {
 	paths := make([]fieldPath, 0, t.NumField())
 	for i := 0; i < t.NumField(); i++ {
 		field := t.Field(i)
 		index := i
-		switch field.Type.Kind() {
-		case reflect.Slice:
-			if field.Type.Elem().Kind() == reflect.Struct {
-				for _, nested := range fieldPaths(field.Type.Elem()) {
-					nested := nested
-					paths = append(paths, fieldPath{
-						name: field.Name + "[0]." + nested.name,
-						alter: func(v reflect.Value) bool {
-							list := v.Field(index)
-							if list.Len() == 0 {
-								return false
-							}
-							return nested.alter(list.Index(0))
-						},
-					})
-				}
-				continue
+		switch {
+		case field.Type.Kind() == reflect.Slice && field.Type.Elem().Kind() == reflect.Struct:
+			paths = append(paths, fieldPath{
+				name:  field.Name + ".length",
+				alter: sliceAlterer(index),
+			})
+			for _, nested := range fieldPaths(field.Type.Elem()) {
+				nested := nested
+				paths = append(paths, fieldPath{
+					name: field.Name + "[0]." + nested.name,
+					alter: func(v reflect.Value) bool {
+						list := v.Field(index)
+						if list.Len() == 0 {
+							return false
+						}
+						return nested.alter(list.Index(0))
+					},
+				})
 			}
+		case field.Type.Kind() == reflect.Ptr && field.Type.Elem().Kind() == reflect.Struct:
+			paths = append(paths, fieldPath{
+				name:  field.Name + ".presence",
+				alter: presenceAlterer(index),
+			})
+			for _, nested := range fieldPaths(field.Type.Elem()) {
+				nested := nested
+				paths = append(paths, fieldPath{
+					name: field.Name + "." + nested.name,
+					alter: func(v reflect.Value) bool {
+						pointer := v.Field(index)
+						if pointer.IsNil() {
+							// Content cannot be altered through a nil pointer, and
+							// populating it would trip the presence check before saying
+							// anything about the content. A baseline where it is
+							// populated covers this instead.
+							return false
+						}
+						return nested.alter(pointer.Elem())
+					},
+				})
+			}
+		case field.Type.Kind() == reflect.Slice:
 			paths = append(paths, fieldPath{name: field.Name, alter: sliceAlterer(index)})
-		case reflect.Ptr:
-			paths = append(paths, fieldPath{name: field.Name, alter: pointerAlterer(index)})
 		default:
 			paths = append(paths, fieldPath{name: field.Name, alter: scalarAlterer(index)})
 		}
@@ -567,10 +820,10 @@ func scalarAlterer(index int) func(reflect.Value) bool {
 
 // sliceAlterer appends a zero element rather than truncating.
 //
-// Truncating was the first version and it silently could not alter an empty slice, so
-// the guard skipped whichever fields happened to be empty in the fixture -- and a
-// skipped field is an uncovered field. Appending changes an empty slice and a full one
-// alike, which is what makes the guard total rather than fixture-dependent.
+// Truncating was the first version and it silently could not alter an empty slice, so the
+// guard skipped whichever fields happened to be empty in the fixture -- and a skipped
+// field is an uncovered field. Appending changes an empty slice and a full one alike,
+// which is what makes the guard total rather than fixture-dependent.
 func sliceAlterer(index int) func(reflect.Value) bool {
 	return func(v reflect.Value) bool {
 		field := v.Field(index)
@@ -579,16 +832,16 @@ func sliceAlterer(index int) func(reflect.Value) bool {
 	}
 }
 
-func pointerAlterer(index int) func(reflect.Value) bool {
+// presenceAlterer flips a pointer between absent and present, which for the semantic
+// failure is the difference between a run that committed and one that refused.
+func presenceAlterer(index int) func(reflect.Value) bool {
 	return func(v reflect.Value) bool {
 		field := v.Field(index)
 		if field.IsNil() {
-			// Presence itself is the alteration: a run that committed becoming one that
-			// refused is the most consequential divergence there is.
 			field.Set(reflect.New(field.Type().Elem()))
-			return true
+		} else {
+			field.Set(reflect.Zero(field.Type()))
 		}
-		field.Set(reflect.Zero(field.Type()))
 		return true
 	}
 }
@@ -619,4 +872,37 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+func bindingFor(
+	t *testing.T, plan semantic.Plan, inputs teamhos.Inputs, executor semantic.ExecutorIdentity,
+) semantic.RunBinding {
+	t.Helper()
+	binding, err := semantic.BindRun(semantic.RunBindingRequest{
+		Plan: plan, InitialState: inputs.InitialState, World: inputs.World,
+		ExecutorIdentity: executor, Policy: inputs.Policy,
+	})
+	if err != nil {
+		t.Fatalf("BindRun: %v", err)
+	}
+	return binding
+}
+
+func executionInput(inputs teamhos.Inputs) ports.ExecutionInput {
+	return ports.ExecutionInput{
+		InitialState: inputs.InitialState, World: inputs.World,
+		ExecutorIdentity: inputs.ExecutorIdentity, Policy: inputs.Policy,
+	}
+}
+
+// genuineRequest is the request the fixture's inputs really derive, used to build a
+// projection Project will accept before a test relabels it.
+func genuineRequest(
+	plan semantic.Plan, inputs teamhos.Inputs, binding semantic.RunBinding,
+) ports.ExecutionRequest {
+	return ports.ExecutionRequest{
+		TenantID: "acme", ExecutionID: binding.ExecutionID(),
+		RunID: binding.SemanticRunID(), PlanID: plan.ID(),
+		Input: executionInput(inputs),
+	}
 }

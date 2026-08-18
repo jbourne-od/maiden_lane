@@ -29,6 +29,16 @@ const (
 	// IntegrityResultDiverged means re-executing the stored inputs produced a result
 	// that does not match the stored one.
 	IntegrityResultDiverged IntegrityCode = "STORED_RESULT_DIVERGED"
+
+	// IntegrityLifecycleInconsistent means a stored execution's lifecycle status and
+	// the presence of its result contradict each other: a succeeded execution with no
+	// result, or an unfinished one that already has one.
+	//
+	// Enumerating the whole matrix rather than treating "no result" as one case is what
+	// turns these into detectable faults. Folding them into pending would normalize a
+	// malformed row into an ordinary state, and a caller polling for a result would
+	// wait for one the store can never produce.
+	IntegrityLifecycleInconsistent IntegrityCode = "STORED_LIFECYCLE_INCONSISTENT"
 )
 
 // IntegrityError reports that a store's contents and the kernel disagree.
@@ -65,8 +75,17 @@ const (
 	// RehydrationAbsent means the store has no such execution for this tenant.
 	RehydrationAbsent RehydrationOutcome = iota
 	// RehydrationPending means the execution exists but has not finished, so there is
-	// no result to reproduce yet.
+	// no result to reproduce yet. Waiting may change this.
 	RehydrationPending
+	// RehydrationUnattempted means the execution terminally failed before it ran, so
+	// there is no result and never will be.
+	//
+	// ExecutionStore.Fail records exactly this state -- failed with no result -- for an
+	// execution that could not be attempted, which is different from a computation that
+	// ran and refused: that is a completed execution whose result carries a typed
+	// failure. Reporting it as pending would leave a caller polling forever for a
+	// result nothing will ever write.
+	RehydrationUnattempted
 	// RehydrationVerified means the execution was re-derived and every stored
 	// identity, digest, and canonical byte matched.
 	RehydrationVerified
@@ -78,6 +97,8 @@ func (o RehydrationOutcome) String() string {
 		return "absent"
 	case RehydrationPending:
 		return "pending"
+	case RehydrationUnattempted:
+		return "unattempted"
 	case RehydrationVerified:
 		return "verified"
 	default:
@@ -131,6 +152,15 @@ func (r Rehydrated) Result() (SpineResult, bool) {
 // Divergence is an error rather than an outcome. An absent or unfinished execution is an
 // ordinary state, but a store whose contents the kernel cannot reproduce is a fault, and
 // the caller must not be handed artifacts alongside a flag saying they might be wrong.
+//
+// A CONCEPTUAL LIMIT WORTH KEEPING IN VIEW: using the same Project on write and on verify
+// proves STORAGE FIDELITY, not that Project itself is semantically correct. A projection
+// bug would be reproduced identically on both sides and compare equal. That is acceptable
+// here for a specific reason rather than by luck: authorization consumes the freshly
+// re-executed kernel artifacts, never the stored projection. The projection is evidence
+// about history and is not permitted to become semantic authority. If that ever changes --
+// if some decision starts reading the stored form instead of the live one -- this
+// comparison stops being sufficient and the projection needs verifying in its own right.
 func Rehydrate(
 	ctx context.Context, stores RehydrationStores,
 	tenant ports.TenantID, executionID semantic.ExecutionID,
@@ -146,8 +176,11 @@ func Rehydrate(
 	if !found {
 		return Rehydrated{}, nil
 	}
-	if record.Result == nil {
-		return Rehydrated{outcome: RehydrationPending, status: record.Status}, nil
+	if outcome, err := classifyLifecycle(record); outcome != RehydrationVerified || err != nil {
+		if err != nil {
+			return Rehydrated{}, err
+		}
+		return Rehydrated{outcome: outcome, status: record.Status}, nil
 	}
 
 	plan, found, err := stores.Plans.GetPlan(ctx, tenant, record.Request.PlanID)
@@ -176,7 +209,33 @@ func Rehydrate(
 		return Rehydrated{}, fmt.Errorf("app: stored execution could not be re-derived: %w", err)
 	}
 
-	if field := divergence(Project(record.Request, result), *record.Result); field != "" {
+	// The re-derived identities must be the ones the record claims, and this must happen
+	// BEFORE projecting.
+	//
+	// Project labels its output with the request's identities, because it has to: those
+	// key the row it will be written to. So a stored request claiming an execution
+	// identity its own inputs do not derive would be relabelled to that claim on both
+	// the write and the read, and every field would compare equal -- while the live
+	// artifacts handed back belonged to the execution the inputs really derive. The
+	// caller would have asked to rehydrate one execution and received authenticated
+	// artifacts for another, which makes "this stored execution was authenticated" false
+	// in exactly the way this function exists to prevent.
+	//
+	// A same-run, different-executor pair is the sharp case: SemanticRunID is identical
+	// and ExecutionID is not, which is the distinction the identity model was introduced
+	// to preserve.
+	if field := requestDivergence(record.Request, result); field != "" {
+		return Rehydrated{}, IntegrityError{Code: IntegrityResultDiverged, Detail: field}
+	}
+
+	projected, err := Project(record.Request, result)
+	if err != nil {
+		// Project performs the same identity check conditionally. requestDivergence above
+		// already required those identities to be present and equal, so reaching this
+		// would mean the two disagree about what they compared.
+		return Rehydrated{}, err
+	}
+	if field := divergence(projected, *record.Result); field != "" {
 		return Rehydrated{}, IntegrityError{Code: IntegrityResultDiverged, Detail: field}
 	}
 	return Rehydrated{outcome: RehydrationVerified, status: record.Status, result: result}, nil
@@ -368,6 +427,67 @@ func failureDivergence(derived, stored *ports.StoredFailure) string {
 		return "failure.kind"
 	case derived.Code != stored.Code:
 		return "failure.code"
+	}
+	return ""
+}
+
+// classifyLifecycle maps a stored execution's status and the presence of its result onto
+// an outcome, and refuses the combinations that cannot both be true.
+//
+// The matrix is enumerated rather than reduced to "has a result or not" because three of
+// its cells are faults and folding them into an ordinary outcome hides them. It returns
+// RehydrationVerified to mean "there is a result to verify", which the caller then does;
+// nothing here inspects artifacts.
+func classifyLifecycle(record ports.ExecutionRecord) (RehydrationOutcome, error) {
+	present := record.Result != nil
+	switch record.Status {
+	case ports.ExecutionPending, ports.ExecutionRunning:
+		if present {
+			// A result before the execution finished. Whatever wrote it did so out of
+			// order, so neither the status nor the result can be relied on.
+			return RehydrationAbsent, IntegrityError{
+				Code: IntegrityLifecycleInconsistent, Detail: "unfinished execution carries a result"}
+		}
+		return RehydrationPending, nil
+	case ports.ExecutionSucceeded:
+		if !present {
+			// Complete is the only path to succeeded and it always writes a result, so
+			// this row cannot have been produced by this application.
+			return RehydrationAbsent, IntegrityError{
+				Code: IntegrityLifecycleInconsistent, Detail: "succeeded execution carries no result"}
+		}
+		return RehydrationVerified, nil
+	case ports.ExecutionFailed:
+		if !present {
+			// The legitimate terminal no-result state: the execution could not be
+			// attempted. Fail records it deliberately.
+			return RehydrationUnattempted, nil
+		}
+		return RehydrationVerified, nil
+	default:
+		// A status outside the closed vocabulary. Refusing beats guessing which of the
+		// cases above it most resembles.
+		return RehydrationAbsent, IntegrityError{
+			Code: IntegrityLifecycleInconsistent, Detail: "unrecognized lifecycle status"}
+	}
+}
+
+// requestDivergence reports the first stored request identity that the re-derived result
+// does not reproduce.
+//
+// These are checked separately from the projection because they are the only fields the
+// projection copies from the claim rather than deriving. Everything else in a stored
+// result comes from the kernel, so comparing it proves storage fidelity; these three
+// would compare equal no matter what the claim said.
+func requestDivergence(request ports.ExecutionRequest, result SpineResult) string {
+	if plan, ok := result.Plan(); !ok || plan.ID() != request.PlanID {
+		return "request.planID"
+	}
+	if run, ok := result.SemanticRunID(); !ok || run != request.RunID {
+		return "request.semanticRunID"
+	}
+	if execution, ok := result.ExecutionID(); !ok || execution != request.ExecutionID {
+		return "request.executionID"
 	}
 	return ""
 }
