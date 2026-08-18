@@ -155,6 +155,20 @@ STORE_CONTAINER ?= maiden-lane-store-check
 STORE_PORT ?= 55433
 STORE_URL ?= "postgres://postgres:maiden@127.0.0.1:$(STORE_PORT)/maidenlane?sslmode=disable"
 
+# The readiness probe asks over TCP, not the container's unix socket, and that one flag
+# is the whole point of it.
+#
+# The official postgres entrypoint runs initdb against a TEMPORARY server started with
+# `listen_addresses=''`, then shuts that down and starts the real one. A socket probe is
+# satisfied by the temporary server, so it reports ready during initdb -- measured here at
+# 0.65s, while the real server only accepted TCP at 0.85s. dbmate connects over TCP from
+# the host, landed in that window, and CI failed with "connection reset by peer" against a
+# database that had just told us it was ready.
+#
+# Asking over TCP cannot be satisfied by the temporary server, because it listens on no
+# TCP address at all. This is the same mistake as a bind that appears to succeed while
+# another process holds the port: the probe has to ask the question the client will ask,
+# not a question that merely resembles it.
 store-check:
 	@set -eu; \
 	docker rm --force $(STORE_CONTAINER) >/dev/null 2>&1 || true; \
@@ -165,7 +179,8 @@ store-check:
 	ready=""; \
 	attempt=0; \
 	while [ "$$attempt" -lt 60 ]; do \
-		if docker exec $(STORE_CONTAINER) pg_isready --username postgres --dbname maidenlane >/dev/null 2>&1; then \
+		if docker exec $(STORE_CONTAINER) pg_isready --host 127.0.0.1 \
+			--username postgres --dbname maidenlane >/dev/null 2>&1; then \
 			ready="yes"; \
 			break; \
 		fi; \
@@ -179,6 +194,8 @@ store-check:
 	}; \
 	$(DBMATE) --url $(STORE_URL) up >/dev/null || { \
 		echo "migrations failed against the throwaway database"; \
+		echo "--- postgres log ---"; \
+		docker logs $(STORE_CONTAINER) 2>&1 | tail -40; \
 		exit 1; \
 	}; \
 	if ! output="$$(MAIDEN_LANE_TEST_POSTGRES_URL=$(STORE_URL) \
