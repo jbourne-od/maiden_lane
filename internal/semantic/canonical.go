@@ -132,6 +132,7 @@ const (
 	checkpointArtifactDomainTag = "maiden-lane.checkpoint-artifact.v1"
 	assessmentIDDomainTag       = "maiden-lane.assessment-id.v1"
 	assessmentDomainTag         = "maiden-lane.readiness-assessment.v1"
+	corpusDomainTag             = "maiden-lane.replay-corpus.v1"
 )
 
 // assessmentSemanticsVersion pins the meaning of readiness evaluation (closed

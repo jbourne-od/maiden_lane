@@ -37,6 +37,7 @@ type (
 	ProfileID                string
 	AssessmentID             string
 	AssessmentDigest         string
+	CorpusID                 string
 	CompilationFailureDigest string
 	FailureReportDigest      string
 	CompilerSemanticsVersion string
