@@ -464,10 +464,11 @@ func runBothSides(t *testing.T, fixture comparisonSetup) {
 		if err != nil {
 			t.Fatalf("Project: %v", err)
 		}
-		if _, _, err := fixture.store.Claim(t.Context(), leaseForTest); err != nil {
+		leased, _, err := fixture.store.Claim(t.Context(), leaseForTest)
+		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
-		if err := fixture.store.Complete(t.Context(), projected); err != nil {
+		if err := fixture.store.Complete(t.Context(), leased.AttemptID, projected); err != nil {
 			t.Fatalf("Complete: %v", err)
 		}
 	}
@@ -711,10 +712,12 @@ func TestAnUnattemptedCaseIsDistinguishedFromAPendingOne(t *testing.T) {
 	// Terminally fail one of them without a result, which is what Fail records for an
 	// execution that could not be attempted.
 	first := pending.Missing()[0]
-	if _, _, err := fixture.store.Claim(t.Context(), leaseForTest); err != nil {
+	leased, _, err := fixture.store.Claim(t.Context(), leaseForTest)
+	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	if err := fixture.store.Fail(t.Context(), "acme", first.ExecutionID, "plan_absent"); err != nil {
+	if err := fixture.store.Fail(t.Context(), "acme", leased.Request.ExecutionID,
+		leased.AttemptID, "plan_absent"); err != nil {
 		t.Fatalf("Fail: %v", err)
 	}
 
@@ -978,10 +981,11 @@ func runSide(
 		if err != nil {
 			t.Fatalf("Project: %v", err)
 		}
-		if _, _, err := fixture.store.Claim(t.Context(), leaseForTest); err != nil {
+		leased, _, err := fixture.store.Claim(t.Context(), leaseForTest)
+		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
-		if err := fixture.store.Complete(t.Context(), projected); err != nil {
+		if err := fixture.store.Complete(t.Context(), leased.AttemptID, projected); err != nil {
 			t.Fatalf("Complete: %v", err)
 		}
 	}

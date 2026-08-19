@@ -115,14 +115,14 @@ func (w *Worker) Run(ctx context.Context) error {
 // RunOnce claims at most one execution and processes it, reporting whether it
 // found work.
 func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
-	request, found, err := w.executions.Claim(ctx, w.lease)
+	leased, found, err := w.executions.Claim(ctx, w.lease)
 	if err != nil {
 		return false, err
 	}
 	if !found {
 		return false, nil
 	}
-	w.process(ctx, request)
+	w.process(ctx, leased)
 	return true, nil
 }
 
@@ -130,9 +130,9 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 //
 // It never returns an error: every outcome is recorded against the execution
 // itself, which is where a caller looks.
-func (w *Worker) process(ctx context.Context, request ports.ExecutionRequest) {
-	ctx, end := w.beginExecution(ctx, request)
-	end(w.attempt(ctx, request))
+func (w *Worker) process(ctx context.Context, leased ports.ExecutionAttempt) {
+	ctx, end := w.beginExecution(ctx, leased.Request)
+	end(w.attempt(ctx, leased))
 }
 
 // beginExecution opens the worker's span and returns both the context that
@@ -168,8 +168,9 @@ func (w *Worker) beginExecution(
 // still reports a terminal failure rather than whatever the zero value happens
 // to be.
 func (w *Worker) attempt(
-	ctx context.Context, request ports.ExecutionRequest,
+	ctx context.Context, leased ports.ExecutionAttempt,
 ) (outcome ExecutionOutcome) {
+	request := leased.Request
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			// A panic is an internal defect, and execution is deterministic, so
@@ -179,7 +180,7 @@ func (w *Worker) attempt(
 			// carry payload, and a bounded code is enough to find the cause in
 			// logs and traces.
 			w.logger.ErrorContext(ctx, "execution panicked", "code", ReasonInternalError)
-			outcome = w.fail(ctx, request, ReasonInternalError)
+			outcome = w.fail(ctx, leased, ReasonInternalError)
 		}
 	}()
 
@@ -192,7 +193,7 @@ func (w *Worker) attempt(
 	}
 	if !found {
 		// The plan is gone, so this execution can never run. That is terminal.
-		return w.fail(ctx, request, ReasonPlanAbsent)
+		return w.fail(ctx, leased, ReasonPlanAbsent)
 	}
 
 	if err := w.verifyIdentity(plan, request); err != nil {
@@ -201,7 +202,7 @@ func (w *Worker) attempt(
 		// identity the kernel never produced for these inputs.
 		w.logger.ErrorContext(ctx, "execution identity could not be reproduced",
 			"code", ReasonIdentityMismatch)
-		return w.fail(ctx, request, ReasonIdentityMismatch)
+		return w.fail(ctx, leased, ReasonIdentityMismatch)
 	}
 
 	result, err := w.runner.Run(ctx, app.Request{
@@ -212,7 +213,7 @@ func (w *Worker) attempt(
 		Policy:           request.Input.Policy,
 	}, w.observer)
 	if err != nil {
-		return w.recordInability(ctx, request, err)
+		return w.recordInability(ctx, leased, err)
 	}
 
 	// A nil error means the computation produced an answer, including when that
@@ -223,9 +224,9 @@ func (w *Worker) attempt(
 		// pre-execution check above, and refused rather than trusted for that reason.
 		w.logger.ErrorContext(ctx, "projected result contradicts the claimed identity",
 			"code", ReasonIdentityMismatch)
-		return w.fail(ctx, request, ReasonIdentityMismatch)
+		return w.fail(ctx, leased, ReasonIdentityMismatch)
 	}
-	if err := w.executions.Complete(ctx, projected); err != nil {
+	if err := w.executions.Complete(ctx, leased.AttemptID, projected); err != nil {
 		// The computation answered and the answer was lost. The execution stays
 		// claimable, so this is abandoned: reporting it answered would promise a
 		// result no read can return.
@@ -273,7 +274,7 @@ func (w *Worker) verifyIdentity(plan ports.PlanRecord, request ports.ExecutionRe
 // back. Deterministic ones are terminal, because leaving them claimable would
 // spin forever on an input that cannot succeed.
 func (w *Worker) recordInability(
-	ctx context.Context, request ports.ExecutionRequest, cause error,
+	ctx context.Context, leased ports.ExecutionAttempt, cause error,
 ) ExecutionOutcome {
 	switch {
 	case errors.Is(cause, context.Canceled), errors.Is(cause, context.DeadlineExceeded):
@@ -285,11 +286,11 @@ func (w *Worker) recordInability(
 		return ExecutionOutcome{Kind: OutcomeAbandoned}
 	case errors.As(cause, &app.InvalidInputError{}):
 		// The pinned input is not usable and never will be.
-		return w.fail(ctx, request, ReasonInvalidInput)
+		return w.fail(ctx, leased, ReasonInvalidInput)
 	default:
 		// An internal inconsistency is deterministic on identical input.
 		w.logger.ErrorContext(ctx, "execution failed internally", "code", ReasonInternalError)
-		return w.fail(ctx, request, ReasonInternalError)
+		return w.fail(ctx, leased, ReasonInternalError)
 	}
 }
 
@@ -299,14 +300,19 @@ func (w *Worker) recordInability(
 // below leave the execution claimable, so both are abandoned: an operator reading
 // "failed" should be able to trust that something terminal was written.
 func (w *Worker) fail(
-	ctx context.Context, request ports.ExecutionRequest, reason string,
+	ctx context.Context, leased ports.ExecutionAttempt, reason string,
 ) ExecutionOutcome {
 	// A cancelled context cannot record anything, and the execution is better
 	// left claimable than lost, so the attempt is skipped rather than forced.
 	if ctx.Err() != nil {
 		return ExecutionOutcome{Kind: OutcomeAbandoned}
 	}
-	if err := w.executions.Fail(ctx, request.TenantID, request.ExecutionID, reason); err != nil {
+	// The attempt is presented, so an outcome from a generation that no longer holds this
+	// execution is refused by the store rather than applied. A worker whose lease lapsed
+	// and whose execution was reclaimed or reattempted must not terminate somebody else's
+	// generation, and it has no way to know that has happened except by being told.
+	if err := w.executions.Fail(ctx, leased.Request.TenantID, leased.Request.ExecutionID,
+		leased.AttemptID, reason); err != nil {
 		w.logger.ErrorContext(ctx, "execution failure could not be recorded",
 			"code", "failure_record_failed")
 		return ExecutionOutcome{Kind: OutcomeAbandoned}

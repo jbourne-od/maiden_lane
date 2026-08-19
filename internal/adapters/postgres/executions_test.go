@@ -50,7 +50,12 @@ func TestCorruptedExecutionRowsFailClosed(t *testing.T) {
 				t.Fatalf("Enqueue: %v", err)
 			}
 			if test.complete {
-				if err := store.Complete(t.Context(),
+				// Claimed first: reporting an outcome requires holding the execution.
+				leased, found, err := store.Claim(t.Context(), time.Minute)
+				if err != nil || !found {
+					t.Fatalf("Claim: found=%t err=%v", found, err)
+				}
+				if err := store.Complete(t.Context(), leased.AttemptID,
 					storagecontract.ExecutionResultFixture(request, ports.ExecutionSucceeded)); err != nil {
 					t.Fatalf("Complete: %v", err)
 				}
@@ -122,7 +127,7 @@ func TestConcurrentWorkersPartitionTheQueue(t *testing.T) {
 						maxClaims, executions)
 					return
 				}
-				request, found, err := worker.Claim(context.Background(), time.Minute)
+				leased, found, err := worker.Claim(context.Background(), time.Minute)
 				if err != nil {
 					t.Errorf("Claim: %v", err)
 					return
@@ -131,7 +136,7 @@ func TestConcurrentWorkersPartitionTheQueue(t *testing.T) {
 					return
 				}
 				mutex.Lock()
-				counts[string(request.ExecutionID)]++
+				counts[string(leased.Request.ExecutionID)]++
 				mutex.Unlock()
 			}
 		})

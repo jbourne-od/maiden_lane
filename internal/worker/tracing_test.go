@@ -256,7 +256,9 @@ type unwritableFailures struct {
 	err error
 }
 
-func (s unwritableFailures) Fail(context.Context, ports.TenantID, semantic.ExecutionID, string) error {
+func (s unwritableFailures) Fail(
+	context.Context, ports.TenantID, semantic.ExecutionID, ports.AttemptID, string,
+) error {
 	return s.err
 }
 
@@ -266,6 +268,6 @@ type unwritableResults struct {
 	err error
 }
 
-func (s unwritableResults) Complete(context.Context, ports.ExecutionResult) error {
+func (s unwritableResults) Complete(context.Context, ports.AttemptID, ports.ExecutionResult) error {
 	return s.err
 }

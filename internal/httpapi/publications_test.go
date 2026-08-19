@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/optimaldynamics/maiden-lane/internal/adapters/memory"
 	"github.com/optimaldynamics/maiden-lane/internal/app"
@@ -385,7 +386,13 @@ func publicationFixtureWithout(t *testing.T, skipPolicy func(*memory.Store)) pub
 	if err != nil {
 		t.Fatalf("app.Project: %v", err)
 	}
-	if err := store.Complete(t.Context(), projected); err != nil {
+	// Claimed first: reporting an outcome requires holding the execution, because an
+	// unclaimed one has no attempt to report under.
+	leased, found, err := store.Claim(t.Context(), time.Minute)
+	if err != nil || !found {
+		t.Fatalf("Claim: found=%t err=%v", found, err)
+	}
+	if err := store.Complete(t.Context(), leased.AttemptID, projected); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 

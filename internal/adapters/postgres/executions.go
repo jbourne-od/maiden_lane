@@ -117,21 +117,24 @@ func (s *Store) Enqueue(ctx context.Context, request ports.ExecutionRequest) (bo
 // SKIP LOCKED is what makes several workers safe against one queue: a worker
 // steps over rows another worker is already claiming instead of blocking on
 // them, so the queue partitions rather than serializes.
-func (s *Store) Claim(ctx context.Context, lease time.Duration) (ports.ExecutionRequest, bool, error) {
+func (s *Store) Claim(ctx context.Context, lease time.Duration) (ports.ExecutionAttempt, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return ports.ExecutionRequest{}, false, err
+		return ports.ExecutionAttempt{}, false, err
 	}
 
 	var (
 		tenant, executionID, runID, planID, hash string
 		format                                   int
 		encoded                                  []byte
+		attempt                                  int64
 	)
 	// The subquery selects and locks one candidate; the update claims it. Doing
 	// both in one statement means no window exists in which a row is selected
 	// but not yet claimed.
 	err := s.pool.QueryRow(ctx, `
-		UPDATE executions SET status = 'running', lease_expires_at = now() + $1::interval
+		UPDATE executions
+		SET status = 'running', lease_expires_at = now() + $1::interval,
+		    current_attempt_id = current_attempt_id + 1
 		WHERE (tenant_id, execution_id) IN (
 			SELECT tenant_id, execution_id FROM executions
 			WHERE status = 'pending'
@@ -140,13 +143,15 @@ func (s *Store) Claim(ctx context.Context, lease time.Duration) (ports.Execution
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
 		)
-		RETURNING tenant_id, execution_id, run_id, plan_id, format, request, request_hash`,
-		lease.String()).Scan(&tenant, &executionID, &runID, &planID, &format, &encoded, &hash)
+		RETURNING tenant_id, execution_id, run_id, plan_id, format, request, request_hash,
+		          current_attempt_id`,
+		lease.String()).Scan(&tenant, &executionID, &runID, &planID, &format, &encoded, &hash,
+		&attempt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ports.ExecutionRequest{}, false, nil
+		return ports.ExecutionAttempt{}, false, nil
 	}
 	if err != nil {
-		return ports.ExecutionRequest{}, false, fmt.Errorf("postgres: execution could not be claimed: %w", err)
+		return ports.ExecutionAttempt{}, false, fmt.Errorf("postgres: execution could not be claimed: %w", err)
 	}
 	claimed := ports.ExecutionRequest{
 		TenantID:    ports.TenantID(tenant),
@@ -160,22 +165,22 @@ func (s *Store) Claim(ctx context.Context, lease time.Duration) (ports.Execution
 	// at the head of the queue with a lease that expires, making one poll fail
 	// forever and never moving the execution to a terminal state.
 	if format != executionFormat {
-		return ports.ExecutionRequest{}, false, s.retire(ctx, claimed,
+		return ports.ExecutionAttempt{}, false, s.retire(ctx, claimed,
 			"storage_format_unknown", fmt.Errorf(
 				"%w: row uses storage format %d, this build understands %d",
 				ErrIntegrity, format, executionFormat))
 	}
 	if identityHash(claimed, encoded) != hash {
-		return ports.ExecutionRequest{}, false, s.retire(ctx, claimed, "storage_integrity_failed",
+		return ports.ExecutionAttempt{}, false, s.retire(ctx, claimed, "storage_integrity_failed",
 			fmt.Errorf("%w: stored execution does not match its content hash", ErrIntegrity))
 	}
 
 	request, err := decodeExecutionRequest(claimed.TenantID, claimed.ExecutionID,
 		claimed.RunID, claimed.PlanID, encoded)
 	if err != nil {
-		return ports.ExecutionRequest{}, false, s.retire(ctx, claimed, "storage_integrity_failed", err)
+		return ports.ExecutionAttempt{}, false, s.retire(ctx, claimed, "storage_integrity_failed", err)
 	}
-	return request, true, nil
+	return ports.ExecutionAttempt{Request: request, AttemptID: ports.AttemptID(attempt)}, true, nil
 }
 
 // retire moves an untrustworthy row to a terminal state and returns the original
@@ -196,7 +201,9 @@ func (s *Store) retire(ctx context.Context, request ports.ExecutionRequest, reas
 }
 
 // Complete stores the result and takes the execution out of the queue.
-func (s *Store) Complete(ctx context.Context, result ports.ExecutionResult) error {
+func (s *Store) Complete(
+	ctx context.Context, attempt ports.AttemptID, result ports.ExecutionResult,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -211,26 +218,64 @@ func (s *Store) Complete(ctx context.Context, result ports.ExecutionResult) erro
 	if err != nil {
 		return fmt.Errorf("postgres: result could not be encoded: %w", err)
 	}
-	// The status guard makes the transition one-way. A late Complete from an
-	// attempt whose lease expired must not resurrect a failed execution or
-	// overwrite an outcome another attempt already recorded.
+	// The status guard requires a RUNNING execution, not merely a non-terminal one, and
+	// that tightening is what the attempt model implies: an outcome belongs to an attempt,
+	// and an unclaimed execution has no attempt. Without it generation zero would be a
+	// universal key — an unclaimed row's current_attempt_id is zero, so anyone presenting
+	// zero could report an outcome for work nobody leased.
+	//
+	// The generation guard then makes the transition belong to this attempt. Both are in the WHERE clause so the database refuses rather
+	// than trusting a check made a moment earlier: determinism makes a stale result
+	// harmless as content, but a stale write can still terminate a generation that is
+	// still running.
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE executions
 		SET status = $3, result = $4, result_hash = $5, failure_reason = '', lease_expires_at = NULL
-		WHERE tenant_id = $1 AND execution_id = $2 AND status IN ('pending', 'running')`,
+		WHERE tenant_id = $1 AND execution_id = $2 AND status = 'running'
+		  AND current_attempt_id = $6`,
 		string(result.TenantID), string(result.ExecutionID),
-		string(result.Status), encoded, contentHash(encoded))
+		string(result.Status), encoded, contentHash(encoded), int64(attempt))
 	if err != nil {
 		return fmt.Errorf("postgres: result could not be stored: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrNotQueued
+		return s.classifyRefusedOutcome(ctx, result.TenantID, result.ExecutionID, attempt)
 	}
 	return nil
 }
 
+// classifyRefusedOutcome says why an outcome did not land.
+//
+// A superseded attempt is distinguished from an already-decided execution because a caller
+// acts differently: a superseded attempt should stop, since somebody else holds the work,
+// while an already-terminal execution means the outcome was already recorded. Collapsing
+// them into one refusal would leave a worker unable to tell "you lost the lease" from
+// "this is done".
+func (s *Store) classifyRefusedOutcome(
+	ctx context.Context, tenant ports.TenantID, executionID semantic.ExecutionID,
+	attempt ports.AttemptID,
+) error {
+	var current int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT current_attempt_id FROM executions WHERE tenant_id = $1 AND execution_id = $2`,
+		string(tenant), string(executionID)).Scan(&current)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotQueued
+	}
+	if err != nil {
+		return fmt.Errorf("postgres: execution could not be read: %w", err)
+	}
+	if ports.AttemptID(current) != attempt {
+		return ports.ErrAttemptSuperseded
+	}
+	return ErrNotQueued
+}
+
 // Fail records that an execution could not be attempted.
-func (s *Store) Fail(ctx context.Context, tenant ports.TenantID, executionID semantic.ExecutionID, reason string) error {
+func (s *Store) Fail(
+	ctx context.Context, tenant ports.TenantID, executionID semantic.ExecutionID,
+	attempt ports.AttemptID, reason string,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -241,15 +286,60 @@ func (s *Store) Fail(ctx context.Context, tenant ports.TenantID, executionID sem
 	tag, err := s.pool.Exec(ctx, `
 		UPDATE executions
 		SET status = $3, failure_reason = $4, result = NULL, result_hash = NULL, lease_expires_at = NULL
-		WHERE tenant_id = $1 AND execution_id = $2 AND status IN ('pending', 'running')`,
-		string(tenant), string(executionID), string(ports.ExecutionFailed), reason)
+		WHERE tenant_id = $1 AND execution_id = $2 AND status = 'running'
+		  AND current_attempt_id = $5`,
+		string(tenant), string(executionID), string(ports.ExecutionFailed), reason, int64(attempt))
 	if err != nil {
 		return fmt.Errorf("postgres: execution could not be failed: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrNotQueued
+		return s.classifyRefusedOutcome(ctx, tenant, executionID, attempt)
 	}
 	return nil
+}
+
+// Reattempt returns an execution that could not be attempted to the queue.
+//
+// The eligibility test is in the WHERE clause, so the database refuses an ineligible
+// row rather than trusting a check this code made a moment earlier against a value
+// that may since have changed. `result IS NULL` is what distinguishes a computation
+// that could not be attempted from one that ran and refused — the same distinction
+// rehydration and corpus progress both draw, enforced here at the row.
+func (s *Store) Reattempt(
+	ctx context.Context, tenant ports.TenantID, executionID semantic.ExecutionID,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// The generation advances here as well as at Claim, so a generation number is never
+	// reused across a reattempt boundary. No test distinguishes it: the attempt that
+	// failed is already refused because reporting an outcome requires a running
+	// execution. It is kept so the no-reuse property holds on the column itself.
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE executions
+		SET status = $3, failure_reason = '', lease_expires_at = NULL,
+		    current_attempt_id = current_attempt_id + 1
+		WHERE tenant_id = $1 AND execution_id = $2
+		  AND status = $4 AND result IS NULL`,
+		string(tenant), string(executionID),
+		string(ports.ExecutionPending), string(ports.ExecutionFailed))
+	if err != nil {
+		return fmt.Errorf("postgres: execution could not be reattempted: %w", err)
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+
+	// Nothing updated: either there is no such execution for this tenant, or there is
+	// one that is not reattemptable. The two are different answers and a caller acts
+	// differently on each, so they are distinguished rather than collapsed into a
+	// single "no".
+	if _, found, err := s.Get(ctx, tenant, executionID); err != nil {
+		return err
+	} else if !found {
+		return ports.ErrExecutionAbsent
+	}
+	return ports.ErrExecutionNotReattemptable
 }
 
 // Get reports the execution for this tenant, or absence.
