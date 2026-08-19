@@ -844,7 +844,144 @@ A successful execution is not proof of publishability.
 
 ---
 
-# 26. Definition of Done
+# 26. The Mandatory Adversarial PR Review Gate
+
+Before any pull request is opened, and before any branch is marked ready for human
+review, the branch must pass an adversarial review gate.
+
+## Role and separation of concerns
+
+An independent subagent (`adversarial-reviewer`, defined in
+`.claude/agents/adversarial-reviewer.md`) is spawned to red-team the diff. Its tools are
+`Read`, `Grep` and `Glob`, and it is granted no write tool of any kind, so it cannot edit a
+file, run a command, commit, push, or open a pull request. The intent is a capability
+boundary rather than a promise, because the whole point of the gate is that the critic
+cannot make its own objections disappear and a policy prohibition would rest on the
+critic's good behaviour.
+
+The prohibition is nonetheless *also* stated in the reviewer's own instructions, because
+the tool list is enforced by the harness and neither this document nor the agent definition
+can verify that enforcement. If a runtime ever hands the reviewer a write-capable tool
+regardless, the boundary degrades to the policy promise this design exists to avoid; the
+reviewer is therefore required to report any mismatch between its actual tools and the three
+above.
+
+The cost is deliberate and is paid by the primary agent. The reviewer cannot run the tests,
+so it cannot independently reproduce a mutation or confirm that the pipeline is green.
+Those remain claims, and the reviewer's report must separate what it checked from what it
+could not.
+
+Its mandate is to find defects, and the definitive list of what it looks for lives in the
+agent definition, not here: Inviolates 0-19, plus the failure classes this repository has
+actually shipped and had caught in human review. That list is deliberately not restated in
+this section. A second copy would drift, and a partial copy read as complete would
+mis-calibrate anyone reading only this file — which is the precise defect an earlier draft
+of this section shipped, having quietly dropped two of the classes.
+
+The separation is the point. The agent that wrote the diff is the worst judge of whether
+its tests enforce anything, because it wrote the tests to pass. The reviewer's incentive
+is to find the thing that got through, and it is not permitted to relieve that tension by
+fixing what it finds.
+
+## Supplying the evidence
+
+The reviewer cannot run `git`, so the primary agent writes four artifacts **outside the
+repository** — the session scratchpad — and passes their paths:
+
+1. the **patch**, `git diff <base>...<head>`;
+2. the **inventory**, `git diff --name-status <base>...<head>`;
+3. the **working-tree status**, `git status --porcelain`, so the branch's own changes are
+   distinguishable from unrelated in-flight work;
+4. the **claims** — the assertions that would otherwise go in a PR body, written down
+   early: what the change does, which mutations were run and what they killed, which
+   commands passed.
+
+The claims file exists because the gate runs before a pull request does. Writing the
+assertions first is the point rather than an inconvenience: they are checked while they are
+still a claim about work, not after they have become a description of merged work.
+
+The reviewer cross-checks the patch against the inventory and spot-checks the files that
+matter against disk, because the party under review produced all four. A path in the
+inventory that the patch does not account for is a `REJECT`. What the reviewer genuinely
+cannot do is discover a file omitted from the patch *and* the inventory — the base tree is
+not on disk and it cannot diff against it. That is a real limit of a critic with no `git`,
+it is the price of the capability boundary above, and the reviewer is required to record it
+rather than imply coverage it does not have.
+
+## Verdict
+
+The reviewer emits a structured report ending in a mandatory verdict.
+
+**`REJECT`** halts the pipeline. Any demonstrated Inviolate breach, any confirmed
+instance of a known failure class, a new guard with no mutation evidence or with mutation
+evidence that did not actually run, a comment describing behaviour the code lacks, a data
+race, a determinism hazard reaching a semantic identity, or a PR-body claim found false.
+The primary agent must diagnose the root cause, fix it, and re-run the gate from the
+beginning — not argue the finding away, and not patch the symptom the reviewer happened
+to name.
+
+**`APPROVE`** is granted only when the reviewer looked for each failure class and found
+none, the tests demonstrably enforce what they claim, and every deliberate omission is
+written down. It is not the default and it is not granted merely for an empty findings
+list.
+
+An uncertain reviewer rejects. A false `REJECT` costs one iteration; a false `APPROVE`
+costs an Inviolate.
+
+## When the gate cannot run
+
+Working With Multiple Agents scopes subagent use to when multi-agent support is available
+and authorized, and requires the reason to be stated when it is not. This gate inherits
+that, and needs it: without it there is a state with no legal exit, because a branch with no
+verdict has no `REJECT` to dispute and therefore no escalation move.
+
+If the gate cannot be run, the primary agent states that plainly and prominently — in the
+handoff and in the eventual PR body — and does not claim `APPROVE`, does not claim the
+Definition of Done is met, and does not imply the diff was reviewed. An unrun gate is a
+disclosed gap for a human to weigh, which is a different thing from a passed gate and must
+never be presented as one.
+
+## No bypass
+
+Under no circumstances may an agent mark a branch ready for review, merge it, or declare a
+task complete while a verdict remains `REJECT`. Opening a pull request under a standing
+`REJECT` is permitted in exactly one case, the draft adjudication PR described below, and
+such a PR stays draft until a human settles it.
+
+The gate runs after the verification in *Verification Before Completion* passes, not
+instead of it. (Sections here are referred to by name rather than number on purpose: this
+gate treats a comment that misdescribes the code as a merge blocker, and a hardcoded
+section number is a comment that goes stale the first time anything is inserted above it.) A reviewer must never be
+asked to review a branch whose tests do not run — that wastes the one process step whose
+budget is reserved for what the tooling cannot see.
+
+## Disputing a finding
+
+Disagreeing with a finding is legitimate; acting on the disagreement unilaterally is not.
+Silently discarding a `REJECT` is the one failure this gate cannot detect, so the escalation
+path is explicit.
+
+A reviewer that is uncertain must reject, which means false rejections are expected rather
+than exceptional, and the primary agent needs a way to contest one without either obeying
+it or ignoring it. It has two moves and no others:
+
+1. **Produce the evidence.** Most disputes are really requests for evidence — a named test,
+   a re-run mutation, a line the reviewer could not reach without running anything. Supply
+   it and re-run the gate. This is the normal resolution and it needs no human.
+2. **Escalate to a draft pull request.** If the disagreement survives evidence, open a
+   **draft** PR whose body carries the finding and the rebuttal side by side, labelled as
+   under adjudication. This is the one case where a `REJECT` may result in a PR existing,
+   and it is permitted because the alternative is a dispute resolved in a transcript
+   nobody can find later.
+
+A draft PR opened under a standing `REJECT` may not be marked ready and may not be merged.
+Only a human can settle the dispute: either the finding is withdrawn and the gate re-run to
+`APPROVE`, or the finding stands and the diff is fixed. The verdict never clears itself, and
+the primary agent never marks its own dispute resolved.
+
+---
+
+# 27. Definition of Done
 
 A change is not done merely because the requested code exists.
 
@@ -858,6 +995,7 @@ Before completion, confirm:
 * errors fail at the correct boundary;
 * provenance remains adequate;
 * relevant verification passed;
+* the adversarial review gate returned `APPROVE`, or its inability to run was disclosed;
 * generated artifacts are current;
 * documentation describing current implementation is current;
 * the final diff contains no accidental work.
