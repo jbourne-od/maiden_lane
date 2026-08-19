@@ -26,6 +26,15 @@ const (
 	// IntegrityComparisonDiverged means the stored components no longer derive the
 	// identity the comparison is filed under.
 	IntegrityComparisonDiverged IntegrityCode = "STORED_COMPARISON_DIVERGED"
+
+	// IntegrityComparisonTenantMismatch means a store returned a comparison filed under
+	// a different tenant than the one asked for.
+	//
+	// This is the one field re-derivation cannot authenticate. ComparisonID commits to
+	// nothing about tenancy -- two tenants asking the same question derive the same
+	// identity -- so a row whose tenant does not match the request would rebuild
+	// perfectly and be returned to a caller with no right to it.
+	IntegrityComparisonTenantMismatch IntegrityCode = "STORED_COMPARISON_TENANT_MISMATCH"
 )
 
 // ComparisonRehydrationStores is what comparison rehydration reads, and nothing else.
@@ -59,6 +68,17 @@ func RehydrateComparison(
 	record, found, err := stores.Comparisons.GetComparison(ctx, tenant, comparisonID)
 	if err != nil || !found {
 		return semantic.Comparison{}, false, err
+	}
+	if record.TenantID != tenant {
+		// Checked rather than trusted, and it is NOT redundant with the store's own
+		// scoping. Every other field is authenticated by the identity check below, but
+		// ComparisonID commits to nothing about tenancy, so a record carrying the wrong
+		// tenant would re-derive its identity perfectly. The store is supposed to make
+		// this unreachable; an adapter that got it wrong would otherwise hand one
+		// tenant's question to another with a full authentication behind it.
+		return semantic.Comparison{}, false, IntegrityError{
+			Code: IntegrityComparisonTenantMismatch,
+		}
 	}
 
 	baselinePlan, err := compiledPlanFor(ctx, stores.Plans, tenant, record.BaselinePlan)

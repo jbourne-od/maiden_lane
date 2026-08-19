@@ -181,6 +181,41 @@ func TestRehydrateComparisonRefusesAnEditedRow(t *testing.T) {
 	}
 }
 
+// Production break caught by the adversarial gate: TenantID is the one field on a stored
+// comparison that re-derivation cannot authenticate. ComparisonID commits to nothing about
+// tenancy -- two tenants asking the same question derive the same identity, which is why
+// storage keys by both -- so a record carrying the wrong tenant rebuilds perfectly and
+// every other check passes.
+//
+// The store is supposed to make this unreachable, and does. That is exactly why it needs a
+// test at this layer: the record's own documentation claimed every field was under the
+// identity, which would have made this check look redundant and invited its removal.
+func TestRehydrateComparisonRefusesARecordFiledUnderAnotherTenant(t *testing.T) {
+	fixture := newComparisonFixture(t)
+	misfiled := ports.ProjectComparison("someone-else", fixture.comparison).Clone()
+
+	_, _, err := RehydrateComparison(t.Context(), ComparisonRehydrationStores{
+		Plans:       fixture.plans(t),
+		Comparisons: editedComparisons{record: misfiled},
+	}, "acme", fixture.comparison.ID())
+
+	var integrity IntegrityError
+	if !errors.As(err, &integrity) {
+		t.Fatalf("a misfiled comparison rehydrated, or failed for another reason: %v", err)
+	}
+	if integrity.Code != IntegrityComparisonTenantMismatch {
+		t.Fatalf("integrity code = %s, want %s",
+			integrity.Code, IntegrityComparisonTenantMismatch)
+	}
+
+	// And the identity itself is genuinely blind to tenancy, which is the reason the
+	// check above cannot be replaced by one. If this ever fails, ComparisonID has started
+	// committing to the tenant and the check is redundant after all.
+	if ports.ProjectComparison("acme", fixture.comparison).ComparisonID != misfiled.ComparisonID {
+		t.Fatal("ComparisonID now varies with the tenant, so this test no longer means what it says")
+	}
+}
+
 // A comparison whose plan is gone cannot be recovered at all: the policy is derived from
 // the compiled plans, and a PlanID cannot be turned back into one.
 func TestRehydrateComparisonReportsAnAbsentPlan(t *testing.T) {
