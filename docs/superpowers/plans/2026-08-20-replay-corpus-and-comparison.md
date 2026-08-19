@@ -243,6 +243,17 @@ what it describes if nothing is stored.
 **Slice 5 — comparability evaluation, and clause 6.** The pure evaluation, then wiring
 `ClauseComparisonCorpus`. After this the gate answers seven of nine, and still refuses.
 
+**Comparability must not infer "the same world" from two complete side runs.** A
+`CorpusRun` is operational progress, not authorization evidence: it reports what a store
+says about executions, and no projection may carry authorization weight. §14.2 pins
+`WorldID` into the comparison question, so the check is that each freshly rehydrated case
+artifact agrees with `Comparison.World()` — the authenticated artifacts, not the request
+that produced them. Exposing `WorldID` on `CorpusRun` for observability would be
+harmless; trusting it would not.
+
+The same applies to completeness. A side run reporting `Complete` is a reason to attempt
+comparability, never a substitute for it.
+
 **Slice 6 — the HTTP surface.** `POST /v1/comparisons` and
 `GET /v1/comparisons/{comparisonID}`, both already in §16's list.
 

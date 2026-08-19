@@ -51,6 +51,7 @@ type CaseRun struct {
 	runID       semantic.SemanticRunID
 	executionID semantic.ExecutionID
 	status      ports.ExecutionStatus
+	answered    bool
 	enqueued    bool
 }
 
@@ -73,12 +74,29 @@ func (c CaseRun) Status() ports.ExecutionStatus { return c.status }
 // rather than inferring it.
 func (c CaseRun) Enqueued() bool { return c.enqueued }
 
-// Terminal reports whether this case has finished, successfully or with a deterministic
-// semantic rejection. Both are finished: a computation that ran and refused produced a
-// real answer.
+// Terminal reports whether this case has reached a terminal LIFECYCLE status. It says
+// nothing about whether a semantic answer exists — see Answered.
 func (c CaseRun) Terminal() bool {
 	return c.status == ports.ExecutionSucceeded || c.status == ports.ExecutionFailed
 }
+
+// Answered reports whether this case produced a semantic result.
+//
+// It is a different question from Terminal, and conflating them is a mistake this system
+// has now made twice. ExecutionFailed has two materially different representations:
+// Complete stores a result for a computation that RAN and deterministically refused,
+// which is a real answer; Fail records failed with NO result for a computation that could
+// not be attempted at all, which is not. Rehydration already draws this line, reporting
+// the second as RehydrationUnattempted rather than as a finished execution.
+//
+// A corpus cares about the second question. A case that could not be attempted has
+// produced nothing for comparability to authenticate, so counting it as done would let a
+// side be "complete" while holding no artifacts for part of its corpus.
+//
+// Result presence is enough to answer this, and deliberately so: authenticating a result
+// costs a deterministic re-execution, and a progress read must not pay comparability's
+// bill. Slice 5 authenticates when it matters.
+func (c CaseRun) Answered() bool { return c.answered }
 
 // CorpusRun is one side's state over every case of a corpus.
 type CorpusRun struct {
@@ -94,10 +112,15 @@ func (r CorpusRun) PlanID() semantic.PlanID     { return r.planID }
 // Cases returns every case in the corpus's canonical order.
 func (r CorpusRun) Cases() []CaseRun { return append([]CaseRun(nil), r.cases...) }
 
-// Complete reports whether every case has finished.
+// Complete reports whether every case has produced a semantic answer.
+//
+// It requires Answered rather than Terminal, which is the whole distinction: a case that
+// terminally failed WITHOUT a result was never attempted, so it has produced nothing for
+// comparability to authenticate. Counting it would let a side be complete while holding
+// no artifacts for part of its corpus.
 //
 // This is the precondition comparability will require of both sides. It is deliberately
-// all-or-nothing: a comparison over a corpus where some cases have not run is a
+// all-or-nothing: a comparison over a corpus where some cases have not answered is a
 // comparison over a different, smaller corpus, and reporting it as partially complete
 // would invite exactly that substitution.
 func (r CorpusRun) Complete() bool {
@@ -107,7 +130,7 @@ func (r CorpusRun) Complete() bool {
 		return false
 	}
 	for _, run := range r.cases {
-		if !run.Terminal() {
+		if !run.Answered() {
 			return false
 		}
 	}
@@ -121,6 +144,12 @@ type Counts struct {
 	Running   int
 	Succeeded int
 	Failed    int
+
+	// Unattempted is how many cases terminally failed WITHOUT producing a result. They
+	// are counted in Failed as well, because that is their lifecycle status; this says
+	// how many of those failures produced no answer at all, which is what stops a side
+	// completing.
+	Unattempted int
 
 	// Enqueued is how many executions the call that produced this run created. Zero on a
 	// progress read, and zero on a repeat run of a corpus already executed.
@@ -140,6 +169,9 @@ func (r CorpusRun) Counts() Counts {
 			counts.Succeeded++
 		case ports.ExecutionFailed:
 			counts.Failed++
+		}
+		if run.Terminal() && !run.answered {
+			counts.Unattempted++
 		}
 		if run.enqueued {
 			counts.Enqueued++
@@ -267,6 +299,7 @@ func resolveCorpusRun(
 		}
 
 		status := ports.ExecutionPending
+		answered := false
 		if !created {
 			// Either this is a progress read, or the execution was already present. Its
 			// status has to be read rather than assumed: a case enqueued by an earlier
@@ -281,6 +314,12 @@ func resolveCorpusRun(
 				status = ""
 			} else {
 				status = stored.Status
+				// A result is what distinguishes a computation that ran and refused from
+				// one that could not be attempted. Presence is read, not the result
+				// itself: authenticating it costs a re-execution, which is not a price a
+				// progress read may charge.
+				answered = stored.Result != nil &&
+					(status == ports.ExecutionSucceeded || status == ports.ExecutionFailed)
 			}
 		}
 
@@ -289,6 +328,7 @@ func resolveCorpusRun(
 			runID:       binding.SemanticRunID(),
 			executionID: binding.ExecutionID(),
 			status:      status,
+			answered:    answered,
 			enqueued:    created,
 		})
 	}

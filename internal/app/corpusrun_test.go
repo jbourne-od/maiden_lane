@@ -177,6 +177,81 @@ func TestASideIsCompleteOnlyWhenEveryCaseHasFinished(t *testing.T) {
 	}
 }
 
+// PRODUCTION BREAK CAUGHT BY OWNER REVIEW: a case that terminally FAILED WITHOUT
+// producing a result counted as complete.
+//
+// ExecutionFailed has two materially different representations, and this conflated them.
+// Complete stores a result for a computation that ran and deterministically refused,
+// which is a real answer. Fail records failed with NO result for a computation that could
+// not be attempted at all, which is not — it has produced nothing for comparability to
+// authenticate. A side could therefore be "complete" while holding no artifacts for part
+// of its corpus.
+//
+// This system already draws that line in rehydration, where failed-with-no-result is
+// RehydrationUnattempted rather than a finished execution. The earlier completeness test
+// could not expose it, because its failed case went through Complete and so had a result.
+func TestACaseThatCouldNotBeAttemptedDoesNotCompleteASide(t *testing.T) {
+	fixture := corpusRunFixture(t, 3)
+	run, err := RunCorpus(t.Context(), fixture.stores, fixture.request)
+	if err != nil {
+		t.Fatalf("RunCorpus: %v", err)
+	}
+	cases := run.Cases()
+
+	// Two real answers: one committed, one deterministically refused.
+	completeCase(t, fixture, cases[0], ports.ExecutionSucceeded)
+	completeCase(t, fixture, cases[1], ports.ExecutionFailed)
+
+	// The third could not be attempted. Fail records this deliberately, and its lifecycle
+	// status is identical to the refusal above.
+	if _, _, err := fixture.store.Claim(t.Context(), leaseForTest); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if err := fixture.store.Fail(t.Context(), "acme", cases[2].ExecutionID(), "plan_absent"); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+
+	progress, err := CorpusProgress(t.Context(), fixture.stores, fixture.request)
+	if err != nil {
+		t.Fatalf("CorpusProgress: %v", err)
+	}
+	if progress.Complete() {
+		t.Fatal("a side with a case that produced no semantic answer reported complete")
+	}
+
+	// The two failures must be distinguishable, or an operator cannot tell a corpus that
+	// answered from one that partly did not run.
+	counts := progress.Counts()
+	if counts.Failed != 2 {
+		t.Fatalf("failed = %d, want 2: both are terminally failed", counts.Failed)
+	}
+	if counts.Unattempted != 1 {
+		t.Fatalf("unattempted = %d, want 1: only one produced no result", counts.Unattempted)
+	}
+
+	// Case by case: the refusal answered, the unattempted one did not, and both are
+	// terminal.
+	for i, expected := range []struct{ terminal, answered bool }{
+		{true, true}, {true, true}, {true, false},
+	} {
+		got := progress.Cases()[i]
+		if got.Terminal() != expected.terminal || got.Answered() != expected.answered {
+			t.Fatalf("case %d terminal=%t answered=%t, want %t and %t",
+				i, got.Terminal(), got.Answered(), expected.terminal, expected.answered)
+		}
+	}
+
+	// There is deliberately no "and then it completes" step here. An execution that
+	// terminally failed cannot be completed — the store refuses, because execution
+	// identity is derived and resubmitting resolves to the same record. That is a known
+	// trap the README already documents, and it means an unattempted case blocks its
+	// side until an explicit retry operation exists, which none does.
+	//
+	// The positive case, every case answered producing a complete side, is covered by
+	// TestASideIsCompleteOnlyWhenEveryCaseHasFinished on a fixture that never fails
+	// operationally.
+}
+
 // A corpus whose cases are not under the plan's schema is refused before anything is
 // enqueued.
 //
