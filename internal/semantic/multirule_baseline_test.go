@@ -38,8 +38,11 @@ func TestMultiInstanceRulesetBaseline(t *testing.T) {
 					conflicts++
 				}
 			}
-			// One diagnostic per overlapping field path per unordered pair. Each rule writes
-			// exactly one path, so the count is exactly the number of pairs.
+			// One diagnostic per overlapping field path per unordered pair — but only for
+			// pairs no dependency path already orders (compile.go:800). This fixture's rules
+			// read driver.assignment_key and write team.assignment_key, which never intersect,
+			// so no edges exist and every pair is reported. A fixture whose rules did create
+			// edges would see conflicts SUPPRESSED, which is the case this one cannot reach.
 			wantConflicts := instances * (instances - 1) / 2
 			if conflicts != wantConflicts {
 				t.Fatalf("write conflicts = %d, want %d (C(%d,2))",

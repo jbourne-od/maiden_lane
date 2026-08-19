@@ -8,20 +8,33 @@ import (
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
 )
 
-// BenchmarkExecutionByStateSize measures what one execution costs as the state grows,
-// holding the plan fixed.
+// BenchmarkExecutionByStateSize measures a whole spine run as the state grows, holding the
+// rule count fixed at two.
 //
-// It exists because the closed-rule-language programme is motivated by a claim about where
-// the engine's cost lives, and that claim was originally made from a throwaway probe that was
-// deleted. A number nobody can reproduce is not evidence, and this programme's whole posture
-// is that a stated fact must be checkable — so the measurement is committed before the work it
-// justifies.
+// READ THE RESULT THE RIGHT WAY ROUND. The two rules resolve exactly two named drivers, so
+// every additional entity is state they never read. If cost were confined to the work the
+// rules do, this would be FLAT in the number of entities. It is not: it is linear, at roughly
+// 15µs per entity. Linear is therefore the finding, not the reassurance — an earlier version
+// of this comment treated superlinear growth as the threshold for concern, which set the bar
+// in the wrong place and read the measurement as evidence against the hazard it demonstrates.
 //
-// What it isolates: the plan has two rules and names two drivers, so every additional driver
-// is state the rules do not touch. The benchmark therefore measures what a transition pays for
-// state it never reads, which is the term that decides whether a real fleet is tractable.
-// Growth that is worse than linear here would mean per-rule cost scales with total state, and
-// a ruleset with one rule pair per team would be quadratic overall.
+// Where the slope comes from, all of it proportional to total state and none of it to the two
+// rules: verifyState re-encodes and re-hashes the whole state on every transition
+// (semantic/binding.go), Seal canonicalizes it, evaluateProfileOverState walks every entity of
+// the scope kind, and replayVerifiedJournal re-applies every prior patch from the initial
+// state on every transition.
+//
+// That last one is the reason this benchmark cannot answer the question the programme actually
+// needs answered. Transition k replays k-1 entries, so a run of R transitions is Θ(R²·E) and
+// this fixture pins R=2. Under one rule pair per team, R and E both grow with the fleet, which
+// makes a run Θ(N³). That figure is derived from reading the code, not measured, and measuring
+// it needs a multi-rule plan that compiles — which today's operators cannot express (see
+// TestMultiInstanceRulesetBaseline). It is blocked on the set-scoped selector.
+//
+// WHAT IS TIMED includes compilation. Request.Compilation is a semantic.CompileRequest, not a
+// compiled plan, so Run calls semantic.Compile inside the measured region along with the two
+// profile compilations and their implication proof. At entities=2 that fixed cost dominates;
+// the per-entity slope is the part that is about state.
 //
 // Run with: go test ./internal/app/ -bench BenchmarkExecutionByStateSize -run '^$'
 func BenchmarkExecutionByStateSize(b *testing.B) {
@@ -31,14 +44,23 @@ func BenchmarkExecutionByStateSize(b *testing.B) {
 
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := Run(b.Context(), Request{
+				result, err := Run(b.Context(), Request{
 					Compilation:      compilation,
 					InitialState:     request.InitialState,
 					World:            request.World,
 					ExecutorIdentity: request.ExecutorIdentity,
 					Policy:           request.Policy,
-				}, nil); err != nil {
+				}, nil)
+				if err != nil {
 					b.Fatalf("Run: %v", err)
+				}
+				// A nil error is NOT success here. Run reports every deterministic semantic
+				// rejection as a completed call with a non-succeeded status, so without this
+				// the benchmark would happily time a compile-and-refuse path and report it as
+				// the cost of a full spine — and nothing in the output would say so.
+				if result.Status() != SpineSucceeded {
+					b.Fatalf("spine status = %v, want SpineSucceeded: the benchmark is timing "+
+						"a truncated run", result.Status())
 				}
 			}
 		})

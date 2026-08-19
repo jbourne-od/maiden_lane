@@ -80,6 +80,14 @@ It does not become *correct*. Nothing is instance-aware and nothing lets the com
 selectors disjoint, so two set-scoped rules writing `team.status` under mutually exclusive
 predicates are still refused — sound and fail-closed, not correct.
 
+And the analysis has an exemption that matters in the *other* direction: `compile.go:800` skips
+a pair entirely when a dependency path already orders it. So a shared write path is accepted,
+not refused, whenever an edge exists. Since edges come from `intersects(writer.writes,
+reader.reads)` and set-scoped rules over one entity kind overlap reads and writes far more
+readily, set-scoping moves pairs from *refused* to *ordered and accepted*. That is the fail-open
+direction, it is the opposite of the over-strictness this decision started from, and it needs
+an argument nobody has made.
+
 And the open question: dependency edges come from `intersects(writer.writes, reader.reads)`
 (`compile.go:787`) and mutual edges are a `DEPENDENCY_CYCLE` (`compile.go:394`). Under
 set-scoped rules over one entity kind, read and write sets overlap more readily, so
@@ -92,12 +100,33 @@ answer this; the analysis is not declared adequate before then.
 motivating this programme came from throwaway probes that were deleted, and a claim nobody can
 reproduce is not evidence, so the plan does not land without them.
 
-`BenchmarkExecutionByStateSize` (`internal/app/execution_bench_test.go`) holds the plan fixed
-at two rules and grows the state, so it measures what a transition pays for state it never
-reads. Observed: 15.1ms at 1,000 entities and 30.6ms at 2,000 — linear from roughly 200
-upward, at about 15µs per entity, with allocation growing linearly too at roughly 30KB and 94
-allocations per entity. Growth worse than linear here would have meant per-rule cost scales
-with total state, making one rule pair per team quadratic overall. It does not.
+`BenchmarkExecutionByStateSize` (`internal/app/execution_bench_test.go`) holds the rule count
+at two and grows the state. Observed: 15.1ms at 1,000 entities and 30.6ms at 2,000 — linear
+from roughly 200 upward at about 15µs per entity, with allocation linear too at roughly 30KB
+and 94 allocations per entity.
+
+**That linearity is the finding, not the reassurance, and an earlier draft of this plan had it
+exactly backwards.** The two rules resolve two named drivers, so every other entity is state
+they never read. Cost confined to the work the rules do would be *flat* in entity count. It is
+linear, so the threshold for "per-rule cost scales with total state" is any growth at all, and
+the measurement demonstrates the hazard rather than ruling it out.
+
+Reading the code says where the slope comes from and it is worse than the benchmark can show.
+`ExecuteTransition` calls `replayVerifiedJournal`, which restarts from the binding's initial
+state and re-applies every prior patch, so transition *k* costs Θ(*k*·E) and a run of *R*
+transitions is **Θ(R²·E)**. `verifyState`, `Seal` and `evaluateProfileOverState` each add
+further state-proportional work per transition. Under one rule pair per team, *R* and E both
+grow with the fleet, making a run **Θ(N³)**.
+
+That figure is derived from reading the code, not measured, and this is recorded rather than
+resolved: measuring it needs a multi-rule plan that compiles, which today's operators cannot
+express. It is blocked on the set-scoped selector and belongs to slice 3.
+
+The consequence for how this programme is framed: "the engine is not slow, it is not
+expressive" is only true at the scale the current fixture can reach. Expressiveness is still
+the blocker, because nothing runs at all today — but a set-scoped selector that makes a fleet
+*expressible* will expose a cost curve the two-rule benchmark cannot see, and journal replay
+per transition is the first thing to look at when it does.
 
 `TestMultiInstanceRulesetBaseline` (`internal/semantic/multirule_baseline_test.go`) compiles a
 ruleset with one form transformation per instance and records the refusal: C(N,2) unresolved
@@ -158,7 +187,13 @@ than a reliance on that rule.
 `:226-232`); `formInvariants`/`aggregateInvariants`, which synthesise invariants from the
 operator kind; `validRequirementCode` (`compile.go:1158-1161`), admitting exactly four `Team*`
 codes so the profile compiler refuses any non-HOS readiness code;
-`storagecontract/policies.go:324`, consuming one of those constants in a non-test file.
+`storagecontract/policies.go:324`, consuming one of those constants in a non-test file; and
+above all `internal/app/observation.go:442-460`, which consumes **seven** of the eleven
+constants, with `:409-439` hard-coding the fixture's rule IDs, checkpoint keys and profile keys
+as string literals behind three closed enums — that is the *source* of the span attributes the
+telemetry entry below describes, so demolishing the symptom without this site leaves closed
+enums silently returning zero. `storagecontract/executions.go:957-977` hard-codes the same
+fixture strings in a non-test contract file.
 
 **`evaluateProfileOverState`:** an empty explicit selection returns `Ready`
 (`profile.go:266-276`), justified in-code by the fixture's T1 plan boundary, which author
