@@ -377,3 +377,60 @@ func worldWithReference(t *testing.T) semantic.World {
 	}
 	return world
 }
+
+// assessmentWithVerdict returns an assessment of this checkpoint with a given verdict, so
+// readiness can be varied while everything else about the evidence stays valid.
+func assessmentWithVerdict(
+	t *testing.T, sealed sealedFixture, verdict semantic.ReadinessVerdict,
+) semantic.Assessment {
+	t.Helper()
+	for _, assessment := range sealed.assessments {
+		if assessment.Verdict() == verdict {
+			return assessment
+		}
+	}
+	t.Fatalf("the fixture has no %s assessment for this checkpoint", verdict)
+	return semantic.Assessment{}
+}
+
+// assessmentUnderProfile finds the assessment of one checkpoint declaration under a
+// profile, across the whole run.
+func assessmentUnderProfile(
+	t *testing.T, sealed []sealedFixture,
+	checkpoint semantic.CheckpointID, profile semantic.ProfileID,
+) semantic.Assessment {
+	t.Helper()
+	for _, side := range sealed {
+		if side.artifact.CheckpointID() != checkpoint {
+			continue
+		}
+		for _, assessment := range side.assessments {
+			if assessment.ProfileID() == profile {
+				return assessment
+			}
+		}
+	}
+	t.Fatal("no assessment under that profile for that checkpoint")
+	return semantic.Assessment{}
+}
+
+// restateComparison re-identifies a comparison under a different profile, leaving every
+// other input alone, so a test can vary the profile without disturbing what it is
+// comparing.
+func restateComparison(
+	t *testing.T, comparison semantic.Comparison, profile semantic.ProfileID,
+) semantic.Comparison {
+	t.Helper()
+	restated, err := semantic.NewComparison(semantic.ComparisonRequest{
+		Baseline:  comparison.Baseline(),
+		Candidate: comparison.Candidate(),
+		Profile:   profile,
+		World:     comparison.World(),
+		Corpus:    comparison.Corpus(),
+		Policy:    comparison.Policy(),
+	})
+	if err != nil {
+		t.Fatalf("NewComparison: %v", err)
+	}
+	return restated
+}

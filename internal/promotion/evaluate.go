@@ -64,10 +64,16 @@ type Candidate struct {
 	// Comparison is the evidence answering one promotion comparison, or nil when none
 	// was supplied.
 	//
-	// A pointer rather than a value because absence is meaningful and common: most
-	// candidates are evaluated without a comparison, and a zero-valued struct would make
-	// "no comparison" and "an empty comparison" the same thing. The clause reports the
-	// first as unevaluated and the second as adverse, which are different answers.
+	// A pointer rather than a value so that "not supplied" is explicit at the call site.
+	// ComparisonEvidence contains a semantic.Comparison whose zero value means nothing, so
+	// a value field would make every caller that omits it look like one supplying an
+	// empty comparison.
+	//
+	// It does NOT distinguish nil from an empty struct, and an earlier comment here
+	// claimed it did — that nil was unevaluated while present-but-empty was adverse. The
+	// code never did that, and it should not: an empty evidence struct contradicts
+	// nothing, it simply carries no comparison. Both are missing evidence and both report
+	// InformationAbsent.
 	Comparison *ComparisonEvidence
 
 	// ExecutionID is the execution that produced the checkpoint, which §14.1's
@@ -150,7 +156,7 @@ func Evaluate(policy ports.TargetPolicy, candidate Candidate) Decision {
 		ClauseProtectedInvariants:  protectedInvariants(candidate),
 		ClauseReadyAssessment:      readyAssessment(policy, candidate),
 		ClausePinnedIdentities:     pinnedIdentities(candidate),
-		ClauseComparisonCorpus:     comparisonCorpus(candidate, candidate.Comparison),
+		ClauseComparisonCorpus:     comparisonCorpus(policy, candidate, candidate.Comparison),
 		ClauseNoMetricRegression:   Unsupported(ClauseNoMetricRegression),
 		ClauseDigestConsistency:    digestConsistency(candidate),
 		ClauseCertifiedBackend:     Unsupported(ClauseCertifiedBackend),

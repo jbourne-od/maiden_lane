@@ -1,6 +1,7 @@
 package promotion
 
 import (
+	"github.com/optimaldynamics/maiden-lane/internal/ports"
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
 )
 
@@ -49,12 +50,31 @@ type ComparisonEvidence struct {
 // In particular the world is checked per artifact, not taken from the request that
 // produced the evidence: a side run reporting the right world is a projection, and no
 // projection may carry authorization weight.
-func comparisonCorpus(candidate Candidate, evidence *ComparisonEvidence) ClauseResult {
+func comparisonCorpus(
+	policy ports.TargetPolicy, candidate Candidate, evidence *ComparisonEvidence,
+) ClauseResult {
 	if !candidate.sealed() || evidence == nil {
 		return Unestablished(ClauseComparisonCorpus)
 	}
 	comparison := evidence.Comparison
-	if comparison.ID() == "" {
+	if comparison.ID() == "" || policy.RequiredProfileID == "" {
+		return Unestablished(ClauseComparisonCorpus)
+	}
+
+	// The comparison must be under the profile the target requires.
+	//
+	// Nothing else establishes this. The readiness clause independently proves the
+	// promoted assessment is under the required profile, and everything below
+	// independently proves the replay evidence is under the COMPARISON's profile — so
+	// without this the gate can pass clause 4 under one profile and clause 6 under
+	// another, and every implemented clause is satisfied by answers to two different
+	// questions. Promotion is defined around one pinned completeness profile.
+	//
+	// Unevaluated rather than adverse, for the same reason an assessment under the wrong
+	// profile is: a comparison under another profile says nothing about the required one,
+	// so the corrective action is to supply comparison evidence under it, not to
+	// investigate a result.
+	if comparison.Profile() != policy.RequiredProfileID {
 		return Unestablished(ClauseComparisonCorpus)
 	}
 
@@ -126,6 +146,19 @@ func sideCovers(
 			return Failed(ClauseComparisonCorpus), false
 		}
 		if assessment.ProfileID() != comparison.Profile() {
+			return Failed(ClauseComparisonCorpus), false
+		}
+
+		// And the verdict must be `ready`, not merely taken. Without this the clause
+		// means "these were assessed using the same questionnaire" rather than "both
+		// actually met it" — a materially weaker proposition, and the one §14.2 rules out
+		// when it says an optimizer-ready baseline cannot be compared to a merely
+		// CM-ready candidate.
+		//
+		// ClauseReadyAssessment does not cover this. That clause asks about the PROMOTED
+		// checkpoint under the target's profile, and says nothing about the baseline
+		// replay cases or about the candidate's other cases.
+		if assessment.Verdict() != semantic.Ready {
 			return Failed(ClauseComparisonCorpus), false
 		}
 
