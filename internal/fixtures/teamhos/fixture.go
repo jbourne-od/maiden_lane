@@ -16,6 +16,7 @@ package teamhos
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
 )
@@ -40,6 +41,11 @@ const (
 
 	CheckpointTeamFormed        semantic.CheckpointKey = "team_formed.v1"
 	CheckpointTeamHOSAggregated semantic.CheckpointKey = "team_hos_aggregated.v1"
+
+	// CheckpointTeamHOSRevised is the same checkpoint under a revised key, which is what
+	// ComparisonPlans renames to. It is declared here rather than inline so a reader
+	// finds both keys in one place.
+	CheckpointTeamHOSRevised semantic.CheckpointKey = "team_hos_aggregated.v2"
 
 	ProfileCM        semantic.ProfileKey = "cm.v1"
 	ProfileOptimizer semantic.ProfileKey = "optimizer.v1"
@@ -193,6 +199,71 @@ func newInitialState(schema semantic.Schema, variant Variant) (semantic.State, e
 		return semantic.State{}, err
 	}
 	return semantic.NewState(schema, lineage, []semantic.Entity{driverA, driverB}, nil)
+}
+
+// ComparisonPlans compiles two ratified plans that differ only by a renamed checkpoint.
+//
+// This is the shape a promotion comparison exists for: a checkpoint whose semantics were
+// revised beside one that was not. The two plans share a schema and a ruleset, so one
+// corpus replays under both, while their PlanIDs differ because a checkpoint key
+// participates in plan identity.
+//
+// It lives here because these are team-HOS declarations, and this package is the one
+// place they are authored. A second copy elsewhere would be a second ratified fixture
+// able to drift from this one.
+func ComparisonPlans() (baseline, candidate semantic.Plan, err error) {
+	schema, err := newSchema()
+	if err != nil {
+		return semantic.Plan{}, semantic.Plan{}, fmt.Errorf("teamhos: schema: %w", err)
+	}
+	baseline, err = compilePlan(newCompileRequest(schema))
+	if err != nil {
+		return semantic.Plan{}, semantic.Plan{}, fmt.Errorf("teamhos: baseline plan: %w", err)
+	}
+
+	renamedRequest := newCompileRequest(schema)
+	checkpoints := slices.Clone(renamedRequest.Rules.Checkpoints)
+	renamed := false
+	for i := range checkpoints {
+		if checkpoints[i].Key == CheckpointTeamHOSAggregated {
+			checkpoints[i].Key = CheckpointTeamHOSRevised
+			renamed = true
+		}
+	}
+	if !renamed {
+		return semantic.Plan{}, semantic.Plan{},
+			fmt.Errorf("teamhos: the ruleset no longer declares %s", CheckpointTeamHOSAggregated)
+	}
+	renamedRequest.Rules.Checkpoints = checkpoints
+	candidate, err = compilePlan(renamedRequest)
+	if err != nil {
+		return semantic.Plan{}, semantic.Plan{}, fmt.Errorf("teamhos: candidate plan: %w", err)
+	}
+
+	if baseline.ID() == candidate.ID() {
+		// Refused rather than returned. Two identical plans would make every comparison
+		// built from them symmetric, and a symmetric fixture cannot distinguish code that
+		// uses one side for both.
+		return semantic.Plan{}, semantic.Plan{},
+			fmt.Errorf("teamhos: the two comparison plans are identical")
+	}
+	return baseline, candidate, nil
+}
+
+// compilePlan compiles one request and refuses anything that is not a plan.
+func compilePlan(request semantic.CompileRequest) (semantic.Plan, error) {
+	compilation, err := semantic.Compile(request)
+	if err != nil {
+		return semantic.Plan{}, err
+	}
+	if failure, refused := compilation.Failure(); refused {
+		return semantic.Plan{}, fmt.Errorf("did not compile: %v", failure.Diagnostics())
+	}
+	plan, ok := compilation.Plan()
+	if !ok {
+		return semantic.Plan{}, fmt.Errorf("compilation produced neither plan nor failure")
+	}
+	return plan, nil
 }
 
 // newCompileRequest instantiates the two closed ratified transformations

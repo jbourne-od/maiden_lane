@@ -607,3 +607,69 @@ func TestTheConstructorsProduceTheCanonicalVectorBytes(t *testing.T) {
 		t.Fatal("NewComparison does not encode through the canonical helper")
 	}
 }
+
+// Production break caught: CheckpointID derives an identity for any (plan, key) pair,
+// including a key the plan never declares. Such an identity is perfectly well formed and
+// names a checkpoint that cannot be realized, so the ONLY thing separating it from a real
+// one is the refusal.
+//
+// A rehydrator asks about keys it already read out of the plan and so never reaches this,
+// which is precisely why it needs its own test: the first caller to pass a key from
+// outside — a client naming a checkpoint in a correspondence — is the one that would
+// otherwise get a comparison over a checkpoint nothing produces.
+func TestPlanRefusesToIdentifyAnUndeclaredCheckpoint(t *testing.T) {
+	plan, _ := comparisonPlans(t)
+
+	declaredKey := plan.Checkpoints()[0].Key
+	if _, declared := plan.CheckpointID(declaredKey); !declared {
+		t.Fatalf("the plan refused to identify %q, which it declares", declaredKey)
+	}
+
+	for _, key := range []CheckpointKey{
+		"",
+		"team_hos_reconciled.v2", // real, but declared by the OTHER plan
+		"team_hos_aggregated.v2", // plausible successor nobody declared
+		"not_a_checkpoint",
+	} {
+		if identity, declared := plan.CheckpointID(key); declared {
+			t.Errorf("the plan identified undeclared checkpoint %q as %s", key, identity)
+		}
+	}
+}
+
+// The identity a plan reports must be the one the comparison policy derives internally.
+// Two derivations of one thing can drift, and if they did, a correspondence authored by
+// key would name a checkpoint no reader could find by identity.
+func TestPlanCheckpointIDAgreesWithTheDerivedCorrespondence(t *testing.T) {
+	baseline, candidate := comparisonPlans(t)
+	const (
+		sharedKey   CheckpointKey = "team_formed.v1"
+		baselineKey CheckpointKey = "team_hos_aggregated.v1"
+		renamedKey  CheckpointKey = "team_hos_reconciled.v2"
+	)
+
+	policy, err := NewComparisonPolicy(baseline, candidate, []CheckpointPair{
+		{Baseline: sharedKey, Candidate: sharedKey},
+		{Baseline: baselineKey, Candidate: renamedKey},
+	})
+	if err != nil {
+		t.Fatalf("NewComparisonPolicy: %v", err)
+	}
+
+	wantBaseline, declared := baseline.CheckpointID(baselineKey)
+	if !declared {
+		t.Fatalf("the baseline plan does not declare %q", baselineKey)
+	}
+	wantCandidate, declared := candidate.CheckpointID(renamedKey)
+	if !declared {
+		t.Fatalf("the candidate plan does not declare %q", renamedKey)
+	}
+
+	got, found := policy.CandidateFor(wantBaseline)
+	if !found {
+		t.Fatal("the policy declares no correspondence for the identity the plan reports")
+	}
+	if got != wantCandidate {
+		t.Fatalf("correspondence candidate = %s, want %s", got, wantCandidate)
+	}
+}

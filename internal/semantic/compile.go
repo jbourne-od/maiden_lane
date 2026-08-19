@@ -182,6 +182,33 @@ func (p Plan) Transformations() []CompiledTransformation {
 // Checkpoints returns declarations ordered by prefix and then semantic key.
 func (p Plan) Checkpoints() []CheckpointDeclaration { return slices.Clone(p.checkpoints) }
 
+// CheckpointID derives the identity of a checkpoint this plan declares, and reports
+// whether the plan declares it at all.
+//
+// It is a forward derivation, not a lookup table: the identity is recomputed from this
+// plan's identity and the declared key every time. That keeps the kernel's one-way rule
+// intact, because nothing here turns a CheckpointID back into anything.
+//
+// The undeclared case is reported rather than derived. A CheckpointID can be computed
+// for any (plan, key) pair, including a key the plan never declares, and such an
+// identity would look entirely well formed while naming a checkpoint that cannot be
+// realized. Refusing to produce one is what makes "this plan declares that checkpoint"
+// a statement a caller can obtain rather than assume.
+func (p Plan) CheckpointID(key CheckpointKey) (CheckpointID, bool) {
+	if !slices.ContainsFunc(p.checkpoints, func(declared CheckpointDeclaration) bool {
+		return declared.Key == key
+	}) {
+		return "", false
+	}
+	identity, err := checkpointIdentity(p.id, key)
+	if err != nil {
+		// Unreachable for a declared key: compilation already accepted it, and the
+		// encoder refuses only what compilation would have refused first.
+		return "", false
+	}
+	return identity, true
+}
+
 // MustTransformation returns an accepted transformation or panics when the
 // caller names a rule outside this immutable plan.
 func (p Plan) MustTransformation(id RuleID) CompiledTransformation {
