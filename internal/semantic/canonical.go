@@ -141,6 +141,7 @@ const (
 	journalEntryDomainTag       = "maiden-lane.journal-entry.v1"
 	journalPrefixDomainTag      = "maiden-lane.journal-prefix.v1"
 	expressionDomainTag         = "maiden-lane.expression.v1"
+	selectorDomainTag           = "maiden-lane.selector.v1"
 	protectedFailureDomainTag   = "maiden-lane.protected-invariant-failure.v1"
 	artifactFailureDomainTag    = "maiden-lane.artifact-integrity-failure.v1"
 	checkpointIDDomainTag       = "maiden-lane.checkpoint-id.v1"

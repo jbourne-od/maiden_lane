@@ -179,9 +179,21 @@ exists to prevent.
 Slice 2 also owns a constraint slice 1 cannot express: today `equal(driver.x, team.y)`
 type-checks, because `ExprType` carries only the scalar kind. Whether an expression may name
 more than one entity kind is a question about what a selector binds, so it is answered here.
+The answer: a selector's predicate may name only the selector's own kind, checked by walking
+the expression at compile time, because a path naming any other kind has no referent under the
+binding the selector establishes.
 
-**Slice 3 — evaluation.** Evaluating an `Expr` against a state, a pinned world and a binding
-from slice 2. Deterministic, total, refusing rather than defaulting on absent fields.
+**Scope correction, recorded rather than absorbed.** Selecting requires evaluating the
+predicate against a candidate entity, which is evaluation — so slice 2 necessarily contains
+it. That does not reinstate the ordering the reorder rejected: what could not come first was
+evaluation with *no* binding, and selection is precisely what supplies one. Evaluating an
+expression against a bound entity and selecting with it are one indivisible thing and ship
+together. What remains for slice 3 is evaluation in contexts a single bound entity does not
+supply — group-scoped expressions above all.
+
+**Slice 3 — evaluation beyond a single binding.** Group-scoped expressions and whatever else a
+single bound entity cannot supply. Evaluation against one bound entity ships in slice 2,
+because selection cannot be built without it. Deterministic, total, refusing rather than defaulting on absent fields.
 
 ## Index of everything else
 
