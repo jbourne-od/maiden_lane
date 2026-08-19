@@ -152,6 +152,12 @@ type executionEntry struct {
 
 var _ ports.ExecutionStore = (*Store)(nil)
 
+// ErrNotReattemptable reports an execution that cannot be returned to the queue
+// because it produced a real answer. Only a computation that could not be attempted
+// at all is reattemptable; re-running one that ran and refused would reproduce the
+// same refusal, so asking for it is asking for a different answer to one question.
+var ErrNotReattemptable = errors.New("memory: execution produced a result and cannot be reattempted")
+
 // ErrNotQueued reports an execution that is absent, or already terminal and
 // therefore no longer accepting an outcome. It is distinct from
 // ErrIncompleteRecord, which means the caller's argument was malformed: a caller
@@ -310,6 +316,47 @@ func (s *Store) Fail(ctx context.Context, tenant ports.TenantID, executionID sem
 	entry.failureReason = reason
 	entry.result = nil
 	entry.leaseExpiry = time.Time{}
+	return nil
+}
+
+// Reattempt returns an execution that could not be attempted to the queue.
+//
+// Only a failure with no result qualifies. The two states share ExecutionFailed and
+// are distinguished by result presence, which is the same distinction rehydration
+// and corpus progress both draw — and both had to be corrected for collapsing it.
+// Enforcing it here makes it structural rather than a rule each caller remembers.
+func (s *Store) Reattempt(
+	ctx context.Context, tenant ports.TenantID, executionID semantic.ExecutionID,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := executionKey{tenant: tenant, executionID: executionID}
+	entry, present := s.executions[key]
+	if !present {
+		return ErrNotQueued
+	}
+	if entry.status != ports.ExecutionFailed || entry.result != nil {
+		return ErrNotReattemptable
+	}
+
+	entry.status = ports.ExecutionPending
+	entry.failureReason = ""
+	entry.leaseExpiry = time.Time{}
+
+	// Rewind the claim cursor to this entry, or a reattempt behind the cursor would
+	// never be claimed and the queue would silently ignore it.
+	for i, ordered := range s.executionOrder {
+		if ordered == key {
+			if i < s.claimCursor {
+				s.claimCursor = i
+			}
+			break
+		}
+	}
 	return nil
 }
 

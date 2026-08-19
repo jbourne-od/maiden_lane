@@ -22,6 +22,7 @@ import (
 func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.ExecutionStore) {
 	t.Helper()
 
+	runReattemptContract(t, newStore)
 	t.Run("enqueues idempotently on the derived identity", func(t *testing.T) {
 		// ExecutionID is derived from the semantic request, so a repeated
 		// submission is necessarily the same execution. If it created a second
@@ -484,6 +485,200 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 // waitPast sleeps just past a lease so an expiry is observable. Leases are
 // operational state, so a test may legitimately observe the clock here; nothing
 // semantic depends on it.
+// Reattempt returns an execution that could not be attempted to the queue, and refuses
+// anything that produced a real answer.
+//
+// This exists because execution identity is derived: a caller cannot clear a terminally
+// failed execution by resubmitting it, since the same semantic request resolves to the
+// same record. Without this operation such an execution is stuck forever, which blocks
+// anything that needs every case of a set to answer.
+func runReattemptContract(t *testing.T, newStore func(*testing.T) ports.ExecutionStore) {
+	t.Helper()
+
+	t.Run("returns an unattempted execution to the queue", func(t *testing.T) {
+		store := newStore(t)
+		request := ExecutionRequestFixture(t, "acme", "a")
+		mustEnqueue(t, store, request)
+		if _, _, err := store.Claim(t.Context(), time.Minute); err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
+		if err := store.Fail(t.Context(), "acme", request.ExecutionID, "plan_absent"); err != nil {
+			t.Fatalf("Fail: %v", err)
+		}
+
+		// A claim BEFORE the reattempt, which finds nothing. This step is load-bearing
+		// and its absence made the next assertion vacuous: an implementation may skip
+		// terminal entries at the head of its queue permanently, and only a claim that
+		// has already passed this entry can expose a reattempt that fails to bring it
+		// back. Without this poll the entry was never passed, so the reattempt had
+		// nothing to undo. Verified — removing the rewind left the test green.
+		if _, found, err := store.Claim(t.Context(), time.Minute); err != nil || found {
+			t.Fatalf("a terminally failed execution was claimable: found=%t err=%v", found, err)
+		}
+
+		if err := store.Reattempt(t.Context(), "acme", request.ExecutionID); err != nil {
+			t.Fatalf("Reattempt: %v", err)
+		}
+
+		record, found, err := store.Get(t.Context(), "acme", request.ExecutionID)
+		if err != nil || !found {
+			t.Fatalf("Get: found=%t err=%v", found, err)
+		}
+		if record.Status != ports.ExecutionPending {
+			t.Fatalf("status = %s, want pending", record.Status)
+		}
+		if record.FailureReason != "" {
+			t.Fatalf("failure reason = %q, want it cleared", record.FailureReason)
+		}
+		// The identity and the inputs are unchanged, because nothing about the semantic
+		// request was wrong. A retry that produced a different execution would defeat the
+		// derived identity entirely.
+		if record.Request.ExecutionID != request.ExecutionID ||
+			record.Request.RunID != request.RunID {
+			t.Fatal("reattempting changed the execution's identity")
+		}
+
+		// AND IT MUST ACTUALLY BE CLAIMABLE. A reattempt that leaves the row unclaimable
+		// is the quietest possible way for a retry to do nothing.
+		claimed, ok, err := store.Claim(t.Context(), time.Minute)
+		if err != nil || !ok {
+			t.Fatalf("a reattempted execution was not claimable: ok=%t err=%v", ok, err)
+		}
+		if claimed.ExecutionID != request.ExecutionID {
+			t.Fatalf("claimed %s, want the reattempted %s",
+				claimed.ExecutionID, request.ExecutionID)
+		}
+	})
+
+	t.Run("a reattempted execution can then complete normally", func(t *testing.T) {
+		store := newStore(t)
+		request := ExecutionRequestFixture(t, "acme", "a")
+		mustEnqueue(t, store, request)
+		if _, _, err := store.Claim(t.Context(), time.Minute); err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
+		if err := store.Fail(t.Context(), "acme", request.ExecutionID, "internal_error"); err != nil {
+			t.Fatalf("Fail: %v", err)
+		}
+		if err := store.Reattempt(t.Context(), "acme", request.ExecutionID); err != nil {
+			t.Fatalf("Reattempt: %v", err)
+		}
+		if _, _, err := store.Claim(t.Context(), time.Minute); err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
+		if err := store.Complete(t.Context(),
+			ExecutionResultFixture(request, ports.ExecutionSucceeded)); err != nil {
+			t.Fatalf("Complete after reattempt: %v", err)
+		}
+		record, _, err := store.Get(t.Context(), "acme", request.ExecutionID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if record.Status != ports.ExecutionSucceeded || record.Result == nil {
+			t.Fatalf("status = %s with result=%t, want succeeded with a result",
+				record.Status, record.Result != nil)
+		}
+	})
+
+	t.Run("refuses an execution that produced a real answer", func(t *testing.T) {
+		// The distinction the whole operation rests on. A deterministic semantic
+		// rejection is a completed execution carrying a result, and re-running it
+		// reproduces that result byte for byte — so retrying it is a request for a
+		// different answer to the same question, not a retry.
+		for _, status := range []ports.ExecutionStatus{
+			ports.ExecutionSucceeded, ports.ExecutionFailed,
+		} {
+			t.Run(string(status)+" with a result", func(t *testing.T) {
+				store := newStore(t)
+				request := ExecutionRequestFixture(t, "acme", "a")
+				mustEnqueue(t, store, request)
+				if _, _, err := store.Claim(t.Context(), time.Minute); err != nil {
+					t.Fatalf("Claim: %v", err)
+				}
+				if err := store.Complete(t.Context(),
+					ExecutionResultFixture(request, status)); err != nil {
+					t.Fatalf("Complete: %v", err)
+				}
+				if err := store.Reattempt(t.Context(), "acme", request.ExecutionID); err == nil {
+					t.Fatalf("a %s execution carrying a result was reattempted", status)
+				}
+				// And it is untouched.
+				record, _, err := store.Get(t.Context(), "acme", request.ExecutionID)
+				if err != nil {
+					t.Fatalf("Get: %v", err)
+				}
+				if record.Status != status || record.Result == nil {
+					t.Fatal("a refused reattempt still altered the execution")
+				}
+			})
+		}
+	})
+
+	t.Run("refuses an execution still in flight", func(t *testing.T) {
+		store := newStore(t)
+		request := ExecutionRequestFixture(t, "acme", "a")
+		mustEnqueue(t, store, request)
+		// Pending: already claimable, so there is nothing to return to the queue.
+		if err := store.Reattempt(t.Context(), "acme", request.ExecutionID); err == nil {
+			t.Fatal("a pending execution was reattempted")
+		}
+		if _, _, err := store.Claim(t.Context(), time.Minute); err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
+		// Running: an attempt is in progress and its lease governs recovery.
+		if err := store.Reattempt(t.Context(), "acme", request.ExecutionID); err == nil {
+			t.Fatal("a running execution was reattempted")
+		}
+	})
+
+	t.Run("reports an absent execution rather than reattempting one", func(t *testing.T) {
+		store := newStore(t)
+		other := ExecutionRequestFixture(t, "acme", "a")
+		mustEnqueue(t, store, other)
+
+		if err := store.Reattempt(t.Context(), "acme",
+			semantic.ExecutionID("sha256:"+repeat("9", 64))); err == nil {
+			t.Fatal("an execution nobody enqueued was reattempted")
+		}
+		// Another tenant's execution is absent too, so a reattempt cannot reach it.
+		if err := store.Reattempt(t.Context(), "globex", other.ExecutionID); err == nil {
+			t.Fatal("another tenant's execution was reattempted")
+		}
+	})
+
+	t.Run("is idempotent only in the sense that a second call refuses", func(t *testing.T) {
+		store := newStore(t)
+		request := ExecutionRequestFixture(t, "acme", "a")
+		mustEnqueue(t, store, request)
+		if _, _, err := store.Claim(t.Context(), time.Minute); err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
+		if err := store.Fail(t.Context(), "acme", request.ExecutionID, "internal_error"); err != nil {
+			t.Fatalf("Fail: %v", err)
+		}
+		if err := store.Reattempt(t.Context(), "acme", request.ExecutionID); err != nil {
+			t.Fatalf("first Reattempt: %v", err)
+		}
+		// The execution is pending now, so a second call finds nothing to return. A
+		// caller repeating the operation learns it already happened rather than
+		// queueing the work twice.
+		if err := store.Reattempt(t.Context(), "acme", request.ExecutionID); err == nil {
+			t.Fatal("a second reattempt succeeded on an already-pending execution")
+		}
+	})
+
+	t.Run("stops on a cancelled context", func(t *testing.T) {
+		store := newStore(t)
+		request := ExecutionRequestFixture(t, "acme", "a")
+		mustEnqueue(t, store, request)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		if err := store.Reattempt(ctx, "acme", request.ExecutionID); err == nil {
+			t.Fatal("Reattempt succeeded on a cancelled context")
+		}
+	})
+}
+
 func waitPast(lease time.Duration) { time.Sleep(lease + 25*time.Millisecond) }
 
 func executionKey(i int) string { return "exec-" + string(rune('a'+i%26)) + string(rune('0'+i/26)) }

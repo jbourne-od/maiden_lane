@@ -195,9 +195,12 @@ request keys, no deduplication store, and no expiry policy.
 
 One consequence is worth knowing before you rely on it: because identity is
 derived, an execution that reaches a terminal failure cannot be cleared by
-resubmitting, since the same request resolves to the same record. Retrying a
-terminally failed execution needs an explicit operation, which does not exist
-yet.
+resubmitting, since the same request resolves to the same record. Returning one to
+the queue is therefore an explicit store operation rather than a resubmission, and
+it applies only to an execution that could not be *attempted* — one that failed
+with no result. A deterministic semantic rejection is a completed execution
+carrying a real answer, and re-running it would reproduce that answer byte for
+byte, so it is refused rather than retried.
 
 ### Promotion and publication
 

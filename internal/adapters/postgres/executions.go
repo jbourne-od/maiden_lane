@@ -42,6 +42,11 @@ const executionFormat = 1
 // the caller's argument was malformed.
 var ErrNotQueued = errors.New("postgres: execution is absent or already terminal")
 
+// ErrNotReattemptable reports an execution that cannot be returned to the queue because
+// it produced a real answer. Only a computation that could not be attempted at all is
+// reattemptable; re-running one that ran and refused would reproduce the same refusal.
+var ErrNotReattemptable = errors.New("postgres: execution produced a result and cannot be reattempted")
+
 // ErrUnusableInput reports a request whose pinned input cannot be executed.
 var ErrUnusableInput = errors.New("postgres: execution request has no usable pinned input")
 
@@ -250,6 +255,45 @@ func (s *Store) Fail(ctx context.Context, tenant ports.TenantID, executionID sem
 		return ErrNotQueued
 	}
 	return nil
+}
+
+// Reattempt returns an execution that could not be attempted to the queue.
+//
+// The eligibility test is in the WHERE clause, so the database refuses an ineligible
+// row rather than trusting a check this code made a moment earlier against a value
+// that may since have changed. `result IS NULL` is what distinguishes a computation
+// that could not be attempted from one that ran and refused — the same distinction
+// rehydration and corpus progress both draw, enforced here at the row.
+func (s *Store) Reattempt(
+	ctx context.Context, tenant ports.TenantID, executionID semantic.ExecutionID,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE executions
+		SET status = $3, failure_reason = '', lease_expires_at = NULL
+		WHERE tenant_id = $1 AND execution_id = $2
+		  AND status = $4 AND result IS NULL`,
+		string(tenant), string(executionID),
+		string(ports.ExecutionPending), string(ports.ExecutionFailed))
+	if err != nil {
+		return fmt.Errorf("postgres: execution could not be reattempted: %w", err)
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+
+	// Nothing updated: either there is no such execution for this tenant, or there is
+	// one that is not reattemptable. The two are different answers and a caller acts
+	// differently on each, so they are distinguished rather than collapsed into a
+	// single "no".
+	if _, found, err := s.Get(ctx, tenant, executionID); err != nil {
+		return err
+	} else if !found {
+		return ErrNotQueued
+	}
+	return ErrNotReattemptable
 }
 
 // Get reports the execution for this tenant, or absence.

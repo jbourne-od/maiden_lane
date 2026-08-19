@@ -261,6 +261,28 @@ type ExecutionStore interface {
 	// computation produced a real answer.
 	Fail(context.Context, TenantID, semantic.ExecutionID, string) error
 
+	// Reattempt returns an execution that could not be attempted to the queue.
+	//
+	// This exists because execution identity is DERIVED. A caller cannot clear a
+	// terminally failed execution by resubmitting it: the same semantic request
+	// resolves to the same record, so resubmission finds the failure rather than
+	// replacing it. Without an explicit operation such an execution is permanently
+	// stuck, which is a trap this codebase has documented and then run into three
+	// times — a corpus case that could not be attempted blocks its whole comparison
+	// forever.
+	//
+	// It reattempts ONLY an execution that failed without producing a result. That is
+	// the narrow case where retrying can change anything: Fail records it for a
+	// computation that could not be attempted at all. A deterministic semantic
+	// rejection is a completed execution carrying a result, and re-running it would
+	// reproduce that result byte for byte, so retrying it is not merely useless but a
+	// request to be given a different answer to the same question. Anything else is
+	// ErrNotReattemptable.
+	//
+	// The execution keeps its identity and its inputs. Nothing about the semantic
+	// request changes, because nothing about it was wrong.
+	Reattempt(context.Context, TenantID, semantic.ExecutionID) error
+
 	// Get reports the execution for this tenant, or absence. Another tenant's
 	// execution is absent, never an error.
 	Get(context.Context, TenantID, semantic.ExecutionID) (ExecutionRecord, bool, error)
