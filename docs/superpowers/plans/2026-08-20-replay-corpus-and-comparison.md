@@ -208,8 +208,22 @@ where "no correspondence exists" becomes a refusal with a reason rather than an 
 result.
 
 **Slice 3 — corpus persistence.** A corpus behind `ports`, both adapters, one contract
-suite. Append-only: a corpus is immutable once identified, because its identity is its
-contents, so "editing" one produces a different corpus and both must remain readable.
+suite. **Immutable, content-addressed persistence: `Put` is idempotent on the derived
+identity, with no update, no delete, and no version succession.**
+
+That phrasing is deliberate, because "append-only" describes the store and obscures what
+distinguishes a corpus from a target policy. Both stores are insert-only in the ordinary
+sense — records may be added and never updated or deleted. The difference is in what a
+write means:
+
+| | identity | write rule |
+|---|---|---|
+| target policy | a monotonically assigned version | successor / compare-and-swap |
+| corpus | a content address | idempotent insertion by derived identity |
+
+A corpus cannot be edited because editing it would produce a different corpus. The
+earlier one must stay readable regardless, because comparisons pin its identity and
+deleting it would leave them naming a set of cases nothing can reconstruct.
 
 **Slice 4 — running a side over a corpus.** Enqueueing every case for one plan and
 profile, and reporting which cases have completed. This is the expensive slice and the
