@@ -532,6 +532,9 @@ func TestSelectorIdentityCommitsToEveryComponent(t *testing.T) {
 		{"grouping", withGroupBy(base, ptr(field("driver.hos_anchor")))},
 		// Presence itself, in both slots: dropping an expression must move the bytes.
 		{"no predicate", withWhere(base, nil)},
+		// Cardinality changes too, because base's Exactly-2 is unsatisfiable ungrouped, so
+		// this subtest alone does not isolate the groupBy presence byte. The isolated
+		// comparison is below, against a selector differing in nothing else.
 		{"no grouping", withMembers(withGroupBy(base, nil), Cardinality{Kind: CardinalityAny})},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -562,6 +565,13 @@ func TestSelectorIdentityCommitsToEveryComponent(t *testing.T) {
 			t.Fatalf("a selector with no expressions encodes identically to a %s one", name)
 		}
 	}
+	// The groupBy presence byte in isolation: these differ in nothing but whether GroupBy is
+	// set, with cardinality and predicate held fixed.
+	withGrouping := mustCompileSelector(t, Selector{
+		Kind: "driver", GroupBy: ptr(groupKey()), Members: Cardinality{Kind: CardinalityAny}})
+	if string(bare.CanonicalBytes()) == string(withGrouping.CanonicalBytes()) {
+		t.Fatal("the groupBy presence byte is not encoded")
+	}
 
 	// And the schema participates, for the same reason it does in an expression: the
 	// selector's field paths mean nothing without the schema they were checked against.
@@ -584,6 +594,56 @@ func TestSelectorIdentityCommitsToEveryComponent(t *testing.T) {
 	}
 	if string(underNarrower.CanonicalBytes()) == string(baseline.CanonicalBytes()) {
 		t.Fatal("two selectors checked against different schemas share an identity")
+	}
+}
+
+// A BARE SELECTOR REACHES NO OTHER VALIDATION, so it is the shape that finds a guard living
+// in the wrong place. An earlier version validated the version only inside CompileExpression,
+// which a selector with neither a predicate nor a grouping never calls.
+func TestCompileSelectorRequiresAUsableVersion(t *testing.T) {
+	schema := expressionSchema(t)
+	bare := Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityAny}}
+	withExpr := Selector{
+		Kind:    "driver",
+		Where:   ptr(Expr{Kind: ExprExists, Field: "driver.hos_anchor"}),
+		Members: Cardinality{Kind: CardinalityAny},
+	}
+
+	for _, version := range []CompilerSemanticsVersion{"", CompilerSemanticsVersion([]byte{0xff})} {
+		// Both shapes, because the point is that the two must not disagree: adding a
+		// predicate is a change to a field the version check has no business depending on.
+		for name, selector := range map[string]Selector{"bare": bare, "with predicate": withExpr} {
+			if _, err := CompileSelector(schema, version, selector); err == nil {
+				t.Errorf("%s selector compiled under version %q", name, version)
+			}
+		}
+	}
+}
+
+// Production break caught, and it is the bool-equality defect one type down. An invalid
+// literal produced a result whose kind tag did not match its payload -- TypeInvalid with a
+// nil error -- so equal took the value path and Value.Equal's default returned false for two
+// byte-identical operands.
+//
+// The compiler already refuses this node. The evaluator's contract is to refuse un-compiled
+// input rather than answer it, so both halves must agree about the same input.
+func TestEvaluateRefusesAnInvalidLiteral(t *testing.T) {
+	state := selectorState(t, "a")
+	entity := state.Entities()[0]
+	invalid := Value{}
+	node := Expr{Kind: ExprLiteral, Literal: &invalid}
+
+	if _, err := evaluateExpr(node, entity); err == nil {
+		t.Fatal("an invalid literal evaluated")
+	}
+	// The composition that produced the wrong answer, not merely the leaf.
+	if _, err := evaluateExpr(
+		Expr{Kind: ExprEqual, Args: []Expr{node, node}}, entity); err == nil {
+		t.Fatal("equal over two invalid literals answered instead of refusing")
+	}
+	// And the compiler refuses it too, so the two halves agree.
+	if _, err := CompileExpression(expressionSchema(t), testCompilerVersion, node); err == nil {
+		t.Fatal("the compiler accepted an invalid literal, so the two halves now disagree")
 	}
 }
 

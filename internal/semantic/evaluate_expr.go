@@ -68,7 +68,18 @@ func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
 		if expr.Literal == nil {
 			return evaluated{}, fmt.Errorf("literal carries no value")
 		}
-		return evaluated{kind: literalKindOf(*expr.Literal), value: *expr.Literal}, nil
+		// The kind is derived through the SAME mapping the compiler uses, which errors on an
+		// invalid value. An earlier version had a second mapping here that returned
+		// TypeInvalid with a nil error, so equal(invalid, invalid) answered false: TypeInvalid
+		// is not TypeBool, so the comparison took the value path and Value.Equal's default arm
+		// returned false for two byte-identical operands. That is the bool-equality defect one
+		// type down -- a kind tag that does not match its payload -- and it existed because
+		// two mappings of ValueKind to ExprType disagreed about refusal.
+		kind, err := valueKindType(expr.Literal.Kind())
+		if err != nil {
+			return evaluated{}, fmt.Errorf("literal: %w", err)
+		}
+		return evaluated{kind: kind, value: *expr.Literal}, nil
 
 	case ExprField:
 		value, present, err := boundField(expr.Field, entity)
@@ -84,7 +95,13 @@ func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
 			// short circuit keeps it expressible.
 			return evaluated{}, fmt.Errorf("field %q is absent", expr.Field)
 		}
-		return evaluated{kind: literalKindOf(value), value: value}, nil
+		kind, err := valueKindType(value.Kind())
+		if err != nil {
+			// Unreachable: NewEntity and validateEntityFields refuse an invalid field value,
+			// which is the invariant literalKindOf's removed comment claimed for literals too.
+			return evaluated{}, fmt.Errorf("field %q: %w", expr.Field, err)
+		}
+		return evaluated{kind: kind, value: value}, nil
 
 	case ExprExists:
 		_, present, err := boundField(expr.Field, entity)
@@ -223,20 +240,4 @@ func boundField(path FieldPath, entity Entity) (Value, bool, error) {
 	}
 	value, present := entity.Field(name)
 	return value, present, nil
-}
-
-// literalKindOf maps a value's kind into the expression vocabulary, without the error path
-// that valueKindType needs at compile time: a Value that reached evaluation was already
-// validated when its entity or literal was built.
-func literalKindOf(value Value) ExprType {
-	switch value.Kind() {
-	case ValueString:
-		return TypeString
-	case ValueAtom:
-		return TypeAtom
-	case ValueInt64:
-		return TypeInt64
-	default:
-		return TypeInvalid
-	}
 }

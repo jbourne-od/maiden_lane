@@ -75,6 +75,15 @@ func (c CompiledSelector) CanonicalBytes() []byte { return bytes.Clone(c.canonic
 func CompileSelector(
 	schema Schema, version CompilerSemanticsVersion, selector Selector,
 ) (CompiledSelector, error) {
+	// UNCONDITIONALLY, at this function's own door. An earlier version validated the version
+	// only inside CompileExpression, which is reached only when Where or GroupBy is non-nil,
+	// so a bare selector compiled with an empty version written straight into its identity --
+	// and only the EMPTY case, since encoder.string still refuses invalid UTF-8. That is a
+	// third sibling entry point relying on a check that lives in one of the other two, which
+	// is the hole CompileExpression's own comment warns about, opened one function over.
+	if !validSemanticName(string(version)) {
+		return CompiledSelector{}, fmt.Errorf("selector has no usable compiler semantics version")
+	}
 	if !validSemanticName(string(selector.Kind)) {
 		return CompiledSelector{}, fmt.Errorf("selector has no entity kind")
 	}
