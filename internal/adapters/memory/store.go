@@ -68,6 +68,10 @@ type Store struct {
 	// Corpora are keyed by content identity, like plans, so storing one twice is the
 	// same corpus rather than a conflict and there is nothing to version.
 	corpora map[corpusKey]ports.CorpusRecord
+
+	// Comparisons are keyed by content identity for the same reason as corpora: the
+	// same question asked twice is the same comparison.
+	comparisons map[comparisonKey]ports.ComparisonRecord
 }
 
 // NewStore returns an empty store ready for concurrent use.
@@ -81,7 +85,8 @@ func NewStore() *Store {
 		publications:        map[publicationKey]ports.Publication{},
 		publicationVersions: map[targetKey]ports.PublicationVersion{},
 
-		corpora: map[corpusKey]ports.CorpusRecord{},
+		corpora:     map[corpusKey]ports.CorpusRecord{},
+		comparisons: map[comparisonKey]ports.ComparisonRecord{},
 	}
 }
 
