@@ -225,9 +225,20 @@ A corpus cannot be edited because editing it would produce a different corpus. T
 earlier one must stay readable regardless, because comparisons pin its identity and
 deleting it would leave them naming a set of cases nothing can reconstruct.
 
-**Slice 4 — running a side over a corpus.** Enqueueing every case for one plan and
-profile, and reporting which cases have completed. This is the expensive slice and the
-one where determinism does the work: a case already executed is already done.
+**Slice 4 — running a side over a corpus.** Enqueueing every case for one plan, and
+reporting which cases have completed. This is the expensive slice and the one where
+determinism does the work: a case already executed is already done.
+
+The profile is **not** an input to running, and the earlier wording here ("one plan and
+profile") was imprecise. The spine assesses every sealed checkpoint under every profile
+its plan compiled, so a profile is a read-side selector used when comparability picks
+which assessment to read.
+
+A side run has **no identity and no storage of its own**. A corpus, a plan, a world, an
+executor, and a provenance policy determine every case's `ExecutionID` through `BindRun`,
+so progress is a question answered by re-deriving those identities and looking them up
+rather than by reading a record somebody remembered to update. Nothing can drift from
+what it describes if nothing is stored.
 
 **Slice 5 — comparability evaluation, and clause 6.** The pure evaluation, then wiring
 `ClauseComparisonCorpus`. After this the gate answers seven of nine, and still refuses.

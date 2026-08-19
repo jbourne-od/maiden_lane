@@ -28,6 +28,20 @@ const (
 	// answered by supplying the missing piece, the other by correcting a pairing
 	// that is complete and wrong.
 	InputPublishReceiptMismatch InvalidInputCode = "PUBLISH_RECEIPT_MISMATCH"
+
+	// InputCorpusRunIncomplete means a corpus run request was missing a key part.
+	InputCorpusRunIncomplete InvalidInputCode = "CORPUS_RUN_INCOMPLETE"
+
+	// InputCorpusAbsent and InputCorpusRunPlanAbsent mean the named corpus or plan does
+	// not exist for this tenant. They are separate codes because an operator has to know
+	// which of the two names was wrong, and a single "not found" would send them to check
+	// both.
+	InputCorpusAbsent        InvalidInputCode = "CORPUS_ABSENT"
+	InputCorpusRunPlanAbsent InvalidInputCode = "CORPUS_RUN_PLAN_ABSENT"
+
+	// InputCorpusSchemaMismatch means the corpus's cases are not under the plan's schema,
+	// so no case could execute under it.
+	InputCorpusSchemaMismatch InvalidInputCode = "CORPUS_SCHEMA_MISMATCH"
 )
 
 // InvalidInputError reports malformed or unsupported canonical input at the
