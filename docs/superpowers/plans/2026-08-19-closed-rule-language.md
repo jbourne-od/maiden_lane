@@ -88,12 +88,24 @@ answer this; the analysis is not declared adequate before then.
 
 ## Committed slices
 
-**Slice 0 — commit the measurements.** A benchmark for execution cost against state size, and
-a compile-only table case for a multi-rule ruleset recording the diagnostics it produces. The
-figures motivating this programme came from throwaway probes and are not reproducible:
-`grep 'func Benchmark'` returns nothing. This runs first so later slices measure against
-something committed. It cannot answer decision 4's question, which needs set-scoped rules and
-therefore slice 3.
+**Slice 0 — commit the measurements. Done, and shipped with this plan.** The figures
+motivating this programme came from throwaway probes that were deleted, and a claim nobody can
+reproduce is not evidence, so the plan does not land without them.
+
+`BenchmarkExecutionByStateSize` (`internal/app/execution_bench_test.go`) holds the plan fixed
+at two rules and grows the state, so it measures what a transition pays for state it never
+reads. Observed: 15.1ms at 1,000 entities and 30.6ms at 2,000 — linear from roughly 200
+upward, at about 15µs per entity, with allocation growing linearly too at roughly 30KB and 94
+allocations per entity. Growth worse than linear here would have meant per-rule cost scales
+with total state, making one rule pair per team quadratic overall. It does not.
+
+`TestMultiInstanceRulesetBaseline` (`internal/semantic/multirule_baseline_test.go`) compiles a
+ruleset with one form transformation per instance and records the refusal: C(N,2) unresolved
+write conflicts, confirmed at 2, 3 and 10 instances — 45 at ten, because nothing in a field
+path distinguishes one team from another. It is labelled a baseline rather than a
+specification, since this programme is expected to change it.
+
+Neither answers decision 4's question, which is about **set-scoped** rules and needs slice 3.
 
 **Slice 1 — the expression AST.** `Expr` as a closed union, canonical bytes, compile-time type
 derivation. No execution, no rules.
