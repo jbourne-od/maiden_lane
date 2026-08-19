@@ -148,15 +148,14 @@ type executionEntry struct {
 	result        *ports.ExecutionResult
 	failureReason string
 	leaseExpiry   time.Time
+
+	// attempt is the generation currently holding this execution. Claim advances it, and
+	// an outcome offered under any other generation is refused — which is what stops an
+	// abandoned attempt writing across a reattempt boundary.
+	attempt ports.AttemptID
 }
 
 var _ ports.ExecutionStore = (*Store)(nil)
-
-// ErrNotReattemptable reports an execution that cannot be returned to the queue
-// because it produced a real answer. Only a computation that could not be attempted
-// at all is reattemptable; re-running one that ran and refused would reproduce the
-// same refusal, so asking for it is asking for a different answer to one question.
-var ErrNotReattemptable = errors.New("memory: execution produced a result and cannot be reattempted")
 
 // ErrNotQueued reports an execution that is absent, or already terminal and
 // therefore no longer accepting an outcome. It is distinct from
@@ -218,9 +217,9 @@ func (s *Store) Enqueue(ctx context.Context, request ports.ExecutionRequest) (bo
 // Available means pending, or running with an expired lease. Reclaiming is safe
 // because execution is deterministic: a second attempt reproduces byte-identical
 // artifacts, so at-least-once delivery cannot produce a divergent result.
-func (s *Store) Claim(ctx context.Context, lease time.Duration) (ports.ExecutionRequest, bool, error) {
+func (s *Store) Claim(ctx context.Context, lease time.Duration) (ports.ExecutionAttempt, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return ports.ExecutionRequest{}, false, err
+		return ports.ExecutionAttempt{}, false, err
 	}
 
 	s.mu.Lock()
@@ -250,15 +249,20 @@ func (s *Store) Claim(ctx context.Context, lease time.Duration) (ports.Execution
 		if !claimable {
 			continue
 		}
+		// A new generation. Every claim advances it, including one that reclaims after a
+		// lease lapsed, so the attempt that lost its lease can no longer report.
 		entry.status = ports.ExecutionRunning
 		entry.leaseExpiry = now.Add(lease)
-		return entry.request, true, nil
+		entry.attempt++
+		return ports.ExecutionAttempt{Request: entry.request, AttemptID: entry.attempt}, true, nil
 	}
-	return ports.ExecutionRequest{}, false, nil
+	return ports.ExecutionAttempt{}, false, nil
 }
 
 // Complete stores the result and takes the execution out of the queue.
-func (s *Store) Complete(ctx context.Context, result ports.ExecutionResult) error {
+func (s *Store) Complete(
+	ctx context.Context, attempt ports.AttemptID, result ports.ExecutionResult,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -281,6 +285,19 @@ func (s *Store) Complete(ctx context.Context, result ports.ExecutionResult) erro
 		// resurrect a failed execution or overwrite another attempt's outcome.
 		return ErrNotQueued
 	}
+	if entry.status != ports.ExecutionRunning {
+		// An outcome belongs to an attempt, and an unclaimed execution has no attempt.
+		// Without this, generation zero would be a universal key: an unclaimed entry's
+		// generation is zero, so anyone presenting zero could report an outcome for work
+		// nobody leased.
+		return ErrNotQueued
+	}
+	if entry.attempt != attempt {
+		// A generation that no longer holds this execution. Determinism makes a stale
+		// result harmless as content, but not as a lifecycle transition: this write would
+		// terminate a generation that is still running.
+		return ports.ErrAttemptSuperseded
+	}
 	stored := cloneExecutionResult(result)
 	entry.result = &stored
 	entry.status = result.Status
@@ -294,7 +311,10 @@ func (s *Store) Complete(ctx context.Context, result ports.ExecutionResult) erro
 // This is not a semantic rejection. A deterministic refusal is a completed
 // execution whose result carries a typed failure, because the computation
 // produced a real answer.
-func (s *Store) Fail(ctx context.Context, tenant ports.TenantID, executionID semantic.ExecutionID, reason string) error {
+func (s *Store) Fail(
+	ctx context.Context, tenant ports.TenantID, executionID semantic.ExecutionID,
+	attempt ports.AttemptID, reason string,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -311,6 +331,16 @@ func (s *Store) Fail(ctx context.Context, tenant ports.TenantID, executionID sem
 		// artifacts. It does not cover a late Fail: that would replace a real
 		// outcome with an operational one and destroy the result.
 		return ErrNotQueued
+	}
+	if entry.status != ports.ExecutionRunning {
+		return ErrNotQueued
+	}
+	if entry.attempt != attempt {
+		// The generation boundary that makes reattempting safe. Without this an
+		// abandoned attempt's operational failure would terminate the retry generation
+		// performed to escape it — and would record its own diagnosis for a run that
+		// never happened in that generation.
+		return ports.ErrAttemptSuperseded
 	}
 	entry.status = ports.ExecutionFailed
 	entry.failureReason = reason
@@ -337,15 +367,23 @@ func (s *Store) Reattempt(
 	key := executionKey{tenant: tenant, executionID: executionID}
 	entry, present := s.executions[key]
 	if !present {
-		return ErrNotQueued
+		return ports.ErrExecutionAbsent
 	}
 	if entry.status != ports.ExecutionFailed || entry.result != nil {
-		return ErrNotReattemptable
+		return ports.ErrExecutionNotReattemptable
 	}
 
 	entry.status = ports.ExecutionPending
 	entry.failureReason = ""
 	entry.leaseExpiry = time.Time{}
+	// A new generation begins here as well as at Claim, so a generation number is
+	// never reused across a reattempt boundary.
+	//
+	// No test distinguishes this line: the attempt that failed is already refused
+	// because reporting an outcome requires a running execution, and a reattempted
+	// one is pending. It is kept because it makes the no-reuse property hold on the
+	// column itself rather than as a consequence of the status check.
+	entry.attempt++
 
 	// Rewind the claim cursor to this entry, or a reattempt behind the cursor would
 	// never be claimed and the queue would silently ignore it.

@@ -204,10 +204,12 @@ func TestACaseThatCouldNotBeAttemptedDoesNotCompleteASide(t *testing.T) {
 
 	// The third could not be attempted. Fail records this deliberately, and its lifecycle
 	// status is identical to the refusal above.
-	if _, _, err := fixture.store.Claim(t.Context(), leaseForTest); err != nil {
+	leased, _, err := fixture.store.Claim(t.Context(), leaseForTest)
+	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	if err := fixture.store.Fail(t.Context(), "acme", cases[2].ExecutionID(), "plan_absent"); err != nil {
+	if err := fixture.store.Fail(t.Context(), "acme", leased.Request.ExecutionID,
+		leased.AttemptID, "plan_absent"); err != nil {
 		t.Fatalf("Fail: %v", err)
 	}
 
@@ -451,10 +453,11 @@ func completeCase(t *testing.T, fixture corpusRunSetup, run CaseRun, status port
 	if err != nil || !found {
 		t.Fatalf("Get: found=%t err=%v", found, err)
 	}
-	if _, _, err := fixture.store.Claim(t.Context(), leaseForTest); err != nil {
+	leased, _, err := fixture.store.Claim(t.Context(), leaseForTest)
+	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
-	if err := fixture.store.Complete(t.Context(), ports.ExecutionResult{
+	if err := fixture.store.Complete(t.Context(), leased.AttemptID, ports.ExecutionResult{
 		TenantID: "acme", ExecutionID: stored.Request.ExecutionID, Status: status,
 		SpineStatus: "succeeded",
 	}); err != nil {

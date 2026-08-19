@@ -4,6 +4,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/optimaldynamics/maiden-lane/internal/adapters/memory"
 	"github.com/optimaldynamics/maiden-lane/internal/fixtures/teamhos"
@@ -370,7 +371,7 @@ func TestAStoredExecutionIdentityMustBeDerivableFromItsInputs(t *testing.T) {
 				t.Fatalf("Project: %v", err)
 			}
 			projected.ExecutionID = test.request.ExecutionID
-			if err := store.Complete(t.Context(), projected); err != nil {
+			if err := store.Complete(t.Context(), claimAttempt(t, store), projected); err != nil {
 				t.Fatalf("Complete: %v", err)
 			}
 
@@ -447,7 +448,7 @@ func TestATerminallyUnattemptedExecutionIsNotPending(t *testing.T) {
 		t.Fatalf("Enqueue: %v", err)
 	}
 	// The worker records this when an execution could not be attempted at all.
-	if err := store.Fail(t.Context(), request.TenantID, request.ExecutionID, "plan_absent"); err != nil {
+	if err := store.Fail(t.Context(), request.TenantID, request.ExecutionID, claimAttempt(t, store), "plan_absent"); err != nil {
 		t.Fatalf("Fail: %v", err)
 	}
 
@@ -508,7 +509,7 @@ func TestAnExecutionNamingAnAbsentPlanIsAnIntegrityFailure(t *testing.T) {
 	if _, err := store.Enqueue(t.Context(), record.Request); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
-	if err := store.Complete(t.Context(), *record.Result); err != nil {
+	if err := store.Complete(t.Context(), claimAttempt(t, store), *record.Result); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 
@@ -614,7 +615,7 @@ func storedExecution(t *testing.T, variant teamhos.Variant) (RehydrationStores, 
 	if err != nil {
 		t.Fatalf("Project: %v", err)
 	}
-	if err := store.Complete(t.Context(), projected); err != nil {
+	if err := store.Complete(t.Context(), claimAttempt(t, store), projected); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 
@@ -678,7 +679,7 @@ func storeWithDoctoredResult(
 	}
 	doctored := cloneResult(*record.Result)
 	doctor(&doctored)
-	if err := store.Complete(t.Context(), doctored); err != nil {
+	if err := store.Complete(t.Context(), claimAttempt(t, store), doctored); err != nil {
 		t.Fatalf("Complete: %v", err)
 	}
 	return RehydrationStores{Plans: store, Executions: store}
@@ -905,4 +906,18 @@ func genuineRequest(
 		RunID: binding.SemanticRunID(), PlanID: plan.ID(),
 		Input: executionInput(inputs),
 	}
+}
+
+// claimAttempt claims the next queued execution and returns its attempt.
+//
+// Reporting an outcome requires holding the execution, so a test that stores a result must
+// claim first. It exists because an unclaimed execution has no attempt, and generation zero
+// deliberately does not work as a universal key.
+func claimAttempt(t *testing.T, store ports.ExecutionStore) ports.AttemptID {
+	t.Helper()
+	leased, found, err := store.Claim(t.Context(), time.Minute)
+	if err != nil || !found {
+		t.Fatalf("Claim: found=%t err=%v", found, err)
+	}
+	return leased.AttemptID
 }

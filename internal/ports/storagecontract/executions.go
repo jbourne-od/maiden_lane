@@ -70,7 +70,7 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 		}
 		if found {
 			t.Fatalf("a leased execution was claimed twice: %s and %s",
-				first.ExecutionID, second.ExecutionID)
+				first.Request.ExecutionID, second.Request.ExecutionID)
 		}
 	})
 
@@ -94,15 +94,15 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 		if !found {
 			t.Fatal("an expired lease did not make the execution claimable again")
 		}
-		if second.ExecutionID != first.ExecutionID {
-			t.Fatalf("reclaimed %s, want %s", second.ExecutionID, first.ExecutionID)
+		if second.Request.ExecutionID != first.Request.ExecutionID {
+			t.Fatalf("reclaimed %s, want %s", second.Request.ExecutionID, first.Request.ExecutionID)
 		}
 		// The reclaimed request must be identical, or a second attempt would
 		// compute something other than what was submitted.
-		if second.RunID != first.RunID || second.PlanID != first.PlanID {
+		if second.Request.RunID != first.Request.RunID || second.Request.PlanID != first.Request.PlanID {
 			t.Fatal("the reclaimed request differs from the original")
 		}
-		if second.Input.InitialState.Digest() != first.Input.InitialState.Digest() {
+		if second.Request.Input.InitialState.Digest() != first.Request.Input.InitialState.Digest() {
 			t.Fatal("the reclaimed input differs from the original")
 		}
 	})
@@ -127,20 +127,20 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 			t.Fatalf("Claim: found=%t err=%v", found, err)
 		}
 
-		if claimed.Input.InitialState.Digest() != submitted.Input.InitialState.Digest() {
+		if claimed.Request.Input.InitialState.Digest() != submitted.Input.InitialState.Digest() {
 			t.Fatalf("claimed state digest = %s, want %s",
-				claimed.Input.InitialState.Digest(), submitted.Input.InitialState.Digest())
+				claimed.Request.Input.InitialState.Digest(), submitted.Input.InitialState.Digest())
 		}
-		if claimed.Input.World.ID() != submitted.Input.World.ID() {
-			t.Fatalf("claimed world = %s, want %s", claimed.Input.World.ID(), submitted.Input.World.ID())
+		if claimed.Request.Input.World.ID() != submitted.Input.World.ID() {
+			t.Fatalf("claimed world = %s, want %s", claimed.Request.Input.World.ID(), submitted.Input.World.ID())
 		}
-		if claimed.Input.ExecutorIdentity != submitted.Input.ExecutorIdentity {
+		if claimed.Request.Input.ExecutorIdentity != submitted.Input.ExecutorIdentity {
 			t.Fatal("claimed executor identity differs from the submitted one")
 		}
-		if claimed.Input.Policy != submitted.Input.Policy {
+		if claimed.Request.Input.Policy != submitted.Input.Policy {
 			t.Fatal("claimed provenance policy differs from the submitted one")
 		}
-		if claimed.ExecutionID != submitted.ExecutionID || claimed.RunID != submitted.RunID {
+		if claimed.Request.ExecutionID != submitted.ExecutionID || claimed.Request.RunID != submitted.RunID {
 			t.Fatal("claimed identities differ from the submitted ones")
 		}
 	})
@@ -149,10 +149,11 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 		store := newStore(t)
 		request := ExecutionRequestFixture(t, "acme", "exec-a")
 		mustEnqueue(t, store, request)
-		if _, found, err := store.Claim(t.Context(), time.Millisecond); err != nil || !found {
+		leased, found, err := store.Claim(t.Context(), time.Millisecond)
+		if err != nil || !found {
 			t.Fatalf("Claim: found=%t err=%v", found, err)
 		}
-		if err := store.Complete(t.Context(), ExecutionResultFixture(request, ports.ExecutionSucceeded)); err != nil {
+		if err := store.Complete(t.Context(), leased.AttemptID, ExecutionResultFixture(request, ports.ExecutionSucceeded)); err != nil {
 			t.Fatalf("Complete: %v", err)
 		}
 
@@ -167,8 +168,14 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 		store := newStore(t)
 		request := ExecutionRequestFixture(t, "acme", "exec-a")
 		mustEnqueue(t, store, request)
+		// Claimed first, because an outcome belongs to an attempt: an unclaimed execution
+		// has none, and reporting one for work nobody leased is refused.
+		leased, _, err := store.Claim(t.Context(), time.Minute)
+		if err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
 		result := ExecutionResultFixture(request, ports.ExecutionSucceeded)
-		if err := store.Complete(t.Context(), result); err != nil {
+		if err := store.Complete(t.Context(), leased.AttemptID, result); err != nil {
 			t.Fatalf("Complete: %v", err)
 		}
 
@@ -249,8 +256,12 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 		store := newStore(t)
 		request := ExecutionRequestFixture(t, "acme", "exec-a")
 		mustEnqueue(t, store, request)
+		leased, _, err := store.Claim(t.Context(), time.Minute)
+		if err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
 
-		if err := store.Fail(t.Context(), "acme", request.ExecutionID, "dependency_unavailable"); err != nil {
+		if err := store.Fail(t.Context(), "acme", request.ExecutionID, leased.AttemptID, "dependency_unavailable"); err != nil {
 			t.Fatalf("Fail: %v", err)
 		}
 		got, found, err := store.Get(t.Context(), "acme", request.ExecutionID)
@@ -278,13 +289,17 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 		store := newStore(t)
 		request := ExecutionRequestFixture(t, "acme", "exec-terminal")
 		mustEnqueue(t, store, request)
+		leased, _, err := store.Claim(t.Context(), time.Minute)
+		if err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
 		result := ExecutionResultFixture(request, ports.ExecutionSucceeded)
-		if err := store.Complete(t.Context(), result); err != nil {
+		if err := store.Complete(t.Context(), leased.AttemptID, result); err != nil {
 			t.Fatalf("Complete: %v", err)
 		}
 
 		// A late failure report from an abandoned attempt.
-		_ = store.Fail(t.Context(), "acme", request.ExecutionID, "dependency_unavailable")
+		_ = store.Fail(t.Context(), "acme", request.ExecutionID, leased.AttemptID, "dependency_unavailable")
 
 		got, found, err := store.Get(t.Context(), "acme", request.ExecutionID)
 		if err != nil || !found {
@@ -305,11 +320,15 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 		store := newStore(t)
 		request := ExecutionRequestFixture(t, "acme", "exec-failed")
 		mustEnqueue(t, store, request)
-		if err := store.Fail(t.Context(), "acme", request.ExecutionID, "dependency_unavailable"); err != nil {
+		leased, _, err := store.Claim(t.Context(), time.Minute)
+		if err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
+		if err := store.Fail(t.Context(), "acme", request.ExecutionID, leased.AttemptID, "dependency_unavailable"); err != nil {
 			t.Fatalf("Fail: %v", err)
 		}
 
-		_ = store.Complete(t.Context(), ExecutionResultFixture(request, ports.ExecutionSucceeded))
+		_ = store.Complete(t.Context(), leased.AttemptID, ExecutionResultFixture(request, ports.ExecutionSucceeded))
 
 		got, found, err := store.Get(t.Context(), "acme", request.ExecutionID)
 		if err != nil || !found {
@@ -332,22 +351,63 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 		store := newStore(t)
 		request := ExecutionRequestFixture(t, "acme", "exec-nonterminal")
 		mustEnqueue(t, store, request)
+		leased, _, err := store.Claim(t.Context(), time.Minute)
+		if err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
 
 		for _, status := range []ports.ExecutionStatus{
 			ports.ExecutionPending, ports.ExecutionRunning, ports.ExecutionStatus(""),
 		} {
-			if err := store.Complete(t.Context(), ExecutionResultFixture(request, status)); err == nil {
+			if err := store.Complete(t.Context(), leased.AttemptID, ExecutionResultFixture(request, status)); err == nil {
 				t.Errorf("Complete accepted the non-terminal status %q", status)
 			}
 		}
 
-		// And the execution is untouched: still claimable, still without a result.
+		// And the execution is untouched: still the claimed attempt's, still without a
+		// result. It is running rather than pending because reporting an outcome requires
+		// holding the execution, so this test has to claim before it can offer one.
+		got, found, err := store.Get(t.Context(), "acme", request.ExecutionID)
+		if err != nil || !found {
+			t.Fatalf("Get: found=%t err=%v", found, err)
+		}
+		if got.Status != ports.ExecutionRunning || got.Result != nil {
+			t.Fatalf("a refused Complete altered the execution: status=%s result=%v", got.Status, got.Result != nil)
+		}
+	})
+
+	t.Run("refuses an outcome from a caller that never claimed the execution", func(t *testing.T) {
+		// An attempt exists only because Claim minted it, so a caller holding no attempt
+		// has nothing legitimate to present. The one value it can produce without claiming
+		// is the zero attempt, and if that were accepted it would be a universal key to
+		// every unclaimed execution: an outcome could be recorded for work nobody ran.
+		//
+		// This is the reason reporting an outcome requires the execution to be running,
+		// rather than merely requiring the presented attempt to match. Matching alone is
+		// satisfied by the generation an enqueued execution starts life with.
+		store := newStore(t)
+		request := ExecutionRequestFixture(t, "acme", "exec-unclaimed")
+		mustEnqueue(t, store, request)
+
+		for _, attempt := range []ports.AttemptID{0, 1, 7} {
+			result := ExecutionResultFixture(request, ports.ExecutionSucceeded)
+			if err := store.Complete(t.Context(), attempt, result); err == nil {
+				t.Errorf("Complete accepted attempt %d on an execution nobody claimed", attempt)
+			}
+			if err := store.Fail(t.Context(), "acme", request.ExecutionID, attempt, "invented"); err == nil {
+				t.Errorf("Fail accepted attempt %d on an execution nobody claimed", attempt)
+			}
+		}
+
+		// Still queued and still without a result, so the work a real worker would do
+		// has neither been done nor been taken away from it.
 		got, found, err := store.Get(t.Context(), "acme", request.ExecutionID)
 		if err != nil || !found {
 			t.Fatalf("Get: found=%t err=%v", found, err)
 		}
 		if got.Status != ports.ExecutionPending || got.Result != nil {
-			t.Fatalf("a refused Complete altered the execution: status=%s result=%v", got.Status, got.Result != nil)
+			t.Fatalf("an unclaimed execution was altered: status=%s result=%t",
+				got.Status, got.Result != nil)
 		}
 	})
 
@@ -455,7 +515,7 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 							maxClaims, executions)
 						return
 					}
-					request, found, err := store.Claim(context.Background(), time.Minute)
+					leased, found, err := store.Claim(context.Background(), time.Minute)
 					if err != nil {
 						t.Errorf("Claim: %v", err)
 						return
@@ -464,7 +524,7 @@ func RunExecutionStoreContract(t *testing.T, newStore func(*testing.T) ports.Exe
 						return
 					}
 					mutex.Lock()
-					claims[request.ExecutionID]++
+					claims[leased.Request.ExecutionID]++
 					mutex.Unlock()
 				}
 			})
@@ -499,10 +559,11 @@ func runReattemptContract(t *testing.T, newStore func(*testing.T) ports.Executio
 		store := newStore(t)
 		request := ExecutionRequestFixture(t, "acme", "a")
 		mustEnqueue(t, store, request)
-		if _, _, err := store.Claim(t.Context(), time.Minute); err != nil {
+		leased, _, err := store.Claim(t.Context(), time.Minute)
+		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
-		if err := store.Fail(t.Context(), "acme", request.ExecutionID, "plan_absent"); err != nil {
+		if err := store.Fail(t.Context(), "acme", request.ExecutionID, leased.AttemptID, "plan_absent"); err != nil {
 			t.Fatalf("Fail: %v", err)
 		}
 
@@ -544,9 +605,9 @@ func runReattemptContract(t *testing.T, newStore func(*testing.T) ports.Executio
 		if err != nil || !ok {
 			t.Fatalf("a reattempted execution was not claimable: ok=%t err=%v", ok, err)
 		}
-		if claimed.ExecutionID != request.ExecutionID {
+		if claimed.Request.ExecutionID != request.ExecutionID {
 			t.Fatalf("claimed %s, want the reattempted %s",
-				claimed.ExecutionID, request.ExecutionID)
+				claimed.Request.ExecutionID, request.ExecutionID)
 		}
 	})
 
@@ -554,19 +615,22 @@ func runReattemptContract(t *testing.T, newStore func(*testing.T) ports.Executio
 		store := newStore(t)
 		request := ExecutionRequestFixture(t, "acme", "a")
 		mustEnqueue(t, store, request)
-		if _, _, err := store.Claim(t.Context(), time.Minute); err != nil {
+		leased, _, err := store.Claim(t.Context(), time.Minute)
+		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
-		if err := store.Fail(t.Context(), "acme", request.ExecutionID, "internal_error"); err != nil {
+		if err := store.Fail(t.Context(), "acme", request.ExecutionID, leased.AttemptID, "internal_error"); err != nil {
 			t.Fatalf("Fail: %v", err)
 		}
 		if err := store.Reattempt(t.Context(), "acme", request.ExecutionID); err != nil {
 			t.Fatalf("Reattempt: %v", err)
 		}
-		if _, _, err := store.Claim(t.Context(), time.Minute); err != nil {
+		// The reattempt generation, which is the one that may report.
+		leased, _, err = store.Claim(t.Context(), time.Minute)
+		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
-		if err := store.Complete(t.Context(),
+		if err := store.Complete(t.Context(), leased.AttemptID,
 			ExecutionResultFixture(request, ports.ExecutionSucceeded)); err != nil {
 			t.Fatalf("Complete after reattempt: %v", err)
 		}
@@ -592,10 +656,11 @@ func runReattemptContract(t *testing.T, newStore func(*testing.T) ports.Executio
 				store := newStore(t)
 				request := ExecutionRequestFixture(t, "acme", "a")
 				mustEnqueue(t, store, request)
-				if _, _, err := store.Claim(t.Context(), time.Minute); err != nil {
+				leased, _, err := store.Claim(t.Context(), time.Minute)
+				if err != nil {
 					t.Fatalf("Claim: %v", err)
 				}
-				if err := store.Complete(t.Context(),
+				if err := store.Complete(t.Context(), leased.AttemptID,
 					ExecutionResultFixture(request, status)); err != nil {
 					t.Fatalf("Complete: %v", err)
 				}
@@ -650,10 +715,11 @@ func runReattemptContract(t *testing.T, newStore func(*testing.T) ports.Executio
 		store := newStore(t)
 		request := ExecutionRequestFixture(t, "acme", "a")
 		mustEnqueue(t, store, request)
-		if _, _, err := store.Claim(t.Context(), time.Minute); err != nil {
+		leased, _, err := store.Claim(t.Context(), time.Minute)
+		if err != nil {
 			t.Fatalf("Claim: %v", err)
 		}
-		if err := store.Fail(t.Context(), "acme", request.ExecutionID, "internal_error"); err != nil {
+		if err := store.Fail(t.Context(), "acme", request.ExecutionID, leased.AttemptID, "internal_error"); err != nil {
 			t.Fatalf("Fail: %v", err)
 		}
 		if err := store.Reattempt(t.Context(), "acme", request.ExecutionID); err != nil {
@@ -664,6 +730,104 @@ func runReattemptContract(t *testing.T, newStore func(*testing.T) ports.Executio
 		// queueing the work twice.
 		if err := store.Reattempt(t.Context(), "acme", request.ExecutionID); err == nil {
 			t.Fatal("a second reattempt succeeded on an already-pending execution")
+		}
+	})
+
+	t.Run("an abandoned attempt cannot write across the reattempt boundary", func(t *testing.T) {
+		// THE REASON ATTEMPT IDENTITY EXISTS, and it only becomes correctness-relevant
+		// once an execution can be returned to the queue.
+		//
+		// Before reattempting existed, a terminal status protected the row from a late
+		// write. Reopening it removes that protection: without a generation, an attempt
+		// nobody is waiting for can terminally fail the retry generation somebody is —
+		// and record its own diagnosis for a run that never happened in that generation.
+		store := newStore(t)
+		request := ExecutionRequestFixture(t, "acme", "a")
+		mustEnqueue(t, store, request)
+
+		// Attempt A takes a lease that lapses immediately.
+		abandoned, found, err := store.Claim(t.Context(), time.Millisecond)
+		if err != nil || !found {
+			t.Fatalf("Claim: found=%t err=%v", found, err)
+		}
+		waitPast(time.Millisecond)
+
+		// Attempt B reclaims and fails operationally.
+		reclaimed, found, err := store.Claim(t.Context(), time.Minute)
+		if err != nil || !found {
+			t.Fatalf("reclaim: found=%t err=%v", found, err)
+		}
+		if reclaimed.AttemptID == abandoned.AttemptID {
+			t.Fatal("reclaiming after a lapsed lease reused the attempt identity, so the " +
+				"abandoned attempt can still report")
+		}
+		if err := store.Fail(t.Context(), "acme", request.ExecutionID,
+			reclaimed.AttemptID, "internal_error"); err != nil {
+			t.Fatalf("Fail: %v", err)
+		}
+
+		// An operator returns it to the queue, and attempt C picks it up.
+		if err := store.Reattempt(t.Context(), "acme", request.ExecutionID); err != nil {
+			t.Fatalf("Reattempt: %v", err)
+		}
+		retry, found, err := store.Claim(t.Context(), time.Minute)
+		if err != nil || !found {
+			t.Fatalf("claim after reattempt: found=%t err=%v", found, err)
+		}
+
+		// Attempt A, long gone, finally reports. It must not land.
+		if err := store.Fail(t.Context(), "acme", request.ExecutionID,
+			abandoned.AttemptID, "plan_absent"); !errors.Is(err, ports.ErrAttemptSuperseded) {
+			t.Fatalf("a stale Fail returned %v, want ErrAttemptSuperseded", err)
+		}
+		// Nor may a stale result: determinism makes the CONTENT harmless, but the
+		// lifecycle transition would still terminate a generation that is still running.
+		if err := store.Complete(t.Context(), abandoned.AttemptID,
+			ExecutionResultFixture(request, ports.ExecutionSucceeded)); !errors.Is(err, ports.ErrAttemptSuperseded) {
+			t.Fatalf("a stale Complete returned %v, want ErrAttemptSuperseded", err)
+		}
+
+		record, _, err := store.Get(t.Context(), "acme", request.ExecutionID)
+		if err != nil {
+			t.Fatalf("Get: %v", err)
+		}
+		if record.Status != ports.ExecutionRunning {
+			t.Fatalf("status = %s, want running: the retry generation was terminated by an "+
+				"attempt that never ran it", record.Status)
+		}
+		if record.FailureReason != "" {
+			t.Fatalf("failure reason = %q: a stale attempt recorded a diagnosis for a run "+
+				"that never happened in this generation", record.FailureReason)
+		}
+
+		// And the generation that does hold the execution can still report.
+		if err := store.Complete(t.Context(), retry.AttemptID,
+			ExecutionResultFixture(request, ports.ExecutionSucceeded)); err != nil {
+			t.Fatalf("the holding attempt could not report: %v", err)
+		}
+	})
+
+	t.Run("distinguishes an absent execution from an ineligible one", func(t *testing.T) {
+		// The port owns both sentinels because a caller acts differently on each: a wrong
+		// identifier and a wrong request are different mistakes. Asserting errors.Is
+		// rather than merely "some error" is what stops an adapter collapsing them, which
+		// the first version of this contract permitted.
+		store := newStore(t)
+		request := ExecutionRequestFixture(t, "acme", "a")
+		mustEnqueue(t, store, request)
+
+		if err := store.Reattempt(t.Context(), "acme",
+			semantic.ExecutionID("sha256:"+repeat("9", 64))); !errors.Is(err, ports.ErrExecutionAbsent) {
+			t.Fatalf("reattempting an unknown execution = %v, want ErrExecutionAbsent", err)
+		}
+		if err := store.Reattempt(t.Context(), "globex",
+			request.ExecutionID); !errors.Is(err, ports.ErrExecutionAbsent) {
+			t.Fatalf("reattempting another tenant's execution = %v, want ErrExecutionAbsent", err)
+		}
+		// Present and pending: not a terminal failure without a result.
+		if err := store.Reattempt(t.Context(), "acme",
+			request.ExecutionID); !errors.Is(err, ports.ErrExecutionNotReattemptable) {
+			t.Fatalf("reattempting a pending execution = %v, want ErrExecutionNotReattemptable", err)
 		}
 	})
 
