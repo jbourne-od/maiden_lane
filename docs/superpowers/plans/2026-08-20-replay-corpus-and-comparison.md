@@ -225,12 +225,34 @@ A corpus cannot be edited because editing it would produce a different corpus. T
 earlier one must stay readable regardless, because comparisons pin its identity and
 deleting it would leave them naming a set of cases nothing can reconstruct.
 
-**Slice 4 — running a side over a corpus.** Enqueueing every case for one plan and
-profile, and reporting which cases have completed. This is the expensive slice and the
-one where determinism does the work: a case already executed is already done.
+**Slice 4 — running a side over a corpus.** Enqueueing every case for one plan, and
+reporting which cases have completed. This is the expensive slice and the one where
+determinism does the work: a case already executed is already done.
+
+The profile is **not** an input to running, and the earlier wording here ("one plan and
+profile") was imprecise. The spine assesses every sealed checkpoint under every profile
+its plan compiled, so a profile is a read-side selector used when comparability picks
+which assessment to read.
+
+A side run has **no identity and no storage of its own**. A corpus, a plan, a world, an
+executor, and a provenance policy determine every case's `ExecutionID` through `BindRun`,
+so progress is a question answered by re-deriving those identities and looking them up
+rather than by reading a record somebody remembered to update. Nothing can drift from
+what it describes if nothing is stored.
 
 **Slice 5 — comparability evaluation, and clause 6.** The pure evaluation, then wiring
 `ClauseComparisonCorpus`. After this the gate answers seven of nine, and still refuses.
+
+**Comparability must not infer "the same world" from two complete side runs.** A
+`CorpusRun` is operational progress, not authorization evidence: it reports what a store
+says about executions, and no projection may carry authorization weight. §14.2 pins
+`WorldID` into the comparison question, so the check is that each freshly rehydrated case
+artifact agrees with `Comparison.World()` — the authenticated artifacts, not the request
+that produced them. Exposing `WorldID` on `CorpusRun` for observability would be
+harmless; trusting it would not.
+
+The same applies to completeness. A side run reporting `Complete` is a reason to attempt
+comparability, never a substitute for it.
 
 **Slice 6 — the HTTP surface.** `POST /v1/comparisons` and
 `GET /v1/comparisons/{comparisonID}`, both already in §16's list.
