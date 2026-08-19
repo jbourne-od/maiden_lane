@@ -91,7 +91,7 @@ an argument nobody has made.
 And the open question: dependency edges come from `intersects(writer.writes, reader.reads)`
 (`compile.go:787`) and mutual edges are a `DEPENDENCY_CYCLE` (`compile.go:394`). Under
 set-scoped rules over one entity kind, read and write sets overlap more readily, so
-**set-scoping may produce more cycles, not fewer.** Slice 3 delivers the fixture that can
+**set-scoping may produce more cycles, not fewer.** Slice 2 delivers the fixture that can
 answer this; the analysis is not declared adequate before then.
 
 ## Committed slices
@@ -120,7 +120,7 @@ grow with the fleet, making a run **Θ(N³)**.
 
 That figure is derived from reading the code, not measured, and this is recorded rather than
 resolved: measuring it needs a multi-rule plan that compiles, which today's operators cannot
-express. It is blocked on the set-scoped selector and belongs to slice 3.
+express. It is blocked on the set-scoped selector and belongs to slice 2.
 
 **A candidate remedy, recorded now and not adopted.** The full replay may be avoidable without
 weakening anything. Re-verifying the entire prefix on every transition defends against a
@@ -148,7 +148,7 @@ write conflicts, confirmed at 2, 3 and 10 instances — 45 at ten, because nothi
 path distinguishes one team from another. It is labelled a baseline rather than a
 specification, since this programme is expected to change it.
 
-Neither answers decision 4's question, which is about **set-scoped** rules and needs slice 3.
+Neither answers decision 4's question, which is about **set-scoped** rules and needs slice 2.
 
 **Slice 1 — the expression AST.** `Expr` as a closed union, canonical bytes, compile-time type
 derivation. No execution, no rules.

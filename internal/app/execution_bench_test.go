@@ -79,7 +79,7 @@ func BenchmarkExecutionByStateSize(b *testing.B) {
 // so they are ordinary state rather than a shape the kernel might reject or short-circuit on.
 // They share no assignment key with the two the rules name, so they never enter a team.
 func benchmarkExecutionInputs(
-	b *testing.B, entities int,
+	b testing.TB, entities int,
 ) (teamhos.Inputs, semantic.CompileRequest) {
 	b.Helper()
 
@@ -126,4 +126,38 @@ func benchmarkExecutionInputs(
 	}
 	inputs.InitialState = grown
 	return inputs, inputs.Compilation
+}
+
+// TestBenchmarkExecutionInputsAreRunnable executes the benchmark's setup and one spine at a
+// small size, under `go test`.
+//
+// It exists because `go test ./...` COMPILES a benchmark but does not RUN it without -bench,
+// so the pipeline was type-checking this file and executing none of it. Every b.Fatalf inside
+// benchmarkExecutionInputs — including whether the ratified schema still accepts padding
+// drivers carrying exactly these four fields — was unexercised, and the figures the plan
+// quotes rested on a path CI never touched. A schema change would have broken the benchmark
+// silently and been discovered by whoever next ran -bench by hand.
+//
+// Small on purpose: this asserts the path runs and succeeds, not what it costs. The numbers
+// come from -bench.
+func TestBenchmarkExecutionInputsAreRunnable(t *testing.T) {
+	request, compilation := benchmarkExecutionInputs(t, 50)
+
+	if got := len(request.InitialState.Entities()); got != 50 {
+		t.Fatalf("padded state holds %d entities, want 50", got)
+	}
+	result, err := Run(t.Context(), Request{
+		Compilation:      compilation,
+		InitialState:     request.InitialState,
+		World:            request.World,
+		ExecutorIdentity: request.ExecutorIdentity,
+		Policy:           request.Policy,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if result.Status() != SpineSucceeded {
+		t.Fatalf("spine status = %v, want SpineSucceeded; the benchmark would be timing a "+
+			"truncated run", result.Status())
+	}
 }

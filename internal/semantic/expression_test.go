@@ -110,6 +110,12 @@ func TestCompileExpressionRefusals(t *testing.T) {
 		{"leading dot", field(".assignment_key")},
 		{"exists on undeclared field", Expr{Kind: ExprExists, Field: "driver.nope"}},
 		{"literal with no value", Expr{Kind: ExprLiteral, Literal: &Value{}}},
+		// The MISSING-operand arms of the two shape inequalities. Each fires in two opposite
+		// situations and only the extraneous one was covered; the nil-literal arm is also
+		// what stands between this node and a nil dereference in checkExpr.
+		{"literal kind with no literal", Expr{Kind: ExprLiteral}},
+		{"field kind with no path", Expr{Kind: ExprField}},
+		{"exists with no path", Expr{Kind: ExprExists}},
 		{"empty all", Expr{Kind: ExprAll}},
 		{"empty any", Expr{Kind: ExprAny}},
 		{"not with two arguments", Expr{Kind: ExprNot, Args: []Expr{
@@ -184,6 +190,71 @@ func TestFieldPathCannotAddressThroughARelation(t *testing.T) {
 	// about the path shape and not about this schema being unusable.
 	if _, err := CompileExpression(schema, testCompilerVersion, field("driver.assignment_key")); err != nil {
 		t.Fatalf("the control field did not compile: %v", err)
+	}
+}
+
+// The compiler semantics version participates in the canonical bytes, so an unusable one must
+// not reach them. New guard, and an earlier round shipped it with no test at all: every call
+// site passed the one valid version, so the dimension under test was held fixed at the value
+// the broken code would accept.
+func TestCompileExpressionRequiresAUsableVersion(t *testing.T) {
+	schema := expressionSchema(t)
+	for _, version := range []CompilerSemanticsVersion{"", CompilerSemanticsVersion([]byte{0xff})} {
+		if _, err := CompileExpression(schema, version, intLiteral(1)); err == nil {
+			t.Errorf("compiled under version %q", version)
+		}
+	}
+}
+
+// THE PROPERTY THE SCHEMA DIGEST EXISTS FOR, pinned behaviourally rather than only by a golden
+// vector.
+//
+// Type() is a fact about (schema, expression). Before the digest was committed, these two
+// compiles produced byte-identical output with different derived types, and an expression that
+// was well typed under one schema and refused under the other could share an identity.
+//
+// This is stronger than the vector for exactly this property: a golden vector pins a digest
+// constant, which is the thing a future author regenerates when the fixture changes, whereas
+// this asserts the relationship the constant is standing in for.
+func TestExpressionIdentityCommitsToItsSchema(t *testing.T) {
+	build := func(kind ValueKind) Schema {
+		schema, err := NewSchema([]EntityDeclaration{{
+			Kind:   "driver",
+			Fields: []FieldDeclaration{{Name: "hours", Kind: kind}},
+		}}, nil)
+		if err != nil {
+			t.Fatalf("NewSchema: %v", err)
+		}
+		return schema
+	}
+	asInt, asString := build(ValueInt64), build(ValueString)
+	path := field("driver.hours")
+
+	compiledInt, err := CompileExpression(asInt, testCompilerVersion, path)
+	if err != nil {
+		t.Fatalf("CompileExpression under int64 schema: %v", err)
+	}
+	compiledString, err := CompileExpression(asString, testCompilerVersion, path)
+	if err != nil {
+		t.Fatalf("CompileExpression under string schema: %v", err)
+	}
+
+	if compiledInt.Type() == compiledString.Type() {
+		t.Fatal("the two schemas type the path identically, so this test proves nothing")
+	}
+	if string(compiledInt.CanonicalBytes()) == string(compiledString.CanonicalBytes()) {
+		t.Fatal("one authored path compiled to identical bytes under schemas that type it " +
+			"differently, so the identity does not determine the type")
+	}
+
+	// And the consequence that makes it more than a curiosity: an expression well typed under
+	// one schema is refused under the other, so the bytes would have named both.
+	sum := Expr{Kind: ExprAdd, Args: []Expr{path, intLiteral(1)}}
+	if _, err := CompileExpression(asInt, testCompilerVersion, sum); err != nil {
+		t.Fatalf("add over an int64 field was refused: %v", err)
+	}
+	if _, err := CompileExpression(asString, testCompilerVersion, sum); err == nil {
+		t.Fatal("add over a string field compiled")
 	}
 }
 
@@ -339,8 +410,9 @@ func TestCompileExpressionIsDeterministic(t *testing.T) {
 // encoding should force somebody to edit a conspicuous constant and thereby admit they are
 // renaming every artifact that encoding identifies.
 
-// Production break caught: dropping the kind byte lets ExprExists and ExprIsNull -- identical
-// in operand shape and both yielding bool -- encode identically and share one identity.
+// Production break caught: dropping the kind byte lets ExprField and ExprExists -- identical
+// in operand shape, both taking a field path and no arguments -- encode identically and share
+// one identity, while type derivation continues to report their different types.
 func TestExpressionCanonicalGoldenVectors(t *testing.T) {
 	schema := expressionSchema(t)
 	for _, test := range []struct {

@@ -143,8 +143,11 @@ const maxExprDepth = 64
 func CompileExpression(
 	schema Schema, version CompilerSemanticsVersion, expr Expr,
 ) (CompiledExpression, error) {
-	if version == "" {
-		return CompiledExpression{}, fmt.Errorf("expression has no compiler semantics version")
+	// validSemanticName, not an emptiness check, because Compile validates its version the
+	// same way (compile.go). Two checks against two different references is how a hole opens
+	// between them: today the accept sets coincide, and nothing was keeping them coincident.
+	if !validSemanticName(string(version)) {
+		return CompiledExpression{}, fmt.Errorf("expression has no usable compiler semantics version")
 	}
 	exprType, err := checkExpr(schema, expr, 0)
 	if err != nil {
@@ -318,10 +321,20 @@ func checkOperandShape(expr Expr) error {
 		return fmt.Errorf("expression kind %d takes %d arguments, got %d",
 			expr.Kind, wantArgs, got)
 	}
-	if wantLiteral != (expr.Literal != nil) {
+	// Each of these is an inequality, so it fires in two opposite situations, and an earlier
+	// version reported both as "carries an operand it does not use" -- telling an author to
+	// remove an operand that was in fact missing. The nil-literal arm is also the only thing
+	// standing between Expr{Kind: ExprLiteral} and the dereference in checkExpr.
+	if hasLiteral := expr.Literal != nil; wantLiteral != hasLiteral {
+		if wantLiteral {
+			return fmt.Errorf("expression kind %d requires a literal and carries none", expr.Kind)
+		}
 		return fmt.Errorf("expression kind %d carries a literal it does not use", expr.Kind)
 	}
-	if wantField != (expr.Field != "") {
+	if hasField := expr.Field != ""; wantField != hasField {
+		if wantField {
+			return fmt.Errorf("expression kind %d requires a field path and carries none", expr.Kind)
+		}
 		return fmt.Errorf("expression kind %d carries a field path it does not use", expr.Kind)
 	}
 	return nil
