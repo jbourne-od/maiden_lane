@@ -3,6 +3,7 @@ package semantic
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"sort"
 )
 
@@ -204,6 +205,32 @@ func checkCardinality(selector Selector) error {
 	return nil
 }
 
+// Selection is what a selector found: the groups satisfying its declared cardinality, and
+// the groups that matched but did not.
+//
+// VIOLATIONS ARE RETURNED, NOT DROPPED, and an earlier version dropped them. That version
+// treated a cardinality violation as a non-match, which inverts the semantics of the thing
+// cardinality replaces: `len(sources) != 2` in execute_form.go calls rejectInvariant, an
+// observable attributable failure on a rejected transition. Silently skipping means a team
+// with three drivers never forms and nothing records why -- and because an empty explicit
+// selection assesses vacuously Ready, a state that cannot pass the boundary today would
+// become one that does.
+//
+// Whether a violation is an invariant failure or merely an unmatched group is a policy
+// question belonging to whatever consumes a selection, which does not exist yet. So the
+// information is preserved and the policy deferred, rather than decided here by omission.
+type Selection struct {
+	groups     []Group
+	violations []Group
+}
+
+// Groups returns the groups satisfying the declared cardinality, in canonical order.
+func (s Selection) Groups() []Group { return slices.Clone(s.groups) }
+
+// Violations returns the groups that matched the predicate and grouping but not the
+// cardinality, in canonical order.
+func (s Selection) Violations() []Group { return slices.Clone(s.violations) }
+
 // Group is one selected group: a key and its members, in canonical order.
 type Group struct {
 	key     Value
@@ -232,15 +259,15 @@ func (g Group) Members() []Entity { return cloneEntities(g.members) }
 // Selecting nothing is a successful selection over an empty result, not an error: a rule whose
 // predicate matches no entity has run and found nothing, which is a different fact from a rule
 // that could not run.
-func (c CompiledSelector) Select(state State) ([]Group, error) {
+func (c CompiledSelector) Select(state State) (Selection, error) {
 	if c.canonical == nil {
-		return nil, fmt.Errorf("selector was not compiled")
+		return Selection{}, fmt.Errorf("selector was not compiled")
 	}
 	if state.Schema().Digest() != c.schema {
 		// The selector was type-checked against a different schema, so its field paths carry
 		// no guarantee here. Refused rather than re-checked, because re-checking would make
 		// this a second compiler.
-		return nil, fmt.Errorf("selector was compiled against a different schema")
+		return Selection{}, fmt.Errorf("selector was compiled against a different schema")
 	}
 
 	type accumulator struct {
@@ -256,9 +283,9 @@ func (c CompiledSelector) Select(state State) ([]Group, error) {
 			continue
 		}
 		if c.where != nil {
-			matched, err := evaluateBool(c.where.Expression(), entity)
+			matched, err := evaluateBool(c.where.expr, entity)
 			if err != nil {
-				return nil, fmt.Errorf("selector predicate: %w", err)
+				return Selection{}, fmt.Errorf("selector predicate: %w", err)
 			}
 			if !matched {
 				continue
@@ -270,13 +297,13 @@ func (c CompiledSelector) Select(state State) ([]Group, error) {
 			ordered = append(ordered, &accumulator{members: []Entity{entity}})
 			continue
 		}
-		key, err := evaluateValue(c.groupBy.Expression(), entity)
+		key, err := evaluateValue(c.groupBy.expr, entity)
 		if err != nil {
-			return nil, fmt.Errorf("selector grouping: %w", err)
+			return Selection{}, fmt.Errorf("selector grouping: %w", err)
 		}
 		encoded, err := encodeGroupKey(key)
 		if err != nil {
-			return nil, err
+			return Selection{}, err
 		}
 		existing, present := byKey[encoded]
 		if !present {
@@ -293,14 +320,16 @@ func (c CompiledSelector) Select(state State) ([]Group, error) {
 		sort.Slice(ordered, func(i, j int) bool { return ordered[i].encoded < ordered[j].encoded })
 	}
 
-	groups := make([]Group, 0, len(ordered))
+	selection := Selection{}
 	for _, accumulated := range ordered {
-		if !c.members.admits(uint64(len(accumulated.members))) {
+		group := Group{key: accumulated.key, members: accumulated.members}
+		if c.members.admits(uint64(len(accumulated.members))) {
+			selection.groups = append(selection.groups, group)
 			continue
 		}
-		groups = append(groups, Group{key: accumulated.key, members: accumulated.members})
+		selection.violations = append(selection.violations, group)
 	}
-	return groups, nil
+	return selection, nil
 }
 
 // admits reports whether a group of this size satisfies the declared cardinality.
@@ -341,11 +370,14 @@ func encodeSelector(
 	encoder.uint64(selector.members.Count)
 	// Presence is encoded explicitly, so a selector with no predicate cannot encode the same
 	// as one whose predicate happens to be absent for another reason.
+	// The stored tree, not Expression(): that clones, and encoding is read-only. Select used
+	// to clone once per candidate entity, in the one package whose cost curve this branch
+	// exists to measure.
 	encoder.optional(selector.where != nil, func() {
-		encodeExpr(&encoder, selector.where.Expression())
+		encodeExpr(&encoder, selector.where.expr)
 	})
 	encoder.optional(selector.groupBy != nil, func() {
-		encodeExpr(&encoder, selector.groupBy.Expression())
+		encodeExpr(&encoder, selector.groupBy.expr)
 	})
 	return encoder.bytes()
 }

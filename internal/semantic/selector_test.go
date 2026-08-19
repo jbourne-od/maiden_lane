@@ -71,7 +71,8 @@ func TestSelectorGroupsEveryTeamFromOneDeclaration(t *testing.T) {
 		Members: Cardinality{Kind: CardinalityAny},
 	})
 
-	groups, err := selector.Select(state)
+	selection, err := selector.Select(state)
+	groups := selection.Groups()
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
@@ -103,7 +104,8 @@ func TestSelectorOrderIsCanonicalAndNotMapIteration(t *testing.T) {
 
 	var first []string
 	for pass := range 50 {
-		groups, err := selector.Select(state)
+		selection, err := selector.Select(state)
+		groups := selection.Groups()
 		if err != nil {
 			t.Fatalf("Select: %v", err)
 		}
@@ -145,7 +147,8 @@ func TestSelectorOrderIsCanonicalAndNotMapIteration(t *testing.T) {
 
 	// Members inherit the state's canonical order rather than being sorted again here, so
 	// assert that too: within a group, entity refs ascend.
-	groups, err := selector.Select(state)
+	selection, err := selector.Select(state)
+	groups := selection.Groups()
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
@@ -178,7 +181,8 @@ func TestSelectorCardinalityFiltersGroups(t *testing.T) {
 			selector := mustCompileSelector(t, Selector{
 				Kind: "driver", GroupBy: ptr(groupKey()), Members: test.members,
 			})
-			groups, err := selector.Select(state)
+			selection, err := selector.Select(state)
+			groups := selection.Groups()
 			if err != nil {
 				t.Fatalf("Select: %v", err)
 			}
@@ -195,7 +199,8 @@ func TestSelectorUngroupedYieldsOneGroupPerEntity(t *testing.T) {
 	selector := mustCompileSelector(t, Selector{
 		Kind: "driver", Members: Cardinality{Kind: CardinalityAny},
 	})
-	groups, err := selector.Select(state)
+	selection, err := selector.Select(state)
+	groups := selection.Groups()
 	if err != nil {
 		t.Fatalf("Select: %v", err)
 	}
@@ -224,7 +229,8 @@ func TestSelectorMatchingNothingSucceeds(t *testing.T) {
 			field("driver.assignment_key"), {Kind: ExprLiteral, Literal: &unmatchable}}}),
 		Members: Cardinality{Kind: CardinalityAny},
 	})
-	groups, err := selector.Select(state)
+	selection, err := selector.Select(state)
+	groups := selection.Groups()
 	if err != nil {
 		t.Fatalf("Select over an empty match returned an error: %v", err)
 	}
@@ -282,6 +288,16 @@ func TestCompileSelectorRefusals(t *testing.T) {
 			Kind: "driver", Members: Cardinality{Kind: CardinalityAny, Count: 2}}},
 		{"exactly zero", Selector{
 			Kind: "driver", Members: Cardinality{Kind: CardinalityExactly}}},
+		// GROUPED, because every other cardinality fixture here is ungrouped and the
+		// ungrouped-unsatisfiability rule refuses exactly-zero independently. Without these,
+		// narrowing the positive-count guard to at-least-only survives the whole suite, and a
+		// grouped exactly-zero selector compiles and then selects nothing for every input.
+		{"grouped exactly zero", Selector{
+			Kind: "driver", GroupBy: ptr(groupKey()),
+			Members: Cardinality{Kind: CardinalityExactly}}},
+		{"grouped at least zero", Selector{
+			Kind: "driver", GroupBy: ptr(groupKey()),
+			Members: Cardinality{Kind: CardinalityAtLeast}}},
 		{"at least zero", Selector{
 			Kind: "driver", Members: Cardinality{Kind: CardinalityAtLeast}}},
 		// Unsatisfiable rather than merely odd: an ungrouped selector yields one member per
@@ -364,7 +380,8 @@ func TestSelectorRefusesAnAbsentField(t *testing.T) {
 		Where:   ptr(Expr{Kind: ExprExists, Field: "driver.assignment_key"}),
 		Members: Cardinality{Kind: CardinalityAny},
 	})
-	groups, err := present.Select(state)
+	selection, err := present.Select(state)
+	groups := selection.Groups()
 	if err != nil {
 		t.Fatalf("exists over an absent field errored: %v", err)
 	}
@@ -464,7 +481,8 @@ func TestSelectorToleratesSparseEntitiesThroughShortCircuit(t *testing.T) {
 		}}),
 		Members: Cardinality{Kind: CardinalityAny},
 	})
-	groups, err := guarded.Select(state)
+	selection, err := guarded.Select(state)
+	groups := selection.Groups()
 	if err != nil {
 		t.Fatalf("a guarded predicate failed over a sparse entity: %v", err)
 	}
@@ -644,6 +662,114 @@ func TestEvaluateRefusesAnInvalidLiteral(t *testing.T) {
 	// And the compiler refuses it too, so the two halves agree.
 	if _, err := CompileExpression(expressionSchema(t), testCompilerVersion, node); err == nil {
 		t.Fatal("the compiler accepted an invalid literal, so the two halves now disagree")
+	}
+}
+
+// THE THIRD INSTANCE OF THE SHAPE, in a different guise. Not a kind/payload mismatch but a
+// REFERENT mismatch: boundField's entity-kind check is the only thing stopping a `team.` path
+// from reading a driver's field. Remove it and nothing panics, nothing errors, and the result
+// is correctly typed — it just answers a question about a different entity.
+//
+// The compiler refuses this through compileSelectorExpr, and TestSelectorRefusesAPathOutsideItsKind
+// covers that. This covers the evaluator, which the guard's own comment says is "reachable
+// without one" — the reachability the two previous wrong-answer defects both lived in.
+func TestEvaluateRefusesAPathNamingAnotherKind(t *testing.T) {
+	schema, err := NewSchema([]EntityDeclaration{
+		{Kind: "driver", Fields: []FieldDeclaration{{Name: "assignment_key", Kind: ValueString}}},
+		{Kind: "team", Fields: []FieldDeclaration{{Name: "assignment_key", Kind: ValueString}}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "selector")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+	key, err := NewStringValue("k")
+	if err != nil {
+		t.Fatalf("NewStringValue: %v", err)
+	}
+	driver, err := NewEntity(
+		EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "d")},
+		map[FieldName]Value{"assignment_key": key})
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	_ = schema
+
+	// The driver's own path resolves; the team's must not, even though both kinds declare a
+	// field of that name and the driver holds a value for it.
+	if _, err := evaluateExpr(field("driver.assignment_key"), driver); err != nil {
+		t.Fatalf("the bound kind's own path did not resolve: %v", err)
+	}
+	if _, err := evaluateExpr(field("team.assignment_key"), driver); err == nil {
+		t.Fatal("a team path read a driver's field")
+	}
+	if _, err := evaluateExpr(
+		Expr{Kind: ExprExists, Field: "team.assignment_key"}, driver); err == nil {
+		t.Fatal("exists on a team path answered against a driver")
+	}
+
+	// evaluateBool's type refusal has the same shape: on removal it returns .boolean, which
+	// is false for a value-typed result, so a non-bool operand answers false rather than
+	// refusing.
+	if _, err := evaluateBool(field("driver.assignment_key"), driver); err == nil {
+		t.Fatal("a string-typed expression was accepted as a bool")
+	}
+}
+
+// The negative branch of the overflow check. An earlier test covered only maxInt64 + 1, which
+// is the first disjunct; deleting the second let the int64 minimum plus -1 wrap silently.
+func TestEvaluateRefusesNegativeInt64Overflow(t *testing.T) {
+	schema := expressionSchema(t)
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "selector")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+	floor, err := NewEntity(
+		EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "floor")},
+		map[FieldName]Value{"hos_elapsed_hours": NewInt64Value(-1 << 63)})
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	_ = schema
+
+	sum := Expr{Kind: ExprAdd, Args: []Expr{
+		field("driver.hos_elapsed_hours"), intLiteral(-1)}}
+	if got, err := evaluateValue(sum, floor); err == nil {
+		value, _ := got.Int64()
+		t.Fatalf("MinInt64 + -1 produced %d instead of refusing", value)
+	}
+}
+
+// A cardinality violation is REPORTED, not dropped. The thing cardinality replaces --
+// `len(sources) != 2` in execute_form.go -- calls rejectInvariant, an observable attributable
+// failure. Dropping the group instead would mean a three-driver team never forms and nothing
+// records why, and an empty explicit selection assesses vacuously Ready.
+func TestSelectorReportsCardinalityViolations(t *testing.T) {
+	state := selectorState(t, "pair", "pair", "trio", "trio", "trio", "solo")
+	selector := mustCompileSelector(t, Selector{
+		Kind: "driver", GroupBy: ptr(groupKey()),
+		Members: Cardinality{Kind: CardinalityExactly, Count: 2},
+	})
+	selection, err := selector.Select(state)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if len(selection.Groups()) != 1 {
+		t.Fatalf("satisfying groups = %d, want 1", len(selection.Groups()))
+	}
+	if len(selection.Violations()) != 2 {
+		t.Fatalf("violations = %d, want 2 (the trio and the solo)", len(selection.Violations()))
+	}
+	// Violations carry their members, so a consumer can say what was wrong rather than only
+	// that something was.
+	total := 0
+	for _, group := range selection.Violations() {
+		total += len(group.Members())
+	}
+	if total != 4 {
+		t.Fatalf("members across violations = %d, want 4", total)
 	}
 }
 
