@@ -34,6 +34,7 @@ import (
 type Corpus struct {
 	cases     []State
 	digests   []StateDigest
+	schema    SchemaDigest
 	canonical []byte
 	id        CorpusID
 }
@@ -62,6 +63,21 @@ func NewCorpus(cases []State) (Corpus, error) {
 			return Corpus{}, fmt.Errorf("replay corpus case: %w", err)
 		}
 	}
+
+	// Every case must share one schema, because a corpus with mixed schemas could never
+	// be replayed under any plan at all: BindRun refuses a state whose schema digest is
+	// not the plan's, so no single plan could execute all the cases. Such a corpus is
+	// unusable for its only purpose, and refusing it here means that is discovered when
+	// it is assembled rather than partway through executing it.
+	//
+	// It also states the constraint comparability will need: both plans under comparison
+	// must pin this schema digest, or the corpus is not replayable under both.
+	schema := normalized[0].Schema().Digest()
+	for _, state := range normalized[1:] {
+		if state.Schema().Digest() != schema {
+			return Corpus{}, fmt.Errorf("replay corpus cases do not share one schema")
+		}
+	}
 	sort.Slice(normalized, func(i, j int) bool {
 		return normalized[i].Digest() < normalized[j].Digest()
 	})
@@ -79,13 +95,7 @@ func NewCorpus(cases []State) (Corpus, error) {
 		digests = append(digests, state.Digest())
 	}
 
-	var encoder canonicalEncoder
-	encoder.tag(corpusDomainTag)
-	encoder.uint64(uint64(len(digests)))
-	for _, digest := range digests {
-		encoder.digest(string(digest))
-	}
-	canonical, err := encoder.bytes()
+	canonical, err := corpusCanonicalBytes(digests)
 	if err != nil {
 		return Corpus{}, fmt.Errorf("canonicalize replay corpus: %w", err)
 	}
@@ -93,6 +103,7 @@ func NewCorpus(cases []State) (Corpus, error) {
 	return Corpus{
 		cases:     normalized,
 		digests:   digests,
+		schema:    schema,
 		canonical: canonical,
 		id:        CorpusID(canonicalDigest(canonical)),
 	}, nil
@@ -100,6 +111,18 @@ func NewCorpus(cases []State) (Corpus, error) {
 
 // ID returns the content identity of the canonical corpus.
 func (c Corpus) ID() CorpusID { return c.id }
+
+// SchemaDigest returns the one schema every case shares.
+//
+// It is what comparability will compare against both plans: a plan whose schema digest is
+// not this one cannot execute any case in the corpus, so a comparison naming it is not
+// merely unlikely to work, it cannot be run.
+//
+// The schema is deliberately NOT part of CorpusID. It is already committed to by every
+// case's StateDigest, and a corpus's identity is the set of cases it holds; encoding a
+// value the cases already determine would be a second statement of one fact, able to
+// drift from it only if something had gone very wrong indeed.
+func (c Corpus) SchemaDigest() SchemaDigest { return c.schema }
 
 // Len reports how many cases the corpus holds.
 //
@@ -169,4 +192,26 @@ func (c Corpus) established() error {
 		return fmt.Errorf("replay corpus was not constructed")
 	}
 	return nil
+}
+
+// corpusCanonicalBytes encodes the v1 replay-corpus tuple: the tag, the case count, and
+// the canonically ordered case digests.
+//
+// It is a separate function from the constructor so a golden vector can pin the exact
+// bytes, and here that is the only way to establish what the tuple contains. A corpus's
+// schema is deliberately excluded because every case's StateDigest already commits to it,
+// and no behavioural test can observe that exclusion: adding the schema digest to this
+// tuple changes CorpusID, but CorpusID is a hash either way, so every comparison a test
+// could make still holds. The redundancy would be invisible except in the bytes.
+//
+// CorpusID is a persisted protocol identity now, so freezing this tuple is worth more
+// than any assertion about its output could be.
+func corpusCanonicalBytes(digests []StateDigest) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(corpusDomainTag)
+	encoder.uint64(uint64(len(digests)))
+	for _, digest := range digests {
+		encoder.digest(string(digest))
+	}
+	return encoder.bytes()
 }

@@ -1,6 +1,8 @@
 package semantic
 
 import (
+	"bytes"
+	"encoding/hex"
 	"slices"
 	"testing"
 )
@@ -314,5 +316,128 @@ func TestAnUnconstructedCorpusNamesNoInputs(t *testing.T) {
 	}
 	if _, err := corpus.InputIdentities(world); err != nil {
 		t.Fatalf("a real corpus was refused: %v", err)
+	}
+}
+
+// A corpus whose cases do not share one schema could never be replayed under any plan,
+// because BindRun refuses a state whose schema digest is not the plan's. Refusing at
+// assembly means that is discovered when the corpus is built rather than partway through
+// executing it.
+//
+// Found while working corpus persistence: the storage record needs one schema, and the
+// reason it can have one is that a corpus with several is unusable.
+func TestACorpusRequiresOneSchemaAcrossEveryCase(t *testing.T) {
+	cases := corpusCases(t, 2)
+	other := corpusCasesUnderWiderSchema(t, 1)
+
+	if cases[0].Schema().Digest() == other[0].Schema().Digest() {
+		t.Fatal("the fixture is wrong: the two schemas must differ")
+	}
+	if _, err := NewCorpus(append(slices.Clone(cases), other...)); err == nil {
+		t.Fatal("a corpus accepted cases under two different schemas")
+	}
+
+	// A single-schema corpus reports the schema every case shares, which is what
+	// comparability will compare against both plans.
+	corpus, err := NewCorpus(cases)
+	if err != nil {
+		t.Fatalf("NewCorpus: %v", err)
+	}
+	if corpus.SchemaDigest() != cases[0].Schema().Digest() {
+		t.Fatalf("schema digest = %s, want the cases' %s",
+			corpus.SchemaDigest(), cases[0].Schema().Digest())
+	}
+
+	// The schema's ABSENCE from CorpusID is asserted by the golden vector below, not
+	// here. An earlier version of this test compared SchemaDigest() to the corpus ID and
+	// claimed to establish the exclusion; it established nothing, because CorpusID is a
+	// hash either way. Adding the schema digest to the canonical tuple left every corpus
+	// test green — verified.
+}
+
+// corpusCasesUnderWiderSchema builds cases under a different schema, so a mixed-schema
+// corpus can be attempted.
+func corpusCasesUnderWiderSchema(t *testing.T, count int) []State {
+	t.Helper()
+	schema, err := NewSchema(
+		[]EntityDeclaration{{Kind: "driver", Fields: []FieldDeclaration{
+			{Name: "assignment_key", Kind: ValueString},
+		}}}, nil)
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "team-hos-team-ab")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+
+	cases := make([]State, 0, count)
+	for i := 0; i < count; i++ {
+		state, err := NewState(schema, lineage, []Entity{
+			mustEntity(t, "driver", SourceEntityID(lineage, "driver", "A"),
+				map[FieldName]Value{"assignment_key": mustString(t, "wider-"+string(rune('a'+i)))}),
+		}, nil)
+		if err != nil {
+			t.Fatalf("NewState: %v", err)
+		}
+		cases = append(cases, state)
+	}
+	return cases
+}
+
+// ── golden canonical vector ─────────────────────────────────────────────────
+
+// Production break caught: the v1 corpus tuple must contain the tag, the case count, and
+// the ordered case digests, and NOTHING else.
+//
+// This is the only way that exclusion can be established. A behavioural test cannot
+// observe a redundant canonical input here — adding the schema digest to the tuple
+// changes CorpusID, but CorpusID is a hash either way, so every comparison a test could
+// make still holds. Verified: the redundancy left every corpus test green, which is why
+// the assertion that used to claim this was deleted rather than repaired.
+//
+// CorpusID is a persisted protocol identity, so freezing its tuple is worth the
+// brittleness. Adding the schema, the world, an insertion index, or any other
+// well-meaning semantic barnacle now breaks loudly, and deliberately changing v1 forces
+// somebody to edit a conspicuous constant and thereby admit they are renaming every
+// corpus that identity names.
+func TestCorpusCanonicalGoldenVector(t *testing.T) {
+	const wantHex = "000000000000001c6d616964656e2d6c616e652e7265706c61792d636f727075732e76310000000000000003111111111111111111111111111111111111111111111111111111111111111122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333"
+	const wantID CorpusID = "sha256:b50f67fa7dc67eec0d2b9dd36ccde5d67e59f929e16ef82c036a521625e2b02d"
+
+	digest := func(character string) StateDigest {
+		repeated := make([]byte, 0, 64)
+		for i := 0; i < 64; i++ {
+			repeated = append(repeated, character[0])
+		}
+		return StateDigest("sha256:" + string(repeated))
+	}
+
+	gotBytes, err := corpusCanonicalBytes([]StateDigest{digest("1"), digest("2"), digest("3")})
+	if err != nil {
+		t.Fatalf("corpusCanonicalBytes: %v", err)
+	}
+	if got := hex.EncodeToString(gotBytes); got != wantHex {
+		t.Fatalf("canonical corpus hex\n got: %s\nwant: %s", got, wantHex)
+	}
+	if got := CorpusID(canonicalDigest(gotBytes)); got != wantID {
+		t.Fatalf("CorpusID = %q; want %q", got, wantID)
+	}
+}
+
+// The constructor must produce the bytes the vector pins. Without this the vector would
+// freeze a helper nothing calls, and NewCorpus could drift away from it while every test
+// stayed green — the same failure mode one level up.
+func TestNewCorpusProducesTheCanonicalVectorBytes(t *testing.T) {
+	corpus, err := NewCorpus(corpusCases(t, 3))
+	if err != nil {
+		t.Fatalf("NewCorpus: %v", err)
+	}
+	want, err := corpusCanonicalBytes(corpus.Digests())
+	if err != nil {
+		t.Fatalf("corpusCanonicalBytes: %v", err)
+	}
+	if !bytes.Equal(corpus.CanonicalBytes(), want) {
+		t.Fatal("NewCorpus does not encode through the canonical helper")
 	}
 }

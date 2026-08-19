@@ -64,6 +64,10 @@ type Store struct {
 	// explainable.
 	publications        map[publicationKey]ports.Publication
 	publicationVersions map[targetKey]ports.PublicationVersion
+
+	// Corpora are keyed by content identity, like plans, so storing one twice is the
+	// same corpus rather than a conflict and there is nothing to version.
+	corpora map[corpusKey]ports.CorpusRecord
 }
 
 // NewStore returns an empty store ready for concurrent use.
@@ -76,6 +80,8 @@ func NewStore() *Store {
 
 		publications:        map[publicationKey]ports.Publication{},
 		publicationVersions: map[targetKey]ports.PublicationVersion{},
+
+		corpora: map[corpusKey]ports.CorpusRecord{},
 	}
 }
 
