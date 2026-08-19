@@ -220,9 +220,20 @@ func checkCardinality(selector Selector) error {
 // question belonging to whatever consumes a selection, which does not exist yet. So the
 // information is preserved and the policy deferred, rather than decided here by omission.
 type Selection struct {
+	ran        bool
 	groups     []Group
 	violations []Group
 }
+
+// Ran reports whether this Selection is the result of a selection that actually happened.
+//
+// The zero Selection reports false, and that matters more here than anywhere else in this
+// file: this is the type introduced to stop a violation becoming an absence, and without
+// this its own zero value IS "nothing was there". Select returns Selection{} on every error
+// path, so a caller holding one from a branch that did not run -- or from a helper that
+// dropped the error -- would read len(Violations()) == 0 and conclude no group violated its
+// cardinality. Zero values refuse; this is the method that lets them.
+func (s Selection) Ran() bool { return s.ran }
 
 // Groups returns the groups satisfying the declared cardinality, in canonical order.
 func (s Selection) Groups() []Group { return slices.Clone(s.groups) }
@@ -252,9 +263,12 @@ func (g Group) Members() []Entity { return cloneEntities(g.members) }
 //   - Members inherit the state's canonical (kind, EntityID) order. NewState sorts by
 //     compareEntityRefs and refuses duplicates, so filtering in that order is already
 //     canonical and this code adds no sort of its own.
-//   - Groups are ordered by the canonical bytes of their key, not by encounter order and not
-//     by map iteration. A map is used to accumulate members, and its iteration order is
-//     never observed.
+//   - GROUPED selections are ordered by the canonical bytes of their key, not by encounter
+//     order and not by map iteration. A map is used to accumulate members, and its iteration
+//     order is never observed.
+//   - UNGROUPED selections carry no key, so every comparison ties and the tiebreak orders
+//     them by their single member's entity reference -- the state's canonical order. The
+//     comparator is total for exactly this reason; see the sort below.
 //
 // Selecting nothing is a successful selection over an empty result, not an error: a rule whose
 // predicate matches no entity has run and found nothing, which is a different fact from a rule
@@ -283,7 +297,7 @@ func (c CompiledSelector) Select(state State) (Selection, error) {
 			continue
 		}
 		if c.where != nil {
-			matched, err := evaluateBool(c.where.expr, entity)
+			matched, err := evaluateBool(state.Schema(), c.where.expr, entity)
 			if err != nil {
 				return Selection{}, fmt.Errorf("selector predicate: %w", err)
 			}
@@ -297,7 +311,7 @@ func (c CompiledSelector) Select(state State) (Selection, error) {
 			ordered = append(ordered, &accumulator{members: []Entity{entity}})
 			continue
 		}
-		key, err := evaluateValue(c.groupBy.expr, entity)
+		key, err := evaluateValue(state.Schema(), c.groupBy.expr, entity)
 		if err != nil {
 			return Selection{}, fmt.Errorf("selector grouping: %w", err)
 		}
@@ -314,13 +328,39 @@ func (c CompiledSelector) Select(state State) (Selection, error) {
 		existing.members = append(existing.members, entity)
 	}
 
-	if c.groupBy != nil {
-		// By key bytes, so the result does not depend on which entity was seen first and
-		// certainly not on map iteration.
-		sort.Slice(ordered, func(i, j int) bool { return ordered[i].encoded < ordered[j].encoded })
-	}
+	// A TOTAL ORDER, so the sort is unconditional and safe. Key bytes first, then the first
+	// member's entity reference as a tiebreak.
+	//
+	// The tiebreak is not decoration. An earlier version sorted only when grouped, because
+	// every ungrouped accumulator carries the same empty key, every comparison would tie, and
+	// sort.Slice is not stable -- so an unconditional sort would have left ungrouped order
+	// unspecified, which by Decision 2 changes patch order, the journal and every downstream
+	// identity. That made the conditional load-bearing and invisible: a reader simplifying it
+	// away breaks determinism, and mutation testing did NOT catch it, because pdqsort happens
+	// to preserve order for small inputs. Growing the fixture would only pin the sort's
+	// behaviour at some particular size.
+	//
+	// So the comparator is made total instead, and the hazard stops existing. Grouped keys are
+	// unique, so the tiebreak never fires there; ungrouped keys are all empty, so it orders by
+	// entity reference, which is the state's canonical order and exactly what inheriting it
+	// produced before.
+	//
+	// NO TEST DISTINGUISHES THE TIEBREAK, and that is stated rather than papered over.
+	// Removing it leaves the suite green at every fixture size tried, up to forty entities,
+	// because Go's pdqsort happens to preserve input order on all-ties input. That is an
+	// implementation detail of the standard library, not a documented guarantee -- sort.Slice
+	// is explicitly not stable -- so the tiebreak is what makes this correct by construction
+	// rather than by luck. It is kept for that reason and marked unfalsifiable, not claimed
+	// to be protected by a test that cannot see it.
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].encoded != ordered[j].encoded {
+			return ordered[i].encoded < ordered[j].encoded
+		}
+		return compareEntityRefs(
+			ordered[i].members[0].Ref(), ordered[j].members[0].Ref()) < 0
+	})
 
-	selection := Selection{}
+	selection := Selection{ran: true}
 	for _, accumulated := range ordered {
 		group := Group{key: accumulated.key, members: accumulated.members}
 		if c.members.admits(uint64(len(accumulated.members))) {

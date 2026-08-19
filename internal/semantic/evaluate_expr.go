@@ -24,8 +24,8 @@ type evaluated struct {
 }
 
 // evaluateBool evaluates an expression that must be bool.
-func evaluateBool(expr Expr, entity Entity) (bool, error) {
-	result, err := evaluateExpr(expr, entity)
+func evaluateBool(schema Schema, expr Expr, entity Entity) (bool, error) {
+	result, err := evaluateExpr(schema, expr, entity)
 	if err != nil {
 		return false, err
 	}
@@ -38,8 +38,8 @@ func evaluateBool(expr Expr, entity Entity) (bool, error) {
 }
 
 // evaluateValue evaluates an expression that must yield a Value.
-func evaluateValue(expr Expr, entity Entity) (Value, error) {
-	result, err := evaluateExpr(expr, entity)
+func evaluateValue(schema Schema, expr Expr, entity Entity) (Value, error) {
+	result, err := evaluateExpr(schema, expr, entity)
 	if err != nil {
 		return Value{}, err
 	}
@@ -54,7 +54,7 @@ func evaluateValue(expr Expr, entity Entity) (Value, error) {
 }
 
 // evaluateExpr walks one expression against the bound entity.
-func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
+func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 	// TOTALITY, enforced rather than claimed. The header says this function is total, and an
 	// earlier version was not: Expr{Kind: ExprNot} indexed Args[0] and panicked, as did every
 	// binary kind, while the sibling arms all guarded exactly this class of un-compiled input.
@@ -68,21 +68,21 @@ func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
 		if expr.Literal == nil {
 			return evaluated{}, fmt.Errorf("literal carries no value")
 		}
-		// The kind is derived through the SAME mapping the compiler uses, which errors on an
-		// invalid value. An earlier version had a second mapping here that returned
-		// TypeInvalid with a nil error, so equal(invalid, invalid) answered false: TypeInvalid
-		// is not TypeBool, so the comparison took the value path and Value.Equal's default arm
-		// returned false for two byte-identical operands. That is the bool-equality defect one
-		// type down -- a kind tag that does not match its payload -- and it existed because
-		// two mappings of ValueKind to ExprType disagreed about refusal.
-		kind, err := valueKindType(expr.Literal.Kind())
+		// literalType, which is the compiler's ExprLiteral mapping: Valid() and THEN
+		// valueKindType. An earlier fix collapsed both call sites onto valueKindType alone,
+		// which switches on the KIND and never consults Valid() -- so a Value with a
+		// recognised kind and invalid content (a string holding invalid UTF-8) was refused by
+		// the compiler and accepted here, and equal compared kind and text and answered TRUE.
+		// That is the fourth instance of one shape, sitting inside the fix for the second:
+		// two mappings that disagree about refusal, collapsed onto the wrong one.
+		kind, err := literalType(*expr.Literal)
 		if err != nil {
 			return evaluated{}, fmt.Errorf("literal: %w", err)
 		}
 		return evaluated{kind: kind, value: *expr.Literal}, nil
 
 	case ExprField:
-		value, present, err := boundField(expr.Field, entity)
+		value, present, err := boundField(schema, expr.Field, entity)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -104,14 +104,14 @@ func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: kind, value: value}, nil
 
 	case ExprExists:
-		_, present, err := boundField(expr.Field, entity)
+		_, present, err := boundField(schema, expr.Field, entity)
 		if err != nil {
 			return evaluated{}, err
 		}
 		return evaluated{kind: TypeBool, boolean: present}, nil
 
 	case ExprNot:
-		operand, err := evaluateBool(expr.Args[0], entity)
+		operand, err := evaluateBool(schema, expr.Args[0], entity)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -131,7 +131,7 @@ func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
 		// selection. Real inputs are sparse, so a language that cannot say "present and
 		// below" is not a language for them.
 		for i := range expr.Args {
-			operand, err := evaluateBool(expr.Args[i], entity)
+			operand, err := evaluateBool(schema, expr.Args[i], entity)
 			if err != nil {
 				return evaluated{}, err
 			}
@@ -143,7 +143,7 @@ func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
 
 	case ExprAny:
 		for i := range expr.Args {
-			operand, err := evaluateBool(expr.Args[i], entity)
+			operand, err := evaluateBool(schema, expr.Args[i], entity)
 			if err != nil {
 				return evaluated{}, err
 			}
@@ -154,7 +154,7 @@ func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: TypeBool, boolean: false}, nil
 
 	case ExprEqual:
-		left, right, err := evaluatePair(expr, entity)
+		left, right, err := evaluatePair(schema, expr, entity)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -172,14 +172,14 @@ func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: TypeBool, boolean: left.value.Equal(right.value)}, nil
 
 	case ExprLess:
-		left, right, err := evaluateInt64Pair(expr, entity)
+		left, right, err := evaluateInt64Pair(schema, expr, entity)
 		if err != nil {
 			return evaluated{}, err
 		}
 		return evaluated{kind: TypeBool, boolean: left < right}, nil
 
 	case ExprAdd:
-		left, right, err := evaluateInt64Pair(expr, entity)
+		left, right, err := evaluateInt64Pair(schema, expr, entity)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -198,12 +198,12 @@ func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
 }
 
 // evaluatePair evaluates both operands of a binary node.
-func evaluatePair(expr Expr, entity Entity) (evaluated, evaluated, error) {
-	left, err := evaluateExpr(expr.Args[0], entity)
+func evaluatePair(schema Schema, expr Expr, entity Entity) (evaluated, evaluated, error) {
+	left, err := evaluateExpr(schema, expr.Args[0], entity)
 	if err != nil {
 		return evaluated{}, evaluated{}, err
 	}
-	right, err := evaluateExpr(expr.Args[1], entity)
+	right, err := evaluateExpr(schema, expr.Args[1], entity)
 	if err != nil {
 		return evaluated{}, evaluated{}, err
 	}
@@ -211,8 +211,8 @@ func evaluatePair(expr Expr, entity Entity) (evaluated, evaluated, error) {
 }
 
 // evaluateInt64Pair evaluates both operands and requires them to be int64.
-func evaluateInt64Pair(expr Expr, entity Entity) (int64, int64, error) {
-	left, right, err := evaluatePair(expr, entity)
+func evaluateInt64Pair(schema Schema, expr Expr, entity Entity) (int64, int64, error) {
+	left, right, err := evaluatePair(schema, expr, entity)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -229,10 +229,18 @@ func evaluateInt64Pair(expr Expr, entity Entity) (int64, int64, error) {
 // A compiled selector has already established that every path names the selected kind, so
 // this cannot fire through that route. It is checked anyway because the evaluator is reachable
 // without one and must not read a field off an entity the path does not describe.
-func boundField(path FieldPath, entity Entity) (Value, bool, error) {
+func boundField(schema Schema, path FieldPath, entity Entity) (Value, bool, error) {
 	kind, name := splitFieldPath(path)
 	if kind == "" || name == "" {
 		return Value{}, false, fmt.Errorf("malformed field path %q", path)
+	}
+	// DECLAREDNESS, re-established rather than relied on. Without this, exists() over a path
+	// no schema declares answered false rather than refusing -- absence of a DECLARATION
+	// collapsed into absence of a VALUE, so not(exists(driver.typo)) was true for every
+	// entity while the compiler refused the identical node. The kind half of this guard was
+	// added a round earlier; this is the other half of the same sentence.
+	if _, declared := schema.fieldKind(path); !declared {
+		return Value{}, false, fmt.Errorf("field %q is not declared by this schema", path)
 	}
 	if kind != entity.Ref().Kind {
 		return Value{}, false, fmt.Errorf(

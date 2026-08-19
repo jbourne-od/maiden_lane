@@ -405,7 +405,7 @@ func TestEvaluateRefusesInt64Overflow(t *testing.T) {
 		t.Fatalf("NewEntity: %v", err)
 	}
 	sum := Expr{Kind: ExprAdd, Args: []Expr{field("driver.hos_elapsed_hours"), intLiteral(1)}}
-	if _, err := evaluateValue(sum, huge); err == nil {
+	if _, err := evaluateValue(expressionSchema(t), sum, huge); err == nil {
 		t.Fatal("adding one to the maximum int64 produced an answer")
 	}
 	_ = schema
@@ -417,10 +417,29 @@ func TestEvaluateRefusesInt64Overflow(t *testing.T) {
 // answer -- the compiler's type lattice and the evaluator's kind tag were each correct against
 // their own reference, and neither owned the fact that TypeBool has no value.
 func TestEvaluateComparesBooleans(t *testing.T) {
-	state := selectorState(t, "a")
-	entity := state.Entities()[0]
+	// A DECLARED-BUT-ABSENT field, not an undeclared one. An earlier version used
+	// "driver.nope" as its source of false -- a path TestCompileExpressionRefusals asserts is
+	// meaningless. One test said the node has no meaning while another depended on it
+	// evaluating to false, and the two only coexisted because the evaluator did not check
+	// declaredness. Now that it does, this fixture has to say what it means.
+	schema := expressionSchema(t)
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "selector")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+	anchor, err := NewAtomValue("T0")
+	if err != nil {
+		t.Fatalf("NewAtomValue: %v", err)
+	}
+	entity, err := NewEntity(
+		EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "partial")},
+		map[FieldName]Value{"hos_anchor": anchor})
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	_ = schema
 	present := Expr{Kind: ExprExists, Field: "driver.hos_anchor"}
-	absent := Expr{Kind: ExprExists, Field: "driver.nope"}
+	absent := Expr{Kind: ExprExists, Field: "driver.assignment_key"}
 
 	for _, test := range []struct {
 		name  string
@@ -434,7 +453,7 @@ func TestEvaluateComparesBooleans(t *testing.T) {
 		{"through not", Expr{Kind: ExprNot, Args: []Expr{present}}, absent, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			got, err := evaluateBool(
+			got, err := evaluateBool(expressionSchema(t),
 				Expr{Kind: ExprEqual, Args: []Expr{test.left, test.right}}, entity)
 			if err != nil {
 				t.Fatalf("evaluate: %v", err)
@@ -517,7 +536,7 @@ func TestEvaluateIsTotalOnMalformedNodes(t *testing.T) {
 		{Kind: ExprLiteral},
 		{},
 	} {
-		if _, err := evaluateExpr(expr, entity); err == nil {
+		if _, err := evaluateExpr(expressionSchema(t), expr, entity); err == nil {
 			t.Errorf("kind %d with %d args evaluated", expr.Kind, len(expr.Args))
 		}
 	}
@@ -651,11 +670,11 @@ func TestEvaluateRefusesAnInvalidLiteral(t *testing.T) {
 	invalid := Value{}
 	node := Expr{Kind: ExprLiteral, Literal: &invalid}
 
-	if _, err := evaluateExpr(node, entity); err == nil {
+	if _, err := evaluateExpr(expressionSchema(t), node, entity); err == nil {
 		t.Fatal("an invalid literal evaluated")
 	}
 	// The composition that produced the wrong answer, not merely the leaf.
-	if _, err := evaluateExpr(
+	if _, err := evaluateExpr(expressionSchema(t),
 		Expr{Kind: ExprEqual, Args: []Expr{node, node}}, entity); err == nil {
 		t.Fatal("equal over two invalid literals answered instead of refusing")
 	}
@@ -699,13 +718,13 @@ func TestEvaluateRefusesAPathNamingAnotherKind(t *testing.T) {
 
 	// The driver's own path resolves; the team's must not, even though both kinds declare a
 	// field of that name and the driver holds a value for it.
-	if _, err := evaluateExpr(field("driver.assignment_key"), driver); err != nil {
+	if _, err := evaluateExpr(expressionSchema(t), field("driver.assignment_key"), driver); err != nil {
 		t.Fatalf("the bound kind's own path did not resolve: %v", err)
 	}
-	if _, err := evaluateExpr(field("team.assignment_key"), driver); err == nil {
+	if _, err := evaluateExpr(expressionSchema(t), field("team.assignment_key"), driver); err == nil {
 		t.Fatal("a team path read a driver's field")
 	}
-	if _, err := evaluateExpr(
+	if _, err := evaluateExpr(expressionSchema(t),
 		Expr{Kind: ExprExists, Field: "team.assignment_key"}, driver); err == nil {
 		t.Fatal("exists on a team path answered against a driver")
 	}
@@ -713,7 +732,7 @@ func TestEvaluateRefusesAPathNamingAnotherKind(t *testing.T) {
 	// evaluateBool's type refusal has the same shape: on removal it returns .boolean, which
 	// is false for a value-typed result, so a non-bool operand answers false rather than
 	// refusing.
-	if _, err := evaluateBool(field("driver.assignment_key"), driver); err == nil {
+	if _, err := evaluateBool(expressionSchema(t), field("driver.assignment_key"), driver); err == nil {
 		t.Fatal("a string-typed expression was accepted as a bool")
 	}
 }
@@ -736,7 +755,7 @@ func TestEvaluateRefusesNegativeInt64Overflow(t *testing.T) {
 
 	sum := Expr{Kind: ExprAdd, Args: []Expr{
 		field("driver.hos_elapsed_hours"), intLiteral(-1)}}
-	if got, err := evaluateValue(sum, floor); err == nil {
+	if got, err := evaluateValue(expressionSchema(t), sum, floor); err == nil {
 		value, _ := got.Int64()
 		t.Fatalf("MinInt64 + -1 produced %d instead of refusing", value)
 	}
@@ -770,6 +789,144 @@ func TestSelectorReportsCardinalityViolations(t *testing.T) {
 	}
 	if total != 4 {
 		t.Fatalf("members across violations = %d, want 4", total)
+	}
+}
+
+// THE FOURTH INSTANCE, and it was inside the fix for the second. An earlier round collapsed
+// both literal call sites onto valueKindType, which switches on the KIND and never consults
+// Valid(). The compiler's mapping is literalType: Valid() and then valueKindType. So a Value
+// with a recognised kind and invalid content was refused by the compiler and accepted by the
+// evaluator, and equal compared kind and text and answered TRUE.
+func TestEvaluateRefusesALiteralValidInKindOnly(t *testing.T) {
+	schema := expressionSchema(t)
+	state := selectorState(t, "a")
+	entity := state.Entities()[0]
+
+	// Constructible only in-package, which is why the compiler/evaluator disagreement was
+	// invisible: every external caller goes through a validating constructor.
+	malformed := Value{kind: ValueString, text: "\xff"}
+	if malformed.Valid() {
+		t.Fatal("the fixture value is valid, so this test proves nothing")
+	}
+	node := Expr{Kind: ExprLiteral, Literal: &malformed}
+
+	if _, err := CompileExpression(schema, testCompilerVersion, node); err == nil {
+		t.Fatal("the compiler accepted it, so there is no disagreement to test")
+	}
+	if _, err := evaluateExpr(schema, node, entity); err == nil {
+		t.Fatal("the evaluator accepted a literal the compiler refuses")
+	}
+	if _, err := evaluateBool(
+		schema, Expr{Kind: ExprEqual, Args: []Expr{node, node}}, entity); err == nil {
+		t.Fatal("equal over two malformed literals answered instead of refusing")
+	}
+}
+
+// Declaredness is the other half of boundField's sentence. Without it, absence of a
+// DECLARATION collapses into absence of a VALUE, so not(exists(driver.typo)) is true for
+// every entity while the compiler refuses the identical node.
+func TestEvaluateRefusesAnUndeclaredPath(t *testing.T) {
+	schema := expressionSchema(t)
+	state := selectorState(t, "a")
+	entity := state.Entities()[0]
+
+	for _, expr := range []Expr{
+		{Kind: ExprExists, Field: "driver.nope"},
+		field("driver.nope"),
+	} {
+		if _, err := evaluateExpr(schema, expr, entity); err == nil {
+			t.Errorf("kind %d over an undeclared path answered instead of refusing", expr.Kind)
+		}
+		// The compiler refuses the same node, so the two halves agree.
+		if _, err := CompileExpression(schema, testCompilerVersion, expr); err == nil {
+			t.Errorf("the compiler accepted kind %d over an undeclared path", expr.Kind)
+		}
+	}
+}
+
+// An unconstructed selector must refuse rather than report a successful empty selection.
+// Without the guard the schema comparison is "" != "", which passes, and a zero selector on a
+// zero state returns Selection{}, nil.
+func TestZeroSelectorRefuses(t *testing.T) {
+	var zero CompiledSelector
+	selection, err := zero.Select(State{})
+	if err == nil {
+		t.Fatal("a zero selector produced a selection")
+	}
+	if selection.Ran() {
+		t.Fatal("a refused selection reports that it ran")
+	}
+}
+
+// The type introduced to stop a violation becoming an absence must not have "nothing was
+// there" as its own zero value.
+func TestSelectionDistinguishesNotRunFromEmpty(t *testing.T) {
+	var never Selection
+	if never.Ran() {
+		t.Fatal("the zero Selection reports that it ran")
+	}
+
+	state := selectorState(t, "a")
+	unmatchable, err := NewStringValue("nobody")
+	if err != nil {
+		t.Fatalf("NewStringValue: %v", err)
+	}
+	empty := mustCompileSelector(t, Selector{
+		Kind: "driver",
+		Where: ptr(Expr{Kind: ExprEqual, Args: []Expr{
+			field("driver.assignment_key"), {Kind: ExprLiteral, Literal: &unmatchable}}}),
+		Members: Cardinality{Kind: CardinalityAny},
+	})
+	selection, err := empty.Select(state)
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	// Same observable groups and violations as the zero value; only Ran distinguishes them.
+	if len(selection.Groups()) != 0 || len(selection.Violations()) != 0 {
+		t.Fatalf("expected an empty selection, got %d groups and %d violations",
+			len(selection.Groups()), len(selection.Violations()))
+	}
+	if !selection.Ran() {
+		t.Fatal("a successful empty selection reports that it did not run")
+	}
+}
+
+// Ungrouped order is the state's canonical order. Nothing observed it before this test.
+//
+// Note what this test CANNOT do: it cannot distinguish whether that order comes from the
+// comparator's tiebreak or from pdqsort happening to preserve all-ties input. Removing the
+// tiebreak leaves this green at every size tried. The tiebreak is documented at the sort as
+// unfalsifiable for that reason; this test pins the observable order, not its mechanism.
+func TestSelectorUngroupedOrderIsTheStatesOrder(t *testing.T) {
+	state := selectorState(t, "e", "b", "d", "a", "c", "f")
+	selector := mustCompileSelector(t, Selector{
+		Kind: "driver", Members: Cardinality{Kind: CardinalityAny}})
+
+	var first []EntityRef
+	for pass := range 30 {
+		selection, err := selector.Select(state)
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		refs := make([]EntityRef, 0, len(selection.Groups()))
+		for _, group := range selection.Groups() {
+			refs = append(refs, group.Members()[0].Ref())
+		}
+		if pass == 0 {
+			first = refs
+			// The state's own order, ascending by (kind, EntityID).
+			for i := 1; i < len(refs); i++ {
+				if compareEntityRefs(refs[i-1], refs[i]) >= 0 {
+					t.Fatalf("ungrouped selection is not in the state's canonical order")
+				}
+			}
+			continue
+		}
+		for i := range refs {
+			if refs[i] != first[i] {
+				t.Fatalf("pass %d ordered ungrouped groups differently from pass 0", pass)
+			}
+		}
 	}
 }
 
