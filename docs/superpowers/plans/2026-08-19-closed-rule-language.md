@@ -122,6 +122,20 @@ That figure is derived from reading the code, not measured, and this is recorded
 resolved: measuring it needs a multi-rule plan that compiles, which today's operators cannot
 express. It is blocked on the set-scoped selector and belongs to slice 3.
 
+**A candidate remedy, recorded now and not adopted.** The full replay may be avoidable without
+weakening anything. Re-verifying the entire prefix on every transition defends against a
+journal altered between transitions, which cannot happen inside a single `Run` — the loop just
+produced those entries. Where it genuinely bites is at a rehydration boundary, where the
+journal comes from storage. If that is the only threat, verifying fully on entry and then
+incrementally as the journal extends — transition *k* verifying only entry *k* against the
+already-verified state from *k−1* — proves the same property at Θ(R·E) instead of Θ(R²·E).
+
+Refutation condition, so this is testable rather than merely plausible: it fails if any
+transition can observe a journal it did not itself extend, or if a verified state can be
+mutated between transitions. Both are questions about `ExecuteTransition`'s callers, not about
+the rule language, so this belongs to whoever owns the executor rather than to a slice here —
+but it is recorded because the cost it addresses is the one this programme will expose.
+
 The consequence for how this programme is framed: "the engine is not slow, it is not
 expressive" is only true at the scale the current fixture can reach. Expressiveness is still
 the blocker, because nothing runs at all today — but a set-scoped selector that makes a fleet
