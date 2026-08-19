@@ -17,6 +17,9 @@ import (
 func TestTheImplementedClausesPassAndTheGateStillRefuses(t *testing.T) {
 	sealed := sealTeamHOS(t)
 	candidate := candidateFrom(sealed[0])
+	// Comparison evidence for the checkpoint being promoted, so clause 6 answers about
+	// this candidate rather than about its own missing evidence.
+	candidate.Comparison = comparisonEvidenceFor(t, sealed[0])
 	// The second checkpoint is assessed ready under the CM profile; the first is only
 	// ready under CM too, so either serves. Bind the policy to the profile the
 	// assessment actually used, or the readiness clause answers about its own missing
@@ -64,14 +67,14 @@ var implementedClauses = []Clause{
 	ClauseProtectedInvariants,
 	ClauseReadyAssessment,
 	ClausePinnedIdentities,
+	ClauseComparisonCorpus,
 	ClauseDigestConsistency,
 }
 
-// The three that name a concept this codebase does not have: a replay corpus with
-// §14.2 comparison identity, a protected-metric regression policy, and executor
-// certification against a reference implementation. Each is a programme, not a task.
+// The two that name a concept this codebase does not have: a protected-metric regression
+// policy, and executor certification against a reference implementation. Each is a
+// programme, not a task. The replay corpus was the third and is now implemented.
 var unsupportedClauses = []Clause{
-	ClauseComparisonCorpus,
 	ClauseNoMetricRegression,
 	ClauseCertifiedBackend,
 }
@@ -617,5 +620,159 @@ func TestProvenanceIsEstablishedByTheKernelRefusingAnythingElse(t *testing.T) {
 	if _, err := semantic.BindRun(other); err == nil {
 		t.Fatal("BindRun accepted a provenance policy other than changes, so " +
 			"'at least changes' is now a comparison this clause does not perform")
+	}
+}
+
+// ── the comparison-corpus clause ────────────────────────────────────────────
+
+// Absent comparison evidence is unevaluated, never failed. A candidate nobody supplied a
+// comparison for says nothing adverse about itself, and telling an operator otherwise
+// would send them to investigate a defect that does not exist.
+func TestAbsentComparisonEvidenceIsUnevaluated(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	candidate := candidateFrom(sealed[0])
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+
+	result := clauseIndex(Evaluate(policy, candidate))[ClauseComparisonCorpus]
+	if result.Verdict() != NotEvaluated || result.Unevaluated() != InformationAbsent {
+		t.Fatalf("= %v/%v, want NotEvaluated/InformationAbsent",
+			result.Verdict(), result.Unevaluated())
+	}
+}
+
+// Evidence that contradicts the comparison is a definite adverse finding, unlike evidence
+// that is merely missing. Each of these is a way a side can have answered a different
+// question while looking complete.
+func TestComparisonEvidenceMustAnswerThisComparison(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+
+	t.Run("complete evidence passes", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		candidate.Comparison = comparisonEvidenceFor(t, sealed[0])
+		result := clauseIndex(Evaluate(policy, candidate))[ClauseComparisonCorpus]
+		if result.Verdict() != Pass {
+			t.Fatalf("= %v/%v, want Pass", result.Verdict(), result.Unevaluated())
+		}
+	})
+
+	// The checkpoint being promoted must BE the candidate side. Without this, evidence
+	// from a comparison of two entirely different declarations would satisfy the clause.
+	t.Run("a comparison of some other checkpoint fails", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		candidate.Comparison = comparisonEvidenceFor(t, sealed[1])
+		result := clauseIndex(Evaluate(policy, candidate))[ClauseComparisonCorpus]
+		if result.Verdict() != Fail {
+			t.Fatalf("= %v, want Fail: this comparison is about another checkpoint",
+				result.Verdict())
+		}
+	})
+
+	t.Run("a side with no evidence is unevaluated", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		evidence := comparisonEvidenceFor(t, sealed[0])
+		evidence.Baseline = nil
+		candidate.Comparison = evidence
+		result := clauseIndex(Evaluate(policy, candidate))[ClauseComparisonCorpus]
+		if result.Verdict() != NotEvaluated {
+			t.Fatalf("= %v, want NotEvaluated: a side with no evidence is missing, "+
+				"not wrong", result.Verdict())
+		}
+	})
+
+	// Coverage: the case digests must re-derive the corpus the comparison names. A side
+	// that ran a subset has answered a question about a smaller corpus.
+	t.Run("a side not covering the corpus fails", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		evidence := comparisonEvidenceFor(t, sealed[0])
+		// Duplicate the single case, so the side has evidence whose digests cannot be
+		// this corpus.
+		evidence.Candidate = append(evidence.Candidate, evidence.Candidate[0])
+		candidate.Comparison = evidence
+		result := clauseIndex(Evaluate(policy, candidate))[ClauseComparisonCorpus]
+		if result.Verdict() != Fail {
+			t.Fatalf("= %v, want Fail: these cases are not this corpus", result.Verdict())
+		}
+	})
+
+	// The artifact must realize the declaration its side names. A side that ran the right
+	// corpus under the wrong checkpoint answered a different question.
+	t.Run("a side's artifact realizing another declaration fails", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		evidence := comparisonEvidenceFor(t, sealed[0])
+		evidence.Candidate[0] = comparedCase(t, sealed[1],
+			evidence.Comparison.Profile())
+		candidate.Comparison = evidence
+		result := clauseIndex(Evaluate(policy, candidate))[ClauseComparisonCorpus]
+		if result.Verdict() != Fail {
+			t.Fatalf("= %v, want Fail", result.Verdict())
+		}
+	})
+
+	// An assessment bound to another checkpoint, or taken under another profile, cannot
+	// support this comparison. §14.2 is explicit that an optimizer-ready baseline and a
+	// merely CM-ready candidate cannot be compared.
+	t.Run("an assessment under another profile fails", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		evidence := comparisonEvidenceFor(t, sealed[0])
+		other := otherProfileAssessment(t, sealed[0], evidence.Comparison.Profile())
+		evidence.Candidate[0].Assessment = other
+		candidate.Comparison = evidence
+		result := clauseIndex(Evaluate(policy, candidate))[ClauseComparisonCorpus]
+		if result.Verdict() != Fail {
+			t.Fatalf("= %v, want Fail: the profile is what makes two sides comparable",
+				result.Verdict())
+		}
+	})
+
+	t.Run("an assessment of another checkpoint fails", func(t *testing.T) {
+		candidate := candidateFrom(sealed[0])
+		evidence := comparisonEvidenceFor(t, sealed[0])
+		evidence.Candidate[0].Assessment = sealed[1].assessments[0]
+		candidate.Comparison = evidence
+		result := clauseIndex(Evaluate(policy, candidate))[ClauseComparisonCorpus]
+		if result.Verdict() != Fail {
+			t.Fatalf("= %v, want Fail", result.Verdict())
+		}
+	})
+}
+
+// THE OWNER'S FORWARD CONSTRAINT, ASSERTED: the world is checked on the ARTIFACT, never
+// taken from whatever produced the evidence.
+//
+// §14.2 pins WorldID into the comparison question, and a side run reporting the right
+// world is a projection — only the sealed artifact carries the world the execution
+// actually pinned. A comparison naming a world its evidence did not run under is
+// comparing over an unstated set of inputs.
+func TestTheWorldIsCheckedOnTheArtifactRatherThanTheComparison(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	candidate := candidateFrom(sealed[0])
+	evidence := comparisonEvidenceFor(t, sealed[0])
+
+	// Re-identify the comparison under a different world. Everything else is unchanged,
+	// so the artifacts are exactly the ones that were produced — under the other world.
+	elsewhere := worldWithReference(t)
+	if elsewhere.ID() == evidence.Comparison.World() {
+		t.Fatal("the fixture is wrong: the two worlds must differ")
+	}
+	restated, err := semantic.NewComparison(semantic.ComparisonRequest{
+		Baseline:  evidence.Comparison.Baseline(),
+		Candidate: evidence.Comparison.Candidate(),
+		Profile:   evidence.Comparison.Profile(),
+		World:     elsewhere.ID(),
+		Corpus:    evidence.Comparison.Corpus(),
+		Policy:    evidence.Comparison.Policy(),
+	})
+	if err != nil {
+		t.Fatalf("NewComparison: %v", err)
+	}
+	evidence.Comparison = restated
+	candidate.Comparison = evidence
+
+	result := clauseIndex(Evaluate(
+		policyRequiring(sealed[0].assessments[0].ProfileID()), candidate))[ClauseComparisonCorpus]
+	if result.Verdict() != Fail {
+		t.Fatalf("= %v, want Fail: the evidence did not run under the world this "+
+			"comparison names", result.Verdict())
 	}
 }

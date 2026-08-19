@@ -215,3 +215,31 @@ func corpusCanonicalBytes(digests []StateDigest) ([]byte, error) {
 	}
 	return encoder.bytes()
 }
+
+// VerifyCorpusIdentity reports whether these case digests, in this order, are the corpus
+// the expected identity names.
+//
+// It exists so a pure evaluation can establish "the same replay corpus" without holding
+// the corpus. Clause 6 of HLD §14.1 requires a baseline and a candidate to have run over
+// the same corpus, and content-addressing is what makes that provable: a caller supplying
+// the case digests it actually ran cannot make them add up to a corpus it did not run.
+//
+// This is a verifier, not a constructor. It takes digests rather than states because the
+// caller is checking coverage rather than assembling a corpus, and it deliberately does
+// not canonicalize: the digests must already be in the corpus's canonical order, so a
+// caller cannot pass an arbitrary set and have it silently sorted into agreement. A set
+// with the right members in the wrong order is a caller that does not know what it ran.
+//
+// An empty list verifies nothing. Returning true for the digest of no cases would let a
+// side that ran nothing satisfy a clause about what it ran, which is the vacuous pass the
+// empty-corpus refusal exists to prevent.
+func VerifyCorpusIdentity(digests []StateDigest, expected CorpusID) bool {
+	if len(digests) == 0 || expected == "" {
+		return false
+	}
+	canonical, err := corpusCanonicalBytes(digests)
+	if err != nil {
+		return false
+	}
+	return CorpusID(canonicalDigest(canonical)) == expected
+}

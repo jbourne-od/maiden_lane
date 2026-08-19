@@ -61,6 +61,15 @@ type Candidate struct {
 	// defined on them is semantic.VerifyInvariantResultDigest.
 	RetainedInvariantWitness []byte
 
+	// Comparison is the evidence answering one promotion comparison, or nil when none
+	// was supplied.
+	//
+	// A pointer rather than a value because absence is meaningful and common: most
+	// candidates are evaluated without a comparison, and a zero-valued struct would make
+	// "no comparison" and "an empty comparison" the same thing. The clause reports the
+	// first as unevaluated and the second as adverse, which are different answers.
+	Comparison *ComparisonEvidence
+
 	// ExecutionID is the execution that produced the checkpoint, which §14.1's
 	// pinned-identity clause requires and no artifact here carries: executor identity
 	// is excluded from checkpoint identity by design, so one semantic run can be
@@ -110,13 +119,12 @@ func established(policy ports.TargetPolicy) bool {
 
 // Evaluate produces a gate decision for one candidate under one target policy.
 //
-// Six of HLD §14.1's nine clauses are answered from the candidate. The other three
-// are UnsupportedByBuild rather than absent: comparison over a replay corpus,
-// protected metric regression, and backend certification each name a concept this
-// codebase does not have, so no candidate satisfies them and no additional evidence
-// would help. Reporting them as unsupported is what keeps a nine-clause gate from
-// reading as satisfied while checking six, and publication consequently still
-// authorizes nothing.
+// Seven of HLD §14.1's nine clauses are answered from the candidate. The other two are
+// UnsupportedByBuild rather than absent: protected metric regression and backend
+// certification each name a concept this codebase does not have, so no candidate
+// satisfies them and no additional evidence would help. Reporting them as unsupported is
+// what keeps a nine-clause gate from reading as satisfied while checking seven, and
+// publication consequently still authorizes nothing.
 //
 // It takes the whole policy rather than just the version it currently reads. The
 // readiness clause needs the required profile, and more importantly a caller
@@ -142,7 +150,7 @@ func Evaluate(policy ports.TargetPolicy, candidate Candidate) Decision {
 		ClauseProtectedInvariants:  protectedInvariants(candidate),
 		ClauseReadyAssessment:      readyAssessment(policy, candidate),
 		ClausePinnedIdentities:     pinnedIdentities(candidate),
-		ClauseComparisonCorpus:     Unsupported(ClauseComparisonCorpus),
+		ClauseComparisonCorpus:     comparisonCorpus(candidate, candidate.Comparison),
 		ClauseNoMetricRegression:   Unsupported(ClauseNoMetricRegression),
 		ClauseDigestConsistency:    digestConsistency(candidate),
 		ClauseCertifiedBackend:     Unsupported(ClauseCertifiedBackend),
