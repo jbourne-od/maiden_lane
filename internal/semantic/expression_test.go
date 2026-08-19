@@ -1,0 +1,313 @@
+package semantic
+
+import (
+	"encoding/hex"
+	"testing"
+)
+
+// expressionSchema declares one entity with a field of every value kind, so a test can vary
+// the type dimension without varying anything else.
+func expressionSchema(t *testing.T) Schema {
+	t.Helper()
+	schema, err := NewSchema([]EntityDeclaration{{
+		Kind: "driver",
+		Fields: []FieldDeclaration{
+			{Name: "assignment_key", Kind: ValueString},
+			{Name: "hos_anchor", Kind: ValueAtom},
+			{Name: "hos_elapsed_hours", Kind: ValueInt64},
+			{Name: "hos_driving_hours", Kind: ValueInt64},
+		},
+	}}, nil)
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+	return schema
+}
+
+func intLiteral(value int64) Expr {
+	literal := NewInt64Value(value)
+	return Expr{Kind: ExprLiteral, Literal: &literal}
+}
+
+func stringLiteral(t *testing.T, text string) Expr {
+	t.Helper()
+	literal, err := NewStringValue(text)
+	if err != nil {
+		t.Fatalf("NewStringValue: %v", err)
+	}
+	return Expr{Kind: ExprLiteral, Literal: &literal}
+}
+
+func field(path FieldPath) Expr { return Expr{Kind: ExprField, Field: path} }
+
+// Type derivation is total over the vocabulary: every kind either yields a type or refuses,
+// and none silently produces the zero value.
+func TestCompileExpressionDerivesTypes(t *testing.T) {
+	schema := expressionSchema(t)
+	for _, test := range []struct {
+		name string
+		expr Expr
+		want ExprType
+	}{
+		{"string literal", stringLiteral(t, "x"), TypeString},
+		{"int literal", intLiteral(3), TypeInt64},
+		{"string field", field("driver.assignment_key"), TypeString},
+		{"atom field", field("driver.hos_anchor"), TypeAtom},
+		{"int field", field("driver.hos_elapsed_hours"), TypeInt64},
+		{"exists", Expr{Kind: ExprExists, Field: "driver.hos_anchor"}, TypeBool},
+		{"is_null", Expr{Kind: ExprIsNull, Field: "driver.hos_anchor"}, TypeBool},
+		{"not", Expr{Kind: ExprNot, Args: []Expr{
+			{Kind: ExprExists, Field: "driver.hos_anchor"}}}, TypeBool},
+		{"all", Expr{Kind: ExprAll, Args: []Expr{
+			{Kind: ExprExists, Field: "driver.hos_anchor"}}}, TypeBool},
+		{"any", Expr{Kind: ExprAny, Args: []Expr{
+			{Kind: ExprExists, Field: "driver.hos_anchor"},
+			{Kind: ExprIsNull, Field: "driver.assignment_key"}}}, TypeBool},
+		{"equal on atoms", Expr{Kind: ExprEqual, Args: []Expr{
+			field("driver.hos_anchor"), field("driver.hos_anchor")}}, TypeBool},
+		{"less on ints", Expr{Kind: ExprLess, Args: []Expr{
+			field("driver.hos_driving_hours"), field("driver.hos_elapsed_hours")}}, TypeBool},
+		{"add", Expr{Kind: ExprAdd, Args: []Expr{
+			field("driver.hos_elapsed_hours"), intLiteral(1)}}, TypeInt64},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			compiled, err := CompileExpression(schema, test.expr)
+			if err != nil {
+				t.Fatalf("CompileExpression: %v", err)
+			}
+			if compiled.Type() != test.want {
+				t.Fatalf("type = %s, want %s", compiled.Type(), test.want)
+			}
+		})
+	}
+}
+
+// Production break caught: every one of these is a well-formed-looking expression that means
+// nothing, and each must be refused at compile time rather than surfacing as a runtime
+// surprise in a later slice.
+func TestCompileExpressionRefusals(t *testing.T) {
+	schema := expressionSchema(t)
+	deep := field("driver.hos_elapsed_hours")
+	for range maxExprDepth + 2 {
+		deep = Expr{Kind: ExprAdd, Args: []Expr{deep, intLiteral(1)}}
+	}
+
+	for _, test := range []struct {
+		name string
+		expr Expr
+	}{
+		{"zero value", Expr{}},
+		{"unknown kind", Expr{Kind: ExprKind(200), Args: []Expr{intLiteral(1)}}},
+		{"undeclared field", field("driver.nope")},
+		{"undeclared entity", field("truck.assignment_key")},
+		{"malformed path", field("assignment_key")},
+		{"exists on undeclared field", Expr{Kind: ExprExists, Field: "driver.nope"}},
+		{"literal with no value", Expr{Kind: ExprLiteral, Literal: &Value{}}},
+		{"empty all", Expr{Kind: ExprAll}},
+		{"empty any", Expr{Kind: ExprAny}},
+		{"not with two arguments", Expr{Kind: ExprNot, Args: []Expr{
+			{Kind: ExprExists, Field: "driver.hos_anchor"},
+			{Kind: ExprExists, Field: "driver.hos_anchor"}}}},
+		{"equal with one argument", Expr{Kind: ExprEqual, Args: []Expr{intLiteral(1)}}},
+		{"not on a non-bool", Expr{Kind: ExprNot, Args: []Expr{intLiteral(1)}}},
+		{"all over a non-bool", Expr{Kind: ExprAll, Args: []Expr{intLiteral(1)}}},
+		// HLD §9.1: type-incompatible comparisons are a static validation failure.
+		{"equal across types", Expr{Kind: ExprEqual, Args: []Expr{
+			field("driver.assignment_key"), field("driver.hos_elapsed_hours")}}},
+		// Ordering atoms asserts a meaning they do not carry.
+		{"less on atoms", Expr{Kind: ExprLess, Args: []Expr{
+			field("driver.hos_anchor"), field("driver.hos_anchor")}}},
+		// Ordering strings needs a collation this kernel does not define.
+		{"less on strings", Expr{Kind: ExprLess, Args: []Expr{
+			field("driver.assignment_key"), stringLiteral(t, "x")}}},
+		{"add on strings", Expr{Kind: ExprAdd, Args: []Expr{
+			field("driver.assignment_key"), stringLiteral(t, "x")}}},
+		{"deeper than the bound", deep},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			compiled, err := CompileExpression(schema, test.expr)
+			if err == nil {
+				t.Fatalf("compiled an expression that should be refused, type=%s",
+					compiled.Type())
+			}
+			if compiled.Type() != TypeInvalid {
+				t.Fatalf("a refused expression reported type %s", compiled.Type())
+			}
+		})
+	}
+}
+
+// THE ENCODING MUST BE INJECTIVE OVER AUTHORED CONTENT, and the fat-struct shape is what
+// threatens it. The encoder writes only the operands a kind uses, so a node carrying an
+// ignored operand would encode identically to one without it: two materially different
+// authored expressions would share one identity, and the ruleset digest would stop
+// committing to what the author wrote.
+//
+// Refusing the node is what keeps that from being expressible at all.
+func TestCompileExpressionRefusesOperandsAKindIgnores(t *testing.T) {
+	schema := expressionSchema(t)
+	literal := NewInt64Value(1)
+
+	for _, test := range []struct {
+		name string
+		expr Expr
+	}{
+		{"literal on an operator", Expr{Kind: ExprNot, Literal: &literal, Args: []Expr{
+			{Kind: ExprExists, Field: "driver.hos_anchor"}}}},
+		{"field on an operator", Expr{Kind: ExprNot, Field: "driver.hos_anchor", Args: []Expr{
+			{Kind: ExprExists, Field: "driver.hos_anchor"}}}},
+		{"field on a literal", Expr{Kind: ExprLiteral, Literal: &literal,
+			Field: "driver.hos_anchor"}},
+		{"literal on a field", Expr{Kind: ExprField, Field: "driver.hos_anchor",
+			Literal: &literal}},
+		{"arguments on a field", Expr{Kind: ExprField, Field: "driver.hos_anchor",
+			Args: []Expr{intLiteral(1)}}},
+		{"arguments on a literal", Expr{Kind: ExprLiteral, Literal: &literal,
+			Args: []Expr{intLiteral(1)}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := CompileExpression(schema, test.expr); err == nil {
+				t.Fatal("compiled a node carrying an operand its kind ignores")
+			}
+		})
+	}
+}
+
+// Argument order is semantic content even where the operation is commutative in arithmetic,
+// because two authored trees that differ must not share an identity.
+func TestCompileExpressionDistinguishesArgumentOrder(t *testing.T) {
+	schema := expressionSchema(t)
+	forward, err := CompileExpression(schema, Expr{Kind: ExprAdd, Args: []Expr{
+		field("driver.hos_elapsed_hours"), intLiteral(1)}})
+	if err != nil {
+		t.Fatalf("CompileExpression: %v", err)
+	}
+	reversed, err := CompileExpression(schema, Expr{Kind: ExprAdd, Args: []Expr{
+		intLiteral(1), field("driver.hos_elapsed_hours")}})
+	if err != nil {
+		t.Fatalf("CompileExpression: %v", err)
+	}
+	if string(forward.CanonicalBytes()) == string(reversed.CanonicalBytes()) {
+		t.Fatal("swapping arguments produced identical canonical bytes")
+	}
+}
+
+// A compiled expression shares nothing with the declaration it was built from, and nothing
+// with a second caller. Copying the struct would copy the Args slice header and the Literal
+// pointer.
+func TestCompiledExpressionSharesNothing(t *testing.T) {
+	schema := expressionSchema(t)
+	authored := Expr{Kind: ExprAdd, Args: []Expr{
+		field("driver.hos_elapsed_hours"), intLiteral(1)}}
+	compiled, err := CompileExpression(schema, authored)
+	if err != nil {
+		t.Fatalf("CompileExpression: %v", err)
+	}
+	before := string(compiled.CanonicalBytes())
+
+	authored.Args[0] = field("driver.hos_driving_hours")
+	returned := compiled.Expression()
+	returned.Args[1] = intLiteral(99)
+	bytes := compiled.CanonicalBytes()
+	bytes[0] ^= 0xff
+
+	if string(compiled.CanonicalBytes()) != before {
+		t.Fatal("mutating the declaration or a returned copy changed the compiled expression")
+	}
+	if compiled.Expression().Args[0].Field != "driver.hos_elapsed_hours" {
+		t.Fatal("the compiled expression aliases the authored declaration")
+	}
+}
+
+// Compiling the same authored expression twice yields the same bytes, which is what makes an
+// expression's contribution to a ruleset identity stable.
+func TestCompileExpressionIsDeterministic(t *testing.T) {
+	schema := expressionSchema(t)
+	authored := Expr{Kind: ExprAll, Args: []Expr{
+		{Kind: ExprExists, Field: "driver.hos_anchor"},
+		{Kind: ExprLess, Args: []Expr{
+			field("driver.hos_driving_hours"), field("driver.hos_elapsed_hours")}},
+	}}
+	first, err := CompileExpression(schema, authored)
+	if err != nil {
+		t.Fatalf("CompileExpression: %v", err)
+	}
+	second, err := CompileExpression(schema, authored)
+	if err != nil {
+		t.Fatalf("CompileExpression: %v", err)
+	}
+	if string(first.CanonicalBytes()) != string(second.CanonicalBytes()) {
+		t.Fatal("two compilations of one expression produced different bytes")
+	}
+}
+
+// ── golden canonical vectors ────────────────────────────────────────────────
+
+// These exist because of a limit no behavioural test can cross, not as belt-and-braces.
+//
+// The kind byte is the case. Every valid expression's meaning is determined by its kind, so
+// no fixture can hold the meaning fixed and vary "is the kind byte written". Delete the byte
+// from the encoder and every behavioural test above still passes — type derivation is
+// unaffected, argument order still distinguishes, determinism still holds — while two
+// different kinds sharing an operand shape silently collide into one identity.
+//
+// The same applies to the domain tag, which no behavioural test observes at all.
+//
+// Canonical formats are one of the few places brittleness is the point: changing a v1
+// encoding should force somebody to edit a conspicuous constant and thereby admit they are
+// renaming every artifact that encoding identifies.
+
+// Production break caught: dropping the kind byte lets ExprExists and ExprIsNull -- identical
+// in operand shape and both yielding bool -- encode identically and share one identity.
+func TestExpressionCanonicalGoldenVectors(t *testing.T) {
+	schema := expressionSchema(t)
+	for _, test := range []struct {
+		name    string
+		expr    Expr
+		wantHex string
+	}{
+		{
+			name:    "exists",
+			expr:    Expr{Kind: ExprExists, Field: "driver.hos_anchor"},
+			wantHex: "00000000000000196d616964656e2d6c616e652e65787072657373696f6e2e76310300000000000000116472697665722e686f735f616e63686f72",
+		},
+		{
+			// Byte-for-byte identical to the vector above except for the kind byte. If that
+			// byte ever stops being written, these two vectors collide and this test says so.
+			name:    "is_null",
+			expr:    Expr{Kind: ExprIsNull, Field: "driver.hos_anchor"},
+			wantHex: "00000000000000196d616964656e2d6c616e652e65787072657373696f6e2e76310400000000000000116472697665722e686f735f616e63686f72",
+		},
+		{
+			name:    "int literal",
+			expr:    intLiteral(11),
+			wantHex: "00000000000000196d616964656e2d6c616e652e65787072657373696f6e2e76310103000000000000000b",
+		},
+		{
+			name: "nested tree",
+			expr: Expr{Kind: ExprAll, Args: []Expr{
+				{Kind: ExprExists, Field: "driver.hos_anchor"},
+				{Kind: ExprLess, Args: []Expr{
+					field("driver.hos_driving_hours"),
+					{Kind: ExprAdd, Args: []Expr{
+						field("driver.hos_elapsed_hours"), intLiteral(1)}},
+				}},
+			}},
+			wantHex: "00000000000000196d616964656e2d6c616e652e65787072657373696f6e2e7631" +
+				"06000000000000000203000000000000001164726976" +
+				"65722e686f735f616e63686f720900000000000000020200000000000000186472697665" +
+				"722e686f735f64726976696e675f686f7572730a000000000000000202000000000000" +
+				"00186472697665722e686f735f656c61707365645f686f75727301030000000000000001",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			compiled, err := CompileExpression(schema, test.expr)
+			if err != nil {
+				t.Fatalf("CompileExpression: %v", err)
+			}
+			if got := hex.EncodeToString(compiled.CanonicalBytes()); got != test.wantHex {
+				t.Fatalf("canonical bytes =\n%s\nwant\n%s", got, test.wantHex)
+			}
+		})
+	}
+}
