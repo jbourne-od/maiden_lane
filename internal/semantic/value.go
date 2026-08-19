@@ -38,6 +38,8 @@ type (
 	AssessmentID             string
 	AssessmentDigest         string
 	CorpusID                 string
+	ComparisonPolicyID       string
+	ComparisonID             string
 	CompilationFailureDigest string
 	FailureReportDigest      string
 	CompilerSemanticsVersion string

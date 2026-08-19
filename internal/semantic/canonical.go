@@ -133,6 +133,8 @@ const (
 	assessmentIDDomainTag       = "maiden-lane.assessment-id.v1"
 	assessmentDomainTag         = "maiden-lane.readiness-assessment.v1"
 	corpusDomainTag             = "maiden-lane.replay-corpus.v1"
+	comparisonPolicyDomainTag   = "maiden-lane.comparison-policy.v1"
+	comparisonIDDomainTag       = "maiden-lane.comparison-id.v1"
 )
 
 // assessmentSemanticsVersion pins the meaning of readiness evaluation (closed
