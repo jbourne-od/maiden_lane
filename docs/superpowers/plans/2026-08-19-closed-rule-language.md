@@ -91,8 +91,10 @@ an argument nobody has made.
 And the open question: dependency edges come from `intersects(writer.writes, reader.reads)`
 (`compile.go:787`) and mutual edges are a `DEPENDENCY_CYCLE` (`compile.go:394`). Under
 set-scoped rules over one entity kind, read and write sets overlap more readily, so
-**set-scoping may produce more cycles, not fewer.** Slice 2 delivers the fixture that can
-answer this; the analysis is not declared adequate before then.
+**set-scoping may produce more cycles, not fewer.** Answering it needs a set-scoped ruleset
+that reaches the compiler, which needs a Transform consuming a selection -- so it belongs to
+the first slice that lands a rule end to end, not to the selector alone. The analysis is not
+declared adequate before then.
 
 ## Committed slices
 
@@ -120,7 +122,8 @@ grow with the fleet, making a run **Θ(N³)**.
 
 That figure is derived from reading the code, not measured, and this is recorded rather than
 resolved: measuring it needs a multi-rule plan that compiles, which today's operators cannot
-express. It is blocked on the set-scoped selector and belongs to slice 2.
+express. It is blocked on set-scoped rules reaching the compiler, which needs a Transform as well as
+the selector.
 
 **A candidate remedy, recorded now and not adopted.** The full replay may be avoidable without
 weakening anything. Re-verifying the entire prefix on every transition defends against a
@@ -148,7 +151,8 @@ write conflicts, confirmed at 2, 3 and 10 instances — 45 at ten, because nothi
 path distinguishes one team from another. It is labelled a baseline rather than a
 specification, since this programme is expected to change it.
 
-Neither answers decision 4's question, which is about **set-scoped** rules and needs slice 2.
+Neither answers decision 4's question, which is about **set-scoped** rules reaching the
+compiler, and so needs a Transform as well as a selector.
 
 **Slice 1 — the expression AST.** `Expr` as a closed union, canonical bytes, compile-time type
 derivation. No execution, no rules.
@@ -166,8 +170,14 @@ plus a variable-reference node carrying a de Bruijn index adds two ordinary kind
 nothing existing. The reason to decide early is the implicit-scope trap, not encoding churn.)
 
 **Slice 2 — selection and grouping.** The selector, canonical ordering of matches and group
-keys, declared cardinality, the determinism test, and the set-scoped multi-rule fixture
-decision 4 needs.
+keys, declared cardinality, and the determinism test.
+
+**The set-scoped multi-rule fixture decision 4 needs is NOT in slice 2, and an earlier version
+of this line promised it.** A selector that compiles is not a rule that compiles: nothing
+consumes a selection until a Transform exists, so no set-scoped ruleset can reach
+write-conflict analysis and no cycle behaviour can be observed. Decision 4's question moves to
+the first slice that lands a rule end to end. Recorded here rather than left to a reader who
+would otherwise conclude slice 2 answered a question it never touched.
 
 **This comes before evaluation, and an earlier ordering had it the other way round.** Slice 1
 settled that there is no ambient scope, so a `Field` path names an entity *kind* and no entity

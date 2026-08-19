@@ -46,11 +46,23 @@ func evaluateValue(expr Expr, entity Entity) (Value, error) {
 	if result.kind == TypeBool {
 		return Value{}, fmt.Errorf("expression is bool, not a value")
 	}
+	if !result.value.Valid() {
+		// A zero value with no error is the zero-value-permits shape this codebase forbids.
+		return Value{}, fmt.Errorf("expression yielded no value")
+	}
 	return result.value, nil
 }
 
 // evaluateExpr walks one expression against the bound entity.
 func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
+	// TOTALITY, enforced rather than claimed. The header says this function is total, and an
+	// earlier version was not: Expr{Kind: ExprNot} indexed Args[0] and panicked, as did every
+	// binary kind, while the sibling arms all guarded exactly this class of un-compiled input.
+	// checkOperandShape is the compiler's own check, reused here so the two cannot disagree
+	// about what a kind's operands are.
+	if err := checkOperandShape(expr); err != nil {
+		return evaluated{}, err
+	}
 	switch expr.Kind {
 	case ExprLiteral:
 		if expr.Literal == nil {
@@ -66,9 +78,10 @@ func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
 		if !present {
 			// ABSENCE IS REFUSED, NOT DEFAULTED. Yielding a zero here would make
 			// less(driver.hours, 10) true for an entity with no hours at all, which is a
-			// claim about the world nobody made. An author who means "absent or below" writes
-			// any(is-absent, less(...)) — or rather writes exists(), since this kernel has no
-			// null. The refusal is what keeps that distinction the author's to make.
+			// claim about the world nobody made. An author who means "present and below"
+			// writes all(exists(f), less(f, 10)), which works because all short circuits --
+			// see ExprAll. The refusal keeps that distinction the author's to make; the
+			// short circuit keeps it expressible.
 			return evaluated{}, fmt.Errorf("field %q is absent", expr.Field)
 		}
 		return evaluated{kind: literalKindOf(value), value: value}, nil
@@ -88,29 +101,40 @@ func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: TypeBool, boolean: !operand}, nil
 
 	case ExprAll:
-		// No short circuit. Every argument is evaluated even once the answer is known, so
-		// that an absent field is refused wherever it appears rather than depending on the
-		// order the author wrote the conjuncts in. Determinism beats the saved work.
-		result := true
+		// SHORT CIRCUITS, and an earlier version deliberately did not. That version argued
+		// determinism: an absent field should be refused wherever it appears rather than
+		// depending on the order the author wrote the conjuncts in.
+		//
+		// The argument was wrong twice over. Short-circuit evaluation is deterministic --
+		// it depends on authored order, which is content this kernel already treats as
+		// semantic and preserves in the canonical bytes, not on anything ambient. And
+		// without it, absence-tolerant predicates are UNWRITABLE: absence is refused, so
+		// all(exists(f), less(f, 10)) evaluates less() on the absent field and errors, and
+		// so does any(not(exists(f)), less(f, 10)). One sparse entity then fails the whole
+		// selection. Real inputs are sparse, so a language that cannot say "present and
+		// below" is not a language for them.
 		for i := range expr.Args {
 			operand, err := evaluateBool(expr.Args[i], entity)
 			if err != nil {
 				return evaluated{}, err
 			}
-			result = result && operand
+			if !operand {
+				return evaluated{kind: TypeBool, boolean: false}, nil
+			}
 		}
-		return evaluated{kind: TypeBool, boolean: result}, nil
+		return evaluated{kind: TypeBool, boolean: true}, nil
 
 	case ExprAny:
-		result := false
 		for i := range expr.Args {
 			operand, err := evaluateBool(expr.Args[i], entity)
 			if err != nil {
 				return evaluated{}, err
 			}
-			result = result || operand
+			if operand {
+				return evaluated{kind: TypeBool, boolean: true}, nil
+			}
 		}
-		return evaluated{kind: TypeBool, boolean: result}, nil
+		return evaluated{kind: TypeBool, boolean: false}, nil
 
 	case ExprEqual:
 		left, right, err := evaluatePair(expr, entity)
@@ -119,6 +143,14 @@ func evaluateExpr(expr Expr, entity Entity) (evaluated, error) {
 		}
 		if left.kind != right.kind {
 			return evaluated{}, fmt.Errorf("equal compares %s with %s", left.kind, right.kind)
+		}
+		// Bool operands compare through .boolean, not .value. A bool result carries the zero
+		// Value, so comparing values here answered false for every pair of booleans -- a
+		// total, deterministic wrong answer: equal(exists(f), exists(f)) was false even when
+		// f was present. Two checks each correct against their own reference, and neither
+		// owning the fact that TypeBool has no value.
+		if left.kind == TypeBool {
+			return evaluated{kind: TypeBool, boolean: left.boolean == right.boolean}, nil
 		}
 		return evaluated{kind: TypeBool, boolean: left.value.Equal(right.value)}, nil
 
