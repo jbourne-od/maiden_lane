@@ -41,13 +41,21 @@ CREATE TABLE comparisons (
     -- Operational metadata only. Nothing here participates in any identity.
     created_at timestamptz NOT NULL DEFAULT now(),
 
-    PRIMARY KEY (tenant_id, comparison_id),
-
-    -- A comparison of a checkpoint with itself is not a comparison. The kernel already
-    -- refuses one, because a policy cannot map a checkpoint to itself across two plans
-    -- without the plans being identical, and this says so where the data lives too.
-    CHECK (baseline_checkpoint_id <> candidate_checkpoint_id)
+    PRIMARY KEY (tenant_id, comparison_id)
 );
+
+-- There is deliberately NO constraint requiring the two checkpoint sides to differ.
+-- An earlier draft had one, on the belief that the kernel already refuses a comparison
+-- of a checkpoint with itself. It does not: NewComparisonPolicy requires each side to be
+-- declared and the mapping to be one-to-one, and NewComparison requires the policy to
+-- declare the supplied pair, so one plan mapped to itself is valid kernel state.
+--
+-- Such a comparison is degenerate for ordinary candidate promotion but it is not
+-- nonsensical, because the two sides are still answered by different executions: an
+-- ExecutionID is deliberately outside ComparisonID, so the same declaration can be
+-- realized by different executors or backends. Storage must not invent a semantic
+-- exclusion the kernel does not make, or one adapter accepts a valid comparison the
+-- other refuses. If this exclusion is ever wanted it belongs in the kernel first.
 
 -- There is no foreign key to plans, corpora or profiles, and that is deliberate. Those
 -- rows are content addressed and never deleted, so a reference cannot dangle by ordinary

@@ -203,10 +203,15 @@ func newInitialState(schema semantic.Schema, variant Variant) (semantic.State, e
 
 // ComparisonPlans compiles two ratified plans that differ only by a renamed checkpoint.
 //
-// This is the shape a promotion comparison exists for: a checkpoint whose semantics were
-// revised beside one that was not. The two plans share a schema and a ruleset, so one
-// corpus replays under both, while their PlanIDs differ because a checkpoint key
-// participates in plan identity.
+// The two plans share a SCHEMA and identical transformation behaviour, so one corpus
+// replays under both. They do not share a ruleset identity: checkpoints are part of the
+// normalized ruleset, so renaming one changes RulesetDigest and therefore PlanID.
+//
+// Renaming is all that differs, and that is deliberate rather than a weaker version of
+// revising the semantics. It isolates NAMING from meaning, which is the thing explicit
+// correspondence exists to handle: two declarations that compute the same result under
+// different keys are exactly the case where inferring correspondence from a key would
+// silently do the wrong thing.
 //
 // It lives here because these are team-HOS declarations, and this package is the one
 // place they are authored. A second copy elsewhere would be a second ratified fixture

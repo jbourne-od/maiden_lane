@@ -143,6 +143,45 @@ func RunComparisonStoreContract(
 		}
 	})
 
+	t.Run("accepts a comparison of one checkpoint declaration with itself", func(t *testing.T) {
+		// A store must hold every comparison the KERNEL builds, and this one it builds:
+		// NewComparisonPolicy requires each side to be declared and the mapping to be
+		// one-to-one, and NewComparison requires the policy to declare the supplied pair.
+		// One plan mapped to itself satisfies all three.
+		//
+		// It is degenerate for ordinary candidate promotion and not nonsensical: the two
+		// sides are still answered by different executions, because an ExecutionID is
+		// deliberately outside ComparisonID, so the same declaration can be realized by
+		// different executors or backends.
+		//
+		// This has its own subtest because every other case here deliberately uses two
+		// DIFFERENT plans, so side-swapping is observable — which leaves the legitimate
+		// symmetric state unrepresentable in that fixture, and therefore untested. A
+		// PostgreSQL CHECK forbidding it survived the whole suite for exactly that
+		// reason, so one adapter accepted a comparison the other refused.
+		store := newStore(t)
+		baseline, _ := newPlans(t)
+		comparison := degenerateComparisonOver(t, baseline)
+
+		if err := store.PutComparison(t.Context(), "acme", comparison); err != nil {
+			t.Fatalf("PutComparison refused a comparison the kernel built: %v", err)
+		}
+		got, found, err := store.GetComparison(t.Context(), "acme", comparison.ID())
+		if err != nil || !found {
+			t.Fatalf("GetComparison: found=%t err=%v", found, err)
+		}
+		if got.Baseline != got.Candidate {
+			t.Fatalf("the two sides came back different: %s and %s", got.Baseline, got.Candidate)
+		}
+		if got.ComparisonID != comparison.ID() {
+			t.Fatalf("comparison ID = %s, want %s", got.ComparisonID, comparison.ID())
+		}
+		if len(got.Correspondences) != len(comparison.Policy().Correspondences()) {
+			t.Fatalf("correspondences = %d, want %d",
+				len(got.Correspondences), len(comparison.Policy().Correspondences()))
+		}
+	})
+
 	t.Run("reports an unknown comparison as absent rather than failing", func(t *testing.T) {
 		store := newStore(t)
 		got, found, err := store.GetComparison(t.Context(), "acme", "sha256:"+
@@ -327,6 +366,46 @@ func comparisonOver(t *testing.T, baseline, candidate semantic.Plan) semantic.Co
 	})
 	if err != nil {
 		t.Fatalf("NewComparison: %v", err)
+	}
+	return comparison
+}
+
+// degenerateComparisonOver builds the symmetric comparison: one plan, one checkpoint,
+// compared with itself.
+//
+// It is separate from comparisonOver because that one REFUSES symmetry on purpose, so
+// that a store filling both sides from one column is observable. Both fixtures are
+// needed: one proves the sides are distinguished, the other proves a legitimate
+// comparison is not excluded.
+func degenerateComparisonOver(t *testing.T, plan semantic.Plan) semantic.Comparison {
+	t.Helper()
+
+	key := plan.Checkpoints()[0].Key
+	policy, err := semantic.NewComparisonPolicy(plan, plan,
+		[]semantic.CheckpointPair{{Baseline: key, Candidate: key}})
+	if err != nil {
+		t.Fatalf("NewComparisonPolicy: %v", err)
+	}
+	identity, declared := plan.CheckpointID(key)
+	if !declared {
+		t.Fatal("the plan does not declare its own checkpoint")
+	}
+	world, err := semantic.NewWorld(nil)
+	if err != nil {
+		t.Fatalf("NewWorld: %v", err)
+	}
+	comparison, err := semantic.NewComparison(semantic.ComparisonRequest{
+		Baseline:  identity,
+		Candidate: identity,
+		Profile:   semantic.ProfileID("sha256:" + comparisonFixtureProfileDigest),
+		World:     world.ID(),
+		Corpus:    CorpusFixture(t, 2).ID(),
+		Policy:    policy,
+	})
+	if err != nil {
+		// If this ever fails, the kernel has gained a self-comparison rule and the
+		// storage layer may mirror it -- in that order, never the reverse.
+		t.Fatalf("NewComparison refused a self-comparison: %v", err)
 	}
 	return comparison
 }

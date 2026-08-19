@@ -74,8 +74,11 @@ type ComparisonStore interface {
 	// PutComparison stores a comparison for its tenant.
 	//
 	// Comparison identity is content derived, so storing the same question twice is
-	// idempotent rather than a conflict. It returns an error only for an incomplete
-	// comparison or a cancelled context.
+	// idempotent rather than a conflict, and never a version conflict a caller must
+	// resolve. Beyond an incomplete comparison and a cancelled context, an
+	// implementation may of course fail for its own reasons: a durable one can lose its
+	// connection or its disk, and a caller must handle that rather than read this as a
+	// promise that only its own input can be at fault.
 	//
 	// There is no update and no delete. A comparison that should have asked something
 	// else is a different question, and the one already stored must remain readable
