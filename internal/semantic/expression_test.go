@@ -101,6 +101,14 @@ func TestCompileExpressionRefusals(t *testing.T) {
 		{"undeclared field", field("driver.nope")},
 		{"undeclared entity", field("truck.assignment_key")},
 		{"malformed path", field("assignment_key")},
+		// FEATURE BOUNDARY, not a parsing detail. A two-segment path is how relation
+		// traversal would sneak in before lookup and grouping own it: "driver.team.name"
+		// reads as "follow the relation, then take a field". Refusing it here is what keeps
+		// the deferral of lookup real rather than nominal, because a language that already
+		// traverses has not deferred anything.
+		{"relation traversal smuggled into a path", field("driver.team.name")},
+		{"trailing dot", field("driver.")},
+		{"leading dot", field(".assignment_key")},
 		{"exists on undeclared field", Expr{Kind: ExprExists, Field: "driver.nope"}},
 		{"literal with no value", Expr{Kind: ExprLiteral, Literal: &Value{}}},
 		{"empty all", Expr{Kind: ExprAll}},
@@ -134,6 +142,49 @@ func TestCompileExpressionRefusals(t *testing.T) {
 				t.Fatalf("a refused expression reported type %s", compiled.Type())
 			}
 		})
+	}
+}
+
+// Production break caught by mutation, and the mutation is the only thing that could have
+// caught it: the traversal-smuggling case above passes for the WRONG REASON against an
+// ordinary schema.
+//
+// Removing splitFieldPath's second-dot rejection leaves "driver.team.name" splitting into
+// entity "driver" and field "team.name", which then fails schema lookup because no such field
+// is declared. The refusal survives, so the test stays green while the guard it names is gone.
+//
+// This schema closes that hole by declaring a field whose NAME CONTAINS A DOT, which
+// validSemanticName permits — it requires only a non-empty valid UTF-8 string. With that
+// field present, only splitFieldPath stands between an authored path and relation-shaped
+// addressing, so the test pins the guard rather than the fixture's silence.
+//
+// It also documents a latent defect that predates this slice: a field named "team.name" is
+// declarable and, because every path with two dots is refused, addressable by nothing. It is
+// recorded in the programme index rather than fixed here, since tightening validSemanticName
+// would change which schemas compile and therefore which identities exist.
+func TestFieldPathCannotAddressThroughARelation(t *testing.T) {
+	schema, err := NewSchema([]EntityDeclaration{{
+		Kind: "driver",
+		Fields: []FieldDeclaration{
+			{Name: "assignment_key", Kind: ValueString},
+			// Declarable today. If splitFieldPath stops refusing two dots, "driver.team.name"
+			// resolves to this and traversal-shaped paths become expressible.
+			{Name: "team.name", Kind: ValueString},
+		},
+	}}, nil)
+	if err != nil {
+		t.Fatalf("NewSchema refused a dotted field name; validSemanticName has been "+
+			"tightened and this test needs rewriting: %v", err)
+	}
+
+	if _, err := CompileExpression(schema, field("driver.team.name")); err == nil {
+		t.Fatal("a two-segment path resolved, so an expression can address through a " +
+			"relation before lookup and grouping own that feature")
+	}
+	// The control: the same schema's ordinary field still resolves, so the refusal above is
+	// about the path shape and not about this schema being unusable.
+	if _, err := CompileExpression(schema, field("driver.assignment_key")); err != nil {
+		t.Fatalf("the control field did not compile: %v", err)
 	}
 }
 
@@ -173,8 +224,19 @@ func TestCompileExpressionRefusesOperandsAKindIgnores(t *testing.T) {
 	}
 }
 
-// Argument order is semantic content even where the operation is commutative in arithmetic,
-// because two authored trees that differ must not share an identity.
+// Authored operand order is PRESERVED, not canonicalized, and the choice is deliberate.
+//
+// Canonicalizing would mean the encoder deciding which operators commute, which is a semantic
+// claim an encoder has no business making: int64 addition is commutative, but a later kind
+// added to this union may not be, and the encoder would have to be taught the difference or
+// silently get it wrong. It would also mean the bytes no longer reflect what the author wrote,
+// so a ruleset digest would stop committing to authored content — the same property the
+// operand-shape refusal above exists to protect.
+//
+// The cost is accepted and worth stating: add(a, 1) and add(1, a) are semantically identical
+// and get different identities, so two authors writing the same rule differently produce
+// different PlanIDs. That is the correct trade here, because identity is over authored
+// content and a normalizer is a semantic component that would need its own specification.
 func TestCompileExpressionDistinguishesArgumentOrder(t *testing.T) {
 	schema := expressionSchema(t)
 	forward, err := CompileExpression(schema, Expr{Kind: ExprAdd, Args: []Expr{

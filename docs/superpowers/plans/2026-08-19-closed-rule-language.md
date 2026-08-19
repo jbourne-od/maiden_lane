@@ -238,6 +238,14 @@ most Inviolate-13-sensitive work in the programme.
 the demo UI's hard-coded codes, `RULE_MEANINGS`, `CHECKPOINT_MEANINGS`, `PROFILE_MEANINGS` and
 driver field list (`app.js:21-75`).
 
+**A field name may contain a dot, and such a field is addressable by nothing.**
+`validSemanticName` (`value.go:178-180`) requires only a non-empty valid UTF-8 string, so a
+schema may declare a field called `team.name`; `splitFieldPath` refuses every path with two
+dots, so no expression or declaration can ever name it. Found by mutation while building slice
+1, and left alone deliberately: tightening `validSemanticName` changes which schemas compile
+and therefore which identities exist, which is an amendment rather than a slice. Whoever owns
+it should decide between refusing the declaration and defining an escape.
+
 **Value model:** instants, durations and exact decimals. `string | atom | int64`
 (`value.go:87-92`) cannot express a fourteen-hour window. Sequenced after the AST, because
 adding value kinds to a language that cannot select a set produces nothing runnable. Recorded
