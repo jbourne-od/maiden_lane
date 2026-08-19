@@ -844,7 +844,65 @@ A successful execution is not proof of publishability.
 
 ---
 
-# 26. Definition of Done
+# 26. The Mandatory Adversarial PR Review Gate
+
+Before any pull request is opened, and before any branch is marked ready for human
+review, the branch must pass an adversarial review gate.
+
+## Role and separation of concerns
+
+An independent subagent (`adversarial_reviewer`, defined in
+`.claude/agents/adversarial-reviewer.md`) is spawned to red-team the diff. It has **no
+write tools**. It cannot edit code, cannot propose a patch, cannot write a fix, and
+cannot open a pull request. Its sole mandate is to find defects: Inviolate breaches,
+projections carrying authorization weight, storage narrowing the kernel's state space,
+adapter divergence, collapsed lifecycle distinctions, comments asserting behaviour the
+code does not have, guards with no runnable mutation evidence, identity components
+missing from canonical bytes, domain vocabulary in the kernel, shared mutable state, and
+concurrency hazards.
+
+The separation is the point. The agent that wrote the diff is the worst judge of whether
+its tests enforce anything, because it wrote the tests to pass. The reviewer's incentive
+is to find the thing that got through, and it is not permitted to relieve that tension by
+fixing what it finds.
+
+## Verdict
+
+The reviewer emits a structured report ending in a mandatory verdict.
+
+**`REJECT`** halts the pipeline. Any demonstrated Inviolate breach, any confirmed
+instance of a known failure class, a new guard with no mutation evidence or with mutation
+evidence that did not actually run, a comment describing behaviour the code lacks, a data
+race, a determinism hazard reaching a semantic identity, or a PR-body claim found false.
+The primary agent must diagnose the root cause, fix it, and re-run the gate from the
+beginning — not argue the finding away, and not patch the symptom the reviewer happened
+to name.
+
+**`APPROVE`** is granted only when the reviewer looked for each failure class and found
+none, the tests demonstrably enforce what they claim, and every deliberate omission is
+written down. It is not the default and it is not granted merely for an empty findings
+list.
+
+An uncertain reviewer rejects. A false `REJECT` costs one iteration; a false `APPROVE`
+costs an Inviolate.
+
+## No bypass
+
+Under no circumstances may an agent open a pull request, mark a branch ready, or declare
+a task complete while a verdict remains `REJECT`.
+
+The gate runs after §25 verification passes, not instead of it. A reviewer must never be
+asked to review a branch whose tests do not run — that wastes the one process step whose
+budget is reserved for what the tooling cannot see.
+
+Disagreeing with a finding is legitimate; acting on the disagreement unilaterally is not.
+If the primary agent believes a finding is wrong, it states the argument in the PR body
+alongside the finding, so the human reviewer sees both. Silently discarding a `REJECT` is
+the one failure this gate cannot detect.
+
+---
+
+# 27. Definition of Done
 
 A change is not done merely because the requested code exists.
 
@@ -858,6 +916,7 @@ Before completion, confirm:
 * errors fail at the correct boundary;
 * provenance remains adequate;
 * relevant verification passed;
+* the adversarial review gate returned `APPROVE`;
 * generated artifacts are current;
 * documentation describing current implementation is current;
 * the final diff contains no accidental work.
