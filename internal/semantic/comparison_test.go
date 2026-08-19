@@ -1,6 +1,8 @@
 package semantic
 
 import (
+	"bytes"
+	"encoding/hex"
 	"slices"
 	"testing"
 )
@@ -477,4 +479,131 @@ func comparisonDigest(label string) string {
 		sum = append(sum, "0123456789abcdef"[(int(label[i%len(label)])+i)%16])
 	}
 	return "sha256:" + string(sum)
+}
+
+// ── golden canonical vectors ────────────────────────────────────────────────
+
+// The behavioural tests above cannot establish everything the canonical tuples claim, and
+// these two exist because of exactly that limit rather than as belt-and-braces.
+//
+// Two omissions are invisible to any valid fixture:
+//
+//   - Baseline and Candidate cannot be varied independently. The one-to-one correspondence
+//     invariant means Candidate is functionally determined by Baseline for a fixed policy,
+//     so no valid comparison can change one without the other. A behavioural test can only
+//     establish that AT LEAST ONE of the pair participates, never that each does — and
+//     deleting either digest alone leaves those tests green. Verified, not assumed.
+//   - The policy's plan identities are individually unprovable, because every
+//     correspondence's CheckpointID already commits to its plan, so removing the explicit
+//     plan digests changes no observable behaviour.
+//
+// Where the valid state space cannot distinguish an omission, the representation is
+// pinned directly. Canonical formats are one of the few places brittleness is the point:
+// deliberately changing a v1 tuple should force somebody to edit a conspicuous constant
+// and thereby admit they are renaming every artifact that tuple identifies.
+
+// goldenComparisonDigest builds a recognizable fixed digest, so a vector's hex can be read
+// by eye and a transposition is visible rather than merely unequal.
+func goldenComparisonDigest(character string) string {
+	repeated := make([]byte, 0, 64)
+	for i := 0; i < 64; i++ {
+		repeated = append(repeated, character[0])
+	}
+	return "sha256:" + string(repeated)
+}
+
+// Production break caught: dropping either plan identity, reordering the pair, or dropping
+// the correspondence content would let two policies that describe different comparisons
+// share one identity.
+func TestComparisonPolicyCanonicalGoldenVector(t *testing.T) {
+	const wantHex = "00000000000000206d616964656e2d6c616e652e636f6d70617269736f6e2d706f6c6963792e76311111111111111111111111111111111111111111111111111111111111111111222222222222222222222222222222222222222222222222222222222222222200000000000000023333333333333333333333333333333333333333333333333333333333333333444444444444444444444444444444444444444444444444444444444444444455555555555555555555555555555555555555555555555555555555555555556666666666666666666666666666666666666666666666666666666666666666"
+	const wantID ComparisonPolicyID = "sha256:d17106e21a39a7780539f5cf8e78a7ccfa5faeea17f01f4cce30f8e0b1feda6b"
+
+	gotBytes, err := comparisonPolicyCanonicalBytes(
+		PlanID(goldenComparisonDigest("1")),
+		PlanID(goldenComparisonDigest("2")),
+		[]CheckpointCorrespondence{
+			{
+				baseline:  CheckpointID(goldenComparisonDigest("3")),
+				candidate: CheckpointID(goldenComparisonDigest("4")),
+			},
+			{
+				baseline:  CheckpointID(goldenComparisonDigest("5")),
+				candidate: CheckpointID(goldenComparisonDigest("6")),
+			},
+		})
+	if err != nil {
+		t.Fatalf("comparisonPolicyCanonicalBytes: %v", err)
+	}
+	if got := hex.EncodeToString(gotBytes); got != wantHex {
+		t.Fatalf("canonical comparison-policy hex\n got: %s\nwant: %s", got, wantHex)
+	}
+	if got := ComparisonPolicyID(canonicalDigest(gotBytes)); got != wantID {
+		t.Fatalf("ComparisonPolicyID = %q; want %q", got, wantID)
+	}
+}
+
+// Production break caught: dropping or transposing any of §14.2's six inputs would let two
+// materially different comparison questions share one identity, so a result recorded
+// against it would answer a question nobody can reconstruct.
+//
+// The six digests appear in the hex as aa…, bb…, cc…, dd…, ee…, ff… in exactly the order
+// §14.2 states them: baseline, candidate, profile, world, corpus, policy.
+func TestComparisonCanonicalGoldenVector(t *testing.T) {
+	const wantHex = "000000000000001c6d616964656e2d6c616e652e636f6d70617269736f6e2d69642e7631aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+	const wantID ComparisonID = "sha256:57e371d43bb6deaff2b93814057303bbfcb9f46919f900069b11148a12c71f57"
+
+	gotBytes, err := comparisonCanonicalBytes(
+		CheckpointID(goldenComparisonDigest("a")),
+		CheckpointID(goldenComparisonDigest("b")),
+		ProfileID(goldenComparisonDigest("c")),
+		WorldID(goldenComparisonDigest("d")),
+		CorpusID(goldenComparisonDigest("e")),
+		ComparisonPolicyID(goldenComparisonDigest("f")))
+	if err != nil {
+		t.Fatalf("comparisonCanonicalBytes: %v", err)
+	}
+	if got := hex.EncodeToString(gotBytes); got != wantHex {
+		t.Fatalf("canonical comparison hex\n got: %s\nwant: %s", got, wantHex)
+	}
+	if got := ComparisonID(canonicalDigest(gotBytes)); got != wantID {
+		t.Fatalf("ComparisonID = %q; want %q", got, wantID)
+	}
+}
+
+// The constructors must produce the bytes the golden vectors pin. Without this the vectors
+// would freeze two helpers nothing calls, and the encoders could drift away from them
+// while every test stayed green.
+func TestTheConstructorsProduceTheCanonicalVectorBytes(t *testing.T) {
+	baseline, candidate := comparisonPlans(t)
+	policy, err := NewComparisonPolicy(baseline, candidate, []CheckpointPair{
+		{Baseline: "team_hos_aggregated.v1", Candidate: "team_hos_reconciled.v2"},
+		{Baseline: "team_formed.v1", Candidate: "team_formed.v1"},
+	})
+	if err != nil {
+		t.Fatalf("NewComparisonPolicy: %v", err)
+	}
+	wantPolicy, err := comparisonPolicyCanonicalBytes(
+		baseline.ID(), candidate.ID(), policy.Correspondences())
+	if err != nil {
+		t.Fatalf("comparisonPolicyCanonicalBytes: %v", err)
+	}
+	if !bytes.Equal(policy.CanonicalBytes(), wantPolicy) {
+		t.Fatal("NewComparisonPolicy does not encode through the canonical helper")
+	}
+
+	request := comparisonRequest(t, baseline, candidate, policy)
+	comparison, err := NewComparison(request)
+	if err != nil {
+		t.Fatalf("NewComparison: %v", err)
+	}
+	wantComparison, err := comparisonCanonicalBytes(
+		request.Baseline, request.Candidate, request.Profile,
+		request.World, request.Corpus, policy.ID())
+	if err != nil {
+		t.Fatalf("comparisonCanonicalBytes: %v", err)
+	}
+	if !bytes.Equal(comparison.CanonicalBytes(), wantComparison) {
+		t.Fatal("NewComparison does not encode through the canonical helper")
+	}
 }

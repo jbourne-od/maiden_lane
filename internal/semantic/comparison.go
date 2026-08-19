@@ -130,16 +130,7 @@ func NewComparisonPolicy(baseline, candidate Plan, pairs []CheckpointPair) (Comp
 		seenCandidate[correspondence.candidate] = true
 	}
 
-	var encoder canonicalEncoder
-	encoder.tag(comparisonPolicyDomainTag)
-	encoder.digest(string(baseline.ID()))
-	encoder.digest(string(candidate.ID()))
-	encoder.uint64(uint64(len(correspondences)))
-	for _, correspondence := range correspondences {
-		encoder.digest(string(correspondence.baseline))
-		encoder.digest(string(correspondence.candidate))
-	}
-	canonical, err := encoder.bytes()
+	canonical, err := comparisonPolicyCanonicalBytes(baseline.ID(), candidate.ID(), correspondences)
 	if err != nil {
 		return ComparisonPolicy{}, fmt.Errorf("canonicalize comparison policy: %w", err)
 	}
@@ -266,15 +257,9 @@ func NewComparison(request ComparisonRequest) (Comparison, error) {
 			"comparison policy declares no correspondence between these checkpoints")
 	}
 
-	var encoder canonicalEncoder
-	encoder.tag(comparisonIDDomainTag)
-	encoder.digest(string(request.Baseline))
-	encoder.digest(string(request.Candidate))
-	encoder.digest(string(request.Profile))
-	encoder.digest(string(request.World))
-	encoder.digest(string(request.Corpus))
-	encoder.digest(string(request.Policy.ID()))
-	canonical, err := encoder.bytes()
+	canonical, err := comparisonCanonicalBytes(
+		request.Baseline, request.Candidate, request.Profile,
+		request.World, request.Corpus, request.Policy.ID())
 	if err != nil {
 		return Comparison{}, fmt.Errorf("canonicalize comparison: %w", err)
 	}
@@ -311,4 +296,51 @@ func checkpointIdentity(plan PlanID, key CheckpointKey) (CheckpointID, error) {
 		return "", fmt.Errorf("checkpoint identity: %w", err)
 	}
 	return CheckpointID(canonicalDigest(encoded)), nil
+}
+
+// comparisonPolicyCanonicalBytes encodes the v1 comparison-policy tuple.
+//
+// It is a separate function from the constructor so a golden vector can pin the exact
+// bytes. That matters more here than a behavioural test can express: each
+// correspondence's CheckpointID already commits to its plan, so a black-box test cannot
+// prove the plan identities are literally present, and the one-to-one invariant means a
+// valid fixture cannot vary one side of a correspondence independently of the other. The
+// state space genuinely cannot distinguish some omissions from this tuple, so the
+// representation is pinned directly instead.
+func comparisonPolicyCanonicalBytes(
+	baselinePlan, candidatePlan PlanID, correspondences []CheckpointCorrespondence,
+) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(comparisonPolicyDomainTag)
+	encoder.digest(string(baselinePlan))
+	encoder.digest(string(candidatePlan))
+	encoder.uint64(uint64(len(correspondences)))
+	for _, correspondence := range correspondences {
+		encoder.digest(string(correspondence.baseline))
+		encoder.digest(string(correspondence.candidate))
+	}
+	return encoder.bytes()
+}
+
+// comparisonCanonicalBytes encodes the v1 comparison tuple: HLD §14.2's five inputs plus
+// the comparison policy that section requires to participate.
+//
+// Separate from the constructor for the same reason as above, and here the need is
+// sharper. A one-to-one correspondence makes Candidate functionally determined by
+// Baseline for a fixed policy, so no valid comparison can vary one without the other, and
+// a behavioural test can only establish that at least one of the pair participates —
+// never that each does. A golden vector establishes it directly.
+func comparisonCanonicalBytes(
+	baseline, candidate CheckpointID, profile ProfileID,
+	world WorldID, corpus CorpusID, policy ComparisonPolicyID,
+) ([]byte, error) {
+	var encoder canonicalEncoder
+	encoder.tag(comparisonIDDomainTag)
+	encoder.digest(string(baseline))
+	encoder.digest(string(candidate))
+	encoder.digest(string(profile))
+	encoder.digest(string(world))
+	encoder.digest(string(corpus))
+	encoder.digest(string(policy))
+	return encoder.bytes()
 }
