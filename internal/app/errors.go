@@ -42,6 +42,12 @@ const (
 	// InputCorpusSchemaMismatch means the corpus's cases are not under the plan's schema,
 	// so no case could execute under it.
 	InputCorpusSchemaMismatch InvalidInputCode = "CORPUS_SCHEMA_MISMATCH"
+
+	// InputComparisonIncomplete means an assemble-comparison request was missing a key
+	// part, and InputComparisonWorldMismatch means the supplied world is not the one the
+	// comparison was identified under.
+	InputComparisonIncomplete    InvalidInputCode = "COMPARISON_INCOMPLETE"
+	InputComparisonWorldMismatch InvalidInputCode = "COMPARISON_WORLD_MISMATCH"
 )
 
 // InvalidInputError reports malformed or unsupported canonical input at the
