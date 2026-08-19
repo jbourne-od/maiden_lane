@@ -20,9 +20,14 @@ import (
 //
 // Where the slope comes from, all of it proportional to total state and none of it to the two
 // rules: verifyState re-encodes and re-hashes the whole state on every transition
-// (semantic/binding.go), Seal canonicalizes it, evaluateProfileOverState walks every entity of
-// the scope kind, and replayVerifiedJournal re-applies every prior patch from the initial
-// state on every transition.
+// (semantic/binding.go), Seal canonicalizes it, evaluateProfileOverState SCANS every entity in
+// the state to filter by scope kind, and replayVerifiedJournal re-applies every prior patch
+// from the initial state on every transition.
+//
+// The profile term is stated as a scan on purpose. An earlier version said it "walks every
+// entity of the scope kind", which is O(1) under this fixture — the scope kind is team and
+// there is exactly one team at every size, so that walk contributes no slope at all. The
+// state-proportional cost is the skip-scan that reaches it.
 //
 // That last one is the reason this benchmark cannot answer the question the programme actually
 // needs answered. Transition k replays k-1 entries, so a run of R transitions is Θ(R²·E) and

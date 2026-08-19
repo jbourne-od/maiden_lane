@@ -165,12 +165,23 @@ argued a binder necessarily rewrites existing nodes' encoding. That is false: a 
 plus a variable-reference node carrying a de Bruijn index adds two ordinary kinds and changes
 nothing existing. The reason to decide early is the implicit-scope trap, not encoding churn.)
 
-**Slice 2 — evaluation.** Evaluating an `Expr` against a state and pinned world.
-Deterministic, total, refusing rather than defaulting on absent fields.
-
-**Slice 3 — selection and grouping.** The selector, canonical ordering of matches and group
+**Slice 2 — selection and grouping.** The selector, canonical ordering of matches and group
 keys, declared cardinality, the determinism test, and the set-scoped multi-rule fixture
 decision 4 needs.
+
+**This comes before evaluation, and an earlier ordering had it the other way round.** Slice 1
+settled that there is no ambient scope, so a `Field` path names an entity *kind* and no entity
+*instance*. Until a selector binds one, no `ExprField` node denotes a value and "evaluate an
+expression against a state" has no meaning to implement — an evaluator written first would
+have to invent the binding, which is precisely the silent reinterpretation slice 1's decision
+exists to prevent.
+
+Slice 2 also owns a constraint slice 1 cannot express: today `equal(driver.x, team.y)`
+type-checks, because `ExprType` carries only the scalar kind. Whether an expression may name
+more than one entity kind is a question about what a selector binds, so it is answered here.
+
+**Slice 3 — evaluation.** Evaluating an `Expr` against a state, a pinned world and a binding
+from slice 2. Deterministic, total, refusing rather than defaulting on absent fields.
 
 ## Index of everything else
 

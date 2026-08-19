@@ -55,14 +55,13 @@ func TestCompileExpressionDerivesTypes(t *testing.T) {
 		{"atom field", field("driver.hos_anchor"), TypeAtom},
 		{"int field", field("driver.hos_elapsed_hours"), TypeInt64},
 		{"exists", Expr{Kind: ExprExists, Field: "driver.hos_anchor"}, TypeBool},
-		{"is_null", Expr{Kind: ExprIsNull, Field: "driver.hos_anchor"}, TypeBool},
 		{"not", Expr{Kind: ExprNot, Args: []Expr{
 			{Kind: ExprExists, Field: "driver.hos_anchor"}}}, TypeBool},
 		{"all", Expr{Kind: ExprAll, Args: []Expr{
 			{Kind: ExprExists, Field: "driver.hos_anchor"}}}, TypeBool},
 		{"any", Expr{Kind: ExprAny, Args: []Expr{
 			{Kind: ExprExists, Field: "driver.hos_anchor"},
-			{Kind: ExprIsNull, Field: "driver.assignment_key"}}}, TypeBool},
+			{Kind: ExprExists, Field: "driver.assignment_key"}}}, TypeBool},
 		{"equal on atoms", Expr{Kind: ExprEqual, Args: []Expr{
 			field("driver.hos_anchor"), field("driver.hos_anchor")}}, TypeBool},
 		{"less on ints", Expr{Kind: ExprLess, Args: []Expr{
@@ -71,7 +70,7 @@ func TestCompileExpressionDerivesTypes(t *testing.T) {
 			field("driver.hos_elapsed_hours"), intLiteral(1)}}, TypeInt64},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			compiled, err := CompileExpression(schema, test.expr)
+			compiled, err := CompileExpression(schema, testCompilerVersion, test.expr)
 			if err != nil {
 				t.Fatalf("CompileExpression: %v", err)
 			}
@@ -133,7 +132,7 @@ func TestCompileExpressionRefusals(t *testing.T) {
 		{"deeper than the bound", deep},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			compiled, err := CompileExpression(schema, test.expr)
+			compiled, err := CompileExpression(schema, testCompilerVersion, test.expr)
 			if err == nil {
 				t.Fatalf("compiled an expression that should be refused, type=%s",
 					compiled.Type())
@@ -177,13 +176,13 @@ func TestFieldPathCannotAddressThroughARelation(t *testing.T) {
 			"tightened and this test needs rewriting: %v", err)
 	}
 
-	if _, err := CompileExpression(schema, field("driver.team.name")); err == nil {
+	if _, err := CompileExpression(schema, testCompilerVersion, field("driver.team.name")); err == nil {
 		t.Fatal("a two-segment path resolved, so an expression can address through a " +
 			"relation before lookup and grouping own that feature")
 	}
 	// The control: the same schema's ordinary field still resolves, so the refusal above is
 	// about the path shape and not about this schema being unusable.
-	if _, err := CompileExpression(schema, field("driver.assignment_key")); err != nil {
+	if _, err := CompileExpression(schema, testCompilerVersion, field("driver.assignment_key")); err != nil {
 		t.Fatalf("the control field did not compile: %v", err)
 	}
 }
@@ -217,7 +216,7 @@ func TestCompileExpressionRefusesOperandsAKindIgnores(t *testing.T) {
 			Args: []Expr{intLiteral(1)}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := CompileExpression(schema, test.expr); err == nil {
+			if _, err := CompileExpression(schema, testCompilerVersion, test.expr); err == nil {
 				t.Fatal("compiled a node carrying an operand its kind ignores")
 			}
 		})
@@ -239,12 +238,12 @@ func TestCompileExpressionRefusesOperandsAKindIgnores(t *testing.T) {
 // content and a normalizer is a semantic component that would need its own specification.
 func TestCompileExpressionDistinguishesArgumentOrder(t *testing.T) {
 	schema := expressionSchema(t)
-	forward, err := CompileExpression(schema, Expr{Kind: ExprAdd, Args: []Expr{
+	forward, err := CompileExpression(schema, testCompilerVersion, Expr{Kind: ExprAdd, Args: []Expr{
 		field("driver.hos_elapsed_hours"), intLiteral(1)}})
 	if err != nil {
 		t.Fatalf("CompileExpression: %v", err)
 	}
-	reversed, err := CompileExpression(schema, Expr{Kind: ExprAdd, Args: []Expr{
+	reversed, err := CompileExpression(schema, testCompilerVersion, Expr{Kind: ExprAdd, Args: []Expr{
 		intLiteral(1), field("driver.hos_elapsed_hours")}})
 	if err != nil {
 		t.Fatalf("CompileExpression: %v", err)
@@ -259,25 +258,46 @@ func TestCompileExpressionDistinguishesArgumentOrder(t *testing.T) {
 // pointer.
 func TestCompiledExpressionSharesNothing(t *testing.T) {
 	schema := expressionSchema(t)
-	authored := Expr{Kind: ExprAdd, Args: []Expr{
-		field("driver.hos_elapsed_hours"), intLiteral(1)}}
-	compiled, err := CompileExpression(schema, authored)
+	// THREE LEVELS DEEP WITH A LIVE LITERAL POINTER, deliberately. An earlier version of this
+	// test was two levels with scalar leaves and replaced whole Expr values, so it could
+	// observe neither of cloneExpr's two guards: removing the Literal pointer copy or the
+	// recursion left the whole suite green.
+	literal := NewInt64Value(1)
+	authored := Expr{Kind: ExprLess, Args: []Expr{
+		field("driver.hos_driving_hours"),
+		{Kind: ExprAdd, Args: []Expr{
+			field("driver.hos_elapsed_hours"),
+			{Kind: ExprLiteral, Literal: &literal},
+		}},
+	}}
+	compiled, err := CompileExpression(schema, testCompilerVersion, authored)
 	if err != nil {
 		t.Fatalf("CompileExpression: %v", err)
 	}
 	before := string(compiled.CanonicalBytes())
 
-	authored.Args[0] = field("driver.hos_driving_hours")
+	// Write through the pointer the caller still holds, mutate a grandchild in place, and
+	// scribble on both returned copies.
+	literal = NewInt64Value(99)
+	authored.Args[1].Args[0] = field("driver.assignment_key")
 	returned := compiled.Expression()
-	returned.Args[1] = intLiteral(99)
-	bytes := compiled.CanonicalBytes()
-	bytes[0] ^= 0xff
+	returned.Args[1].Args[1].Literal = nil
+	scribble := compiled.CanonicalBytes()
+	scribble[0] ^= 0xff
 
 	if string(compiled.CanonicalBytes()) != before {
-		t.Fatal("mutating the declaration or a returned copy changed the compiled expression")
+		t.Fatal("mutating the declaration or a returned copy changed the compiled bytes")
 	}
-	if compiled.Expression().Args[0].Field != "driver.hos_elapsed_hours" {
-		t.Fatal("the compiled expression aliases the authored declaration")
+	recovered := compiled.Expression()
+	if recovered.Args[1].Args[0].Field != "driver.hos_elapsed_hours" {
+		t.Fatal("the compiled expression aliases a grandchild of the authored declaration")
+	}
+	held := recovered.Args[1].Args[1].Literal
+	if held == nil {
+		t.Fatal("a caller nilled the compiled expression's literal through a returned copy")
+	}
+	if got, _ := held.Int64(); got != 1 {
+		t.Fatalf("the compiled literal followed the caller's pointer to %d, want 1", got)
 	}
 }
 
@@ -290,11 +310,11 @@ func TestCompileExpressionIsDeterministic(t *testing.T) {
 		{Kind: ExprLess, Args: []Expr{
 			field("driver.hos_driving_hours"), field("driver.hos_elapsed_hours")}},
 	}}
-	first, err := CompileExpression(schema, authored)
+	first, err := CompileExpression(schema, testCompilerVersion, authored)
 	if err != nil {
 		t.Fatalf("CompileExpression: %v", err)
 	}
-	second, err := CompileExpression(schema, authored)
+	second, err := CompileExpression(schema, testCompilerVersion, authored)
 	if err != nil {
 		t.Fatalf("CompileExpression: %v", err)
 	}
@@ -329,21 +349,30 @@ func TestExpressionCanonicalGoldenVectors(t *testing.T) {
 		wantHex string
 	}{
 		{
-			name:    "exists",
-			expr:    Expr{Kind: ExprExists, Field: "driver.hos_anchor"},
-			wantHex: "00000000000000196d616964656e2d6c616e652e65787072657373696f6e2e76310300000000000000116472697665722e686f735f616e63686f72",
+			name: "exists",
+			expr: Expr{Kind: ExprExists, Field: "driver.hos_anchor"},
+			wantHex: "00000000000000196d616964656e2d6c616e652e65787072657373696f6e2e763100000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631" +
+				"b9ceee82852bb8e562a9b4b9866659833af65e8e11ada88d370be23cc83fd56d" +
+				"0300000000000000116472697665722e686f735f616e63686f72",
 		},
 		{
-			// Byte-for-byte identical to the vector above except for the kind byte. If that
-			// byte ever stops being written, these two vectors collide and this test says so.
-			name:    "is_null",
-			expr:    Expr{Kind: ExprIsNull, Field: "driver.hos_anchor"},
-			wantHex: "00000000000000196d616964656e2d6c616e652e65787072657373696f6e2e76310400000000000000116472697665722e686f735f616e63686f72",
+			// Byte-for-byte identical to the vector above except for the kind byte: field and
+			// exists take the same operand and no arguments. If that byte ever stops being
+			// written these two collide, and no behavioural test can see it — type derivation
+			// does not touch the encoding, so both would still report their own types while
+			// sharing one identity.
+			name: "field, differing from exists only in the kind byte",
+			expr: field("driver.hos_anchor"),
+			wantHex: "00000000000000196d616964656e2d6c616e652e65787072657373696f6e2e763100000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631" +
+				"b9ceee82852bb8e562a9b4b9866659833af65e8e11ada88d370be23cc83fd56d" +
+				"0200000000000000116472697665722e686f735f616e63686f72",
 		},
 		{
-			name:    "int literal",
-			expr:    intLiteral(11),
-			wantHex: "00000000000000196d616964656e2d6c616e652e65787072657373696f6e2e76310103000000000000000b",
+			name: "int literal",
+			expr: intLiteral(11),
+			wantHex: "00000000000000196d616964656e2d6c616e652e65787072657373696f6e2e763100000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631" +
+				"b9ceee82852bb8e562a9b4b9866659833af65e8e11ada88d370be23cc83fd56d" +
+				"0103000000000000000b",
 		},
 		{
 			name: "nested tree",
@@ -355,15 +384,16 @@ func TestExpressionCanonicalGoldenVectors(t *testing.T) {
 						field("driver.hos_elapsed_hours"), intLiteral(1)}},
 				}},
 			}},
-			wantHex: "00000000000000196d616964656e2d6c616e652e65787072657373696f6e2e7631" +
-				"06000000000000000203000000000000001164726976" +
-				"65722e686f735f616e63686f720900000000000000020200000000000000186472697665" +
-				"722e686f735f64726976696e675f686f7572730a000000000000000202000000000000" +
-				"00186472697665722e686f735f656c61707365645f686f75727301030000000000000001",
+			wantHex: "00000000000000196d616964656e2d6c616e652e65787072657373696f6e2e763100000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631" +
+				"b9ceee82852bb8e562a9b4b9866659833af65e8e11ada88d370be23cc83fd56d" +
+				"0500000000000000020300000000000000116472697665722e686f735f616e63686f72" +
+				"0800000000000000020200000000000000186472697665722e686f735f64726976696e675f686f757273" +
+				"0900000000000000020200000000000000186472697665722e686f735f656c61707365645f686f757273" +
+				"01030000000000000001",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			compiled, err := CompileExpression(schema, test.expr)
+			compiled, err := CompileExpression(schema, testCompilerVersion, test.expr)
 			if err != nil {
 				t.Fatalf("CompileExpression: %v", err)
 			}

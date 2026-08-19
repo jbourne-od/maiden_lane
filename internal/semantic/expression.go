@@ -25,9 +25,15 @@ const (
 	// path and against nothing else -- see the note on ambient scope below.
 	ExprField
 
-	// ExprExists and ExprIsNull ask about presence rather than value.
+	// ExprExists asks about presence rather than value.
+	//
+	// There is deliberately no is-null companion. Value has three variants and none of them
+	// is null (value.go), and Entity.Field reports absence through a second return rather
+	// than through a value, so absence IS the only null this kernel has. An is-null node
+	// could therefore only ever mean not(exists(f)) — a second spelling of one predicate,
+	// with a permanently distinct identity, committing a kind byte to a distinction the
+	// value model cannot make. An earlier version of this slice had one.
 	ExprExists
-	ExprIsNull
 
 	ExprNot
 	ExprAll
@@ -98,13 +104,22 @@ type Expr struct {
 // Unexported fields and no exported constructor: the only way to obtain one is
 // CompileExpression, so an expression that exists has been checked against a schema.
 type CompiledExpression struct {
+	schema    SchemaDigest
+	version   CompilerSemanticsVersion
 	expr      Expr
 	exprType  ExprType
 	canonical []byte
 }
 
 // Type returns the type this expression evaluates to.
+//
+// It is a fact about (schema, expression), not about the expression alone, which is why the
+// schema digest participates in the canonical bytes.
 func (c CompiledExpression) Type() ExprType { return c.exprType }
+
+// SchemaDigest and CompilerSemanticsVersion report what this expression was checked against.
+func (c CompiledExpression) SchemaDigest() SchemaDigest                         { return c.schema }
+func (c CompiledExpression) CompilerSemanticsVersion() CompilerSemanticsVersion { return c.version }
 
 // Expression returns a copy of the authored node.
 func (c CompiledExpression) Expression() Expr { return cloneExpr(c.expr) }
@@ -125,19 +140,41 @@ const maxExprDepth = 64
 // Every refusal here is a refusal to produce a value at all, rather than a flag on one that
 // was produced anyway: an ill-typed expression cannot be built, so no later stage can be
 // handed one and left to notice.
-func CompileExpression(schema Schema, expr Expr) (CompiledExpression, error) {
+func CompileExpression(
+	schema Schema, version CompilerSemanticsVersion, expr Expr,
+) (CompiledExpression, error) {
+	if version == "" {
+		return CompiledExpression{}, fmt.Errorf("expression has no compiler semantics version")
+	}
 	exprType, err := checkExpr(schema, expr, 0)
 	if err != nil {
 		return CompiledExpression{}, err
 	}
 	var encoder canonicalEncoder
 	encoder.tag(expressionDomainTag)
+	// The schema digest and compiler version come FIRST, exactly as encodeCompiledProfile
+	// writes them, because this is a compiled artifact rather than authored content.
+	//
+	// Without them the bytes would not determine Type(). Two schemas declaring driver.hours
+	// as int64 and as string produce byte-identical encodings of the same authored path with
+	// different derived types, and add(driver.hours, 1) would be a well-typed expression
+	// under one and refused under the other while sharing an identity. A consumer that
+	// digested these bytes and then trusted Type() would be deciding from a name that does
+	// not determine the answer.
+	encoder.string(string(version))
+	encoder.digest(string(schema.Digest()))
 	encodeExpr(&encoder, expr)
 	canonical, err := encoder.bytes()
 	if err != nil {
 		return CompiledExpression{}, fmt.Errorf("canonicalize expression: %w", err)
 	}
-	return CompiledExpression{expr: cloneExpr(expr), exprType: exprType, canonical: canonical}, nil
+	return CompiledExpression{
+		schema:    schema.Digest(),
+		version:   version,
+		expr:      cloneExpr(expr),
+		exprType:  exprType,
+		canonical: canonical,
+	}, nil
 }
 
 // checkExpr derives the type of one node, refusing anything the schema or the vocabulary does
@@ -161,7 +198,7 @@ func checkExpr(schema Schema, expr Expr, depth int) (ExprType, error) {
 		}
 		return valueKindType(kind)
 
-	case ExprExists, ExprIsNull:
+	case ExprExists:
 		if _, declared := schema.fieldKind(expr.Field); !declared {
 			return TypeInvalid, fmt.Errorf("expression asks about undeclared field %q", expr.Field)
 		}
@@ -259,7 +296,7 @@ func checkOperandShape(expr Expr) error {
 	switch expr.Kind {
 	case ExprLiteral:
 		wantLiteral = true
-	case ExprField, ExprExists, ExprIsNull:
+	case ExprField, ExprExists:
 		wantField = true
 	case ExprNot:
 		wantArgs = 1
@@ -321,13 +358,23 @@ func encodeExpr(encoder *canonicalEncoder, expr Expr) {
 	switch expr.Kind {
 	case ExprLiteral:
 		encoder.value(*expr.Literal)
-	case ExprField, ExprExists, ExprIsNull:
+	case ExprField, ExprExists:
 		encoder.string(string(expr.Field))
-	default:
+	case ExprNot, ExprAll, ExprAny, ExprEqual, ExprLess, ExprAdd:
 		encoder.uint64(uint64(len(expr.Args)))
 		for i := range expr.Args {
 			encodeExpr(encoder, expr.Args[i])
 		}
+	default:
+		// EXHAUSTIVE AND FAIL-CLOSED, and the default arm is the point rather than a
+		// formality. checkExpr and checkOperandShape both refuse an unrecognised kind, so
+		// this arm is unreachable today. It exists because adding a kind is the expected
+		// change: a new kind with a new operand would be caught by both refusal switches,
+		// which error loudly if a case is forgotten, but an encoder whose default merely
+		// wrote the argument list would compile, run, and silently omit the new operand from
+		// the identity. The one switch that must not be forgotten was the only one that
+		// could not complain.
+		encoder.fail(fmt.Errorf("expression kind %d has no canonical encoding", expr.Kind))
 	}
 }
 
