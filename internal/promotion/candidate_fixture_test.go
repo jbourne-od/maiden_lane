@@ -25,8 +25,10 @@ type sealedFixture struct {
 	// pinned-identity and static-validation clauses need both, and neither is
 	// recoverable from the artifact: PlanID commits to the plan without exposing its
 	// parts, and executor identity is excluded from checkpoint identity entirely.
-	plan        semantic.Plan
-	executionID semantic.ExecutionID
+	plan         semantic.Plan
+	executionID  semantic.ExecutionID
+	initialState semantic.State
+	world        semantic.World
 }
 
 // sealTeamHOS runs the kernel over the passing golden fixture and returns every
@@ -142,6 +144,7 @@ func sealTeamHOSVariant(t *testing.T, variant teamhos.Variant) ([]sealedFixture,
 			sealed = append(sealed, sealedFixture{
 				artifact: artifact, assessments: assessments,
 				plan: plan, executionID: binding.ExecutionID(),
+				initialState: inputs.InitialState, world: inputs.World,
 			})
 		}
 	}
@@ -268,4 +271,166 @@ func otherPlan(t *testing.T) semantic.Plan {
 		t.Fatal("compilation produced neither plan nor failure")
 	}
 	return plan
+}
+
+// comparisonEvidenceFor builds a real comparison and the evidence answering it, for a
+// checkpoint that was actually sealed.
+//
+// The two sides are two checkpoint declarations of ONE plan, which is mechanically valid
+// — the correspondence contract maps declarations and permits both sides to belong to the
+// same plan — and is the smallest fixture that exercises every check: correspondence,
+// coverage, world agreement, and profile agreement. A realistic comparison is across two
+// plans over a corpus of many cases; that shape belongs to the application slice that
+// assembles evidence from stored executions, because it needs both sides actually
+// executed rather than constructed.
+//
+// The corpus is the one initial state these artifacts were produced from, which is what
+// makes coverage verify: a checkpoint carries the initial state its run was bound to, and
+// the corpus is a set of initial states.
+func comparisonEvidenceFor(t *testing.T, promoted sealedFixture) *ComparisonEvidence {
+	t.Helper()
+	sealed := sealTeamHOS(t)
+
+	// The promoted checkpoint must be the CANDIDATE side, so the clause's linkage check
+	// has something true to find.
+	var baseline sealedFixture
+	for _, candidate := range sealed {
+		if candidate.artifact.CheckpointID() != promoted.artifact.CheckpointID() {
+			baseline = candidate
+			break
+		}
+	}
+	if baseline.artifact.ID() == "" {
+		t.Fatal("the fixture needs two distinct checkpoint declarations to compare")
+	}
+
+	corpus, err := semantic.NewCorpus([]semantic.State{promoted.initialState})
+	if err != nil {
+		t.Fatalf("NewCorpus: %v", err)
+	}
+	policy, err := semantic.NewComparisonPolicy(promoted.plan, promoted.plan,
+		[]semantic.CheckpointPair{{
+			Baseline:  baseline.artifact.Checkpoint().Key,
+			Candidate: promoted.artifact.Checkpoint().Key,
+		}})
+	if err != nil {
+		t.Fatalf("NewComparisonPolicy: %v", err)
+	}
+
+	profile := promoted.assessments[0].ProfileID()
+	comparison, err := semantic.NewComparison(semantic.ComparisonRequest{
+		Baseline:  baseline.artifact.CheckpointID(),
+		Candidate: promoted.artifact.CheckpointID(),
+		Profile:   profile,
+		World:     promoted.world.ID(),
+		Corpus:    corpus.ID(),
+		Policy:    policy,
+	})
+	if err != nil {
+		t.Fatalf("NewComparison: %v", err)
+	}
+
+	return &ComparisonEvidence{
+		Comparison: comparison,
+		Baseline:   []ComparedCase{comparedCase(t, baseline, profile)},
+		Candidate:  []ComparedCase{comparedCase(t, promoted, profile)},
+	}
+}
+
+func comparedCase(t *testing.T, sealed sealedFixture, profile semantic.ProfileID) ComparedCase {
+	t.Helper()
+	for _, assessment := range sealed.assessments {
+		if assessment.ProfileID() == profile {
+			return ComparedCase{Checkpoint: sealed.artifact, Assessment: assessment}
+		}
+	}
+	t.Fatalf("no assessment under profile %s for this checkpoint", profile)
+	return ComparedCase{}
+}
+
+// otherProfileAssessment returns an assessment of the same checkpoint under a different
+// profile, so the profile-agreement check can be exercised against real evidence.
+func otherProfileAssessment(
+	t *testing.T, sealed sealedFixture, exclude semantic.ProfileID,
+) semantic.Assessment {
+	t.Helper()
+	for _, assessment := range sealed.assessments {
+		if assessment.ProfileID() != exclude {
+			return assessment
+		}
+	}
+	t.Fatal("the fixture needs two profiles for this")
+	return semantic.Assessment{}
+}
+
+// worldWithReference builds a world that is not the fixture's empty one.
+func worldWithReference(t *testing.T) semantic.World {
+	t.Helper()
+	reference, err := semantic.NewWorldReference(
+		semantic.WorldReferenceSnapshot, semantic.Digest("sha256:"+strings.Repeat("e", 64)))
+	if err != nil {
+		t.Fatalf("NewWorldReference: %v", err)
+	}
+	world, err := semantic.NewWorld([]semantic.WorldReference{reference})
+	if err != nil {
+		t.Fatalf("NewWorld: %v", err)
+	}
+	return world
+}
+
+// assessmentWithVerdict returns an assessment of this checkpoint with a given verdict, so
+// readiness can be varied while everything else about the evidence stays valid.
+func assessmentWithVerdict(
+	t *testing.T, sealed sealedFixture, verdict semantic.ReadinessVerdict,
+) semantic.Assessment {
+	t.Helper()
+	for _, assessment := range sealed.assessments {
+		if assessment.Verdict() == verdict {
+			return assessment
+		}
+	}
+	t.Fatalf("the fixture has no %s assessment for this checkpoint", verdict)
+	return semantic.Assessment{}
+}
+
+// assessmentUnderProfile finds the assessment of one checkpoint declaration under a
+// profile, across the whole run.
+func assessmentUnderProfile(
+	t *testing.T, sealed []sealedFixture,
+	checkpoint semantic.CheckpointID, profile semantic.ProfileID,
+) semantic.Assessment {
+	t.Helper()
+	for _, side := range sealed {
+		if side.artifact.CheckpointID() != checkpoint {
+			continue
+		}
+		for _, assessment := range side.assessments {
+			if assessment.ProfileID() == profile {
+				return assessment
+			}
+		}
+	}
+	t.Fatal("no assessment under that profile for that checkpoint")
+	return semantic.Assessment{}
+}
+
+// restateComparison re-identifies a comparison under a different profile, leaving every
+// other input alone, so a test can vary the profile without disturbing what it is
+// comparing.
+func restateComparison(
+	t *testing.T, comparison semantic.Comparison, profile semantic.ProfileID,
+) semantic.Comparison {
+	t.Helper()
+	restated, err := semantic.NewComparison(semantic.ComparisonRequest{
+		Baseline:  comparison.Baseline(),
+		Candidate: comparison.Candidate(),
+		Profile:   profile,
+		World:     comparison.World(),
+		Corpus:    comparison.Corpus(),
+		Policy:    comparison.Policy(),
+	})
+	if err != nil {
+		t.Fatalf("NewComparison: %v", err)
+	}
+	return restated
 }

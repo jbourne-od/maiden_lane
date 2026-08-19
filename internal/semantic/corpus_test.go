@@ -441,3 +441,56 @@ func TestNewCorpusProducesTheCanonicalVectorBytes(t *testing.T) {
 		t.Fatal("NewCorpus does not encode through the canonical helper")
 	}
 }
+
+// A pure evaluation must be able to establish "the same replay corpus" without holding
+// the corpus, which is what content-addressing buys. A caller supplying the case digests
+// it actually ran cannot make them add up to a corpus it did not run.
+func TestVerifyCorpusIdentityEstablishesCoverage(t *testing.T) {
+	corpus, err := NewCorpus(corpusCases(t, 4))
+	if err != nil {
+		t.Fatalf("NewCorpus: %v", err)
+	}
+	digests := corpus.Digests()
+
+	if !VerifyCorpusIdentity(digests, corpus.ID()) {
+		t.Fatal("the corpus's own digests did not verify against its identity")
+	}
+
+	for _, test := range []struct {
+		name    string
+		digests []StateDigest
+	}{
+		{"nothing at all", nil},
+		{"an empty set", []StateDigest{}},
+		{"a case missing", digests[:3]},
+		{"a case added", append(slices.Clone(digests), digests[0])},
+		// The order matters and is deliberately not fixed up. A set with the right
+		// members in the wrong order is a caller that does not know what it ran, and
+		// silently sorting it into agreement would hide that.
+		{"the right cases in the wrong order", reversedDigests(digests)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if VerifyCorpusIdentity(test.digests, corpus.ID()) {
+				t.Fatal("verification accepted digests that are not this corpus")
+			}
+		})
+	}
+
+	// Another corpus's digests must not verify, or coverage could be transplanted.
+	other, err := NewCorpus(corpusCases(t, 3))
+	if err != nil {
+		t.Fatalf("NewCorpus: %v", err)
+	}
+	if VerifyCorpusIdentity(other.Digests(), corpus.ID()) {
+		t.Fatal("another corpus's cases verified against this corpus")
+	}
+	if VerifyCorpusIdentity(digests, "") {
+		t.Fatal("an absent expected identity verified")
+	}
+}
+
+func reversedDigests(digests []StateDigest) []StateDigest {
+	reversed := slices.Clone(digests)
+	slices.Reverse(reversed)
+	return reversed
+}
