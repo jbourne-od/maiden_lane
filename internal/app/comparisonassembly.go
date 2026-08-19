@@ -62,9 +62,20 @@ const (
 	MissingUnknown MissingReason = iota
 	// MissingNotExecuted means no execution exists for this case on this side.
 	MissingNotExecuted
-	// MissingNotAnswered means the execution exists but has not produced a result:
-	// still running, or terminally failed without ever being attempted.
+	// MissingNotAnswered means the execution exists and has not produced a result yet.
+	// Waiting fixes it.
 	MissingNotAnswered
+	// MissingUnattempted means the execution terminally failed without ever being
+	// attempted, so it will never acquire a result.
+	//
+	// Distinct from MissingNotAnswered because these reasons exist to say what an
+	// operator should DO, and the two call for opposite actions: one is waited on, the
+	// other never resolves. This is the distinction rehydration introduced
+	// RehydrationUnattempted for, and it has now been collapsed three times — in the
+	// worker's lifecycle, in corpus progress, and here. It is not visible in
+	// ExecutionFailed's name, so anything mapping lifecycle states downstream will keep
+	// rediscovering it.
+	MissingUnattempted
 	// MissingCheckpointNotSealed means the execution answered but sealed no checkpoint
 	// for the declaration this side compares. A deterministic refusal before that
 	// boundary produces exactly this, and it is a real answer about the case rather than
@@ -83,6 +94,8 @@ func (r MissingReason) String() string {
 		return "not_executed"
 	case MissingNotAnswered:
 		return "not_answered"
+	case MissingUnattempted:
+		return "unattempted"
 	case MissingCheckpointNotSealed:
 		return "checkpoint_not_sealed"
 	case MissingNotAssessed:
@@ -118,7 +131,16 @@ func (a ComparisonAssembly) Evidence() (*promotion.ComparisonEvidence, bool) {
 	if !a.complete {
 		return nil, false
 	}
-	evidence := a.evidence
+	// The slices are cloned, not just the struct. Copying the struct copies slice headers
+	// and shares their backing arrays, so a caller writing to evidence.Baseline[0] would
+	// be writing into the assembly's own evidence. That is not an authorization hole,
+	// since the gate revalidates whatever it is handed, but every other result type here
+	// returns copies and a caller has no way to know this one did not.
+	evidence := promotion.ComparisonEvidence{
+		Comparison: a.evidence.Comparison,
+		Baseline:   append([]promotion.ComparedCase(nil), a.evidence.Baseline...),
+		Candidate:  append([]promotion.ComparedCase(nil), a.evidence.Candidate...),
+	}
 	return &evidence, true
 }
 
@@ -295,8 +317,10 @@ func assembleCase(
 	switch rehydrated.Outcome() {
 	case RehydrationAbsent:
 		return promotion.ComparedCase{}, MissingNotExecuted, nil
-	case RehydrationPending, RehydrationUnattempted:
+	case RehydrationPending:
 		return promotion.ComparedCase{}, MissingNotAnswered, nil
+	case RehydrationUnattempted:
+		return promotion.ComparedCase{}, MissingUnattempted, nil
 	}
 
 	result, ok := rehydrated.Result()

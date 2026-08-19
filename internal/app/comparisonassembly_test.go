@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/optimaldynamics/maiden-lane/internal/adapters/memory"
+	"github.com/optimaldynamics/maiden-lane/internal/fixtures/teamhos"
 	"github.com/optimaldynamics/maiden-lane/internal/ports"
 	"github.com/optimaldynamics/maiden-lane/internal/promotion"
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
@@ -223,13 +224,14 @@ func clauseFor(decision promotion.Decision, clause promotion.Clause) promotion.C
 // ── fixture ─────────────────────────────────────────────────────────────────
 
 type comparisonSetup struct {
-	store   *memory.Store
-	stores  ComparisonStores
-	corpus  semantic.Corpus
-	plan    semantic.Plan
-	profile semantic.ProfileID
-	policy  ports.TargetPolicy
-	request AssembleComparisonRequest
+	store       *memory.Store
+	stores      ComparisonStores
+	corpus      semantic.Corpus
+	plan        semantic.Plan
+	compilation semantic.CompileRequest
+	profile     semantic.ProfileID
+	policy      ports.TargetPolicy
+	request     AssembleComparisonRequest
 }
 
 // comparisonFixture stores a plan and a corpus, and builds a comparison between two
@@ -309,11 +311,12 @@ func comparisonFixtureWith(t *testing.T, cases int, storeCorpus bool) comparison
 
 	side := ComparisonSide{ExecutorIdentity: inputs.ExecutorIdentity, Policy: inputs.Policy}
 	return comparisonSetup{
-		store:   store,
-		stores:  ComparisonStores{Corpora: store, Plans: store, Executions: store},
-		corpus:  corpus,
-		plan:    plan,
-		profile: profile,
+		store:       store,
+		stores:      ComparisonStores{Corpora: store, Plans: store, Executions: store},
+		corpus:      corpus,
+		plan:        plan,
+		compilation: inputs.Compilation,
+		profile:     profile,
 		policy: ports.TargetPolicy{
 			TenantID: "acme", CustomerID: "cust", Target: "cm",
 			Version: 1, RequiredProfileID: profile,
@@ -374,8 +377,11 @@ func (s comparisonSetup) promotedCandidate(t *testing.T) promotion.Candidate {
 	if err != nil {
 		t.Fatalf("teamhos inputs: %v", err)
 	}
+	// The fixture's own candidate plan, which for an asymmetric comparison is not the
+	// teamhos default: the promoted checkpoint must be the one the comparison's candidate
+	// side names, and that declaration exists only in the candidate's plan.
 	result, err := Run(t.Context(), Request{
-		Compilation: inputs.Compilation, InitialState: state, World: inputs.World,
+		Compilation: s.compilation, InitialState: state, World: inputs.World,
 		ExecutorIdentity: inputs.ExecutorIdentity, Policy: inputs.Policy,
 	}, nil)
 	if err != nil {
@@ -609,4 +615,438 @@ func TestAssemblyPicksAssessmentsUnderTheComparisonsProfile(t *testing.T) {
 			}
 		}
 	}
+}
+
+// PRODUCTION BREAK CAUGHT BY OWNER REVIEW, and by the very lesson this slice recorded:
+// the main fixture used ONE plan and ONE set of side settings for both sides, so neither
+// selection was observable.
+//
+// Two load-bearing bugs escaped the whole suite — using the candidate's plan for both
+// sides, and the candidate's executor and provenance settings for both — because baseline
+// and candidate were identical in exactly the dimensions the broken code would confuse.
+// Verified before this test existed.
+//
+// This fixture is asymmetric in both: two different plans sharing a schema, with the
+// compared checkpoint renamed on the candidate side so the correspondence has real work
+// to do, and two different executor identities so each side resolves to its own
+// executions. It is one realistic fixture rather than several narrow tests, because what
+// needs proving is that assembly picks the right plan AND the right executions together.
+func TestAssemblyResolvesEachSideToItsOwnPlanAndExecutions(t *testing.T) {
+	fixture := asymmetricComparisonFixture(t, 2)
+
+	// The two sides really are distinct, or this test proves nothing.
+	if fixture.baselinePlan.ID() == fixture.candidatePlan.ID() {
+		t.Fatal("the fixture must use two different plans")
+	}
+	if fixture.request.Baseline.ExecutorIdentity == fixture.request.Candidate.ExecutorIdentity {
+		t.Fatal("the fixture must use two different executor identities")
+	}
+
+	assembly, err := AssembleComparison(t.Context(), fixture.stores, fixture.request)
+	if err != nil {
+		t.Fatalf("AssembleComparison: %v", err)
+	}
+	evidence, ok := assembly.Evidence()
+	if !ok {
+		t.Fatalf("assembly is incomplete: %+v", assembly.Missing())
+	}
+
+	// Each side's artifacts must realize its OWN checkpoint declaration, which differ
+	// because the plans differ. This is what fails when both sides resolve to one plan.
+	for i, compared := range evidence.Baseline {
+		if compared.Checkpoint.CheckpointID() != fixture.request.Comparison.Baseline() {
+			t.Fatalf("baseline case %d realizes the wrong declaration", i)
+		}
+		if compared.Checkpoint.PlanID() != fixture.baselinePlan.ID() {
+			t.Fatalf("baseline case %d came from the candidate's plan", i)
+		}
+	}
+	for i, compared := range evidence.Candidate {
+		if compared.Checkpoint.CheckpointID() != fixture.request.Comparison.Candidate() {
+			t.Fatalf("candidate case %d realizes the wrong declaration", i)
+		}
+		if compared.Checkpoint.PlanID() != fixture.candidatePlan.ID() {
+			t.Fatalf("candidate case %d came from the baseline's plan", i)
+		}
+	}
+
+	// And each side's artifacts must come from ITS executions. Executor identity is
+	// excluded from checkpoint identity by design, so the checkpoints alone cannot show
+	// this — the semantic runs are identical across executors, and only the execution
+	// identities differ. Comparing the run identities would prove nothing; the two sides'
+	// artifacts are checked against the executions each side's settings derive.
+	assertSideRanUnder(t, fixture, evidence.Baseline,
+		fixture.baselinePlan, fixture.request.Baseline)
+	assertSideRanUnder(t, fixture, evidence.Candidate,
+		fixture.candidatePlan, fixture.request.Candidate)
+
+	// The whole point: this evidence satisfies clause 6.
+	candidate := fixture.promotedCandidate(t)
+	candidate.Comparison = evidence
+	result := clauseFor(promotion.Evaluate(fixture.policy, candidate),
+		promotion.ClauseComparisonCorpus)
+	if result.Verdict() != promotion.Pass {
+		t.Fatalf("clause 6 = %v/%v on asymmetric evidence, want Pass",
+			result.Verdict(), result.Unevaluated())
+	}
+}
+
+// Splitting unattempted from pending, which these reasons exist for: one is waited on and
+// the other never resolves, so collapsing them tells an operator to do the wrong thing.
+func TestAnUnattemptedCaseIsDistinguishedFromAPendingOne(t *testing.T) {
+	fixture := comparisonFixture(t, 2)
+	enqueueBothSides(t, fixture)
+
+	// Both cases are enqueued and unfinished.
+	pending, err := AssembleComparison(t.Context(), fixture.stores, fixture.request)
+	if err != nil {
+		t.Fatalf("AssembleComparison: %v", err)
+	}
+	for _, absent := range pending.Missing() {
+		if absent.Reason != MissingNotAnswered {
+			t.Fatalf("reason = %s, want not_answered", absent.Reason)
+		}
+	}
+
+	// Terminally fail one of them without a result, which is what Fail records for an
+	// execution that could not be attempted.
+	first := pending.Missing()[0]
+	if _, _, err := fixture.store.Claim(t.Context(), leaseForTest); err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if err := fixture.store.Fail(t.Context(), "acme", first.ExecutionID, "plan_absent"); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+
+	after, err := AssembleComparison(t.Context(), fixture.stores, fixture.request)
+	if err != nil {
+		t.Fatalf("AssembleComparison: %v", err)
+	}
+	unattempted, waiting := 0, 0
+	for _, absent := range after.Missing() {
+		switch absent.Reason {
+		case MissingUnattempted:
+			unattempted++
+			// This fixture's two sides share one plan and one executor, so they resolve
+			// to the same executions and one failed execution is reported once per side.
+			// Every unattempted entry must therefore name the execution that was failed.
+			if absent.ExecutionID != first.ExecutionID {
+				t.Fatal("a case other than the failed one was reported as unattempted")
+			}
+		case MissingNotAnswered:
+			waiting++
+		default:
+			t.Fatalf("unexpected reason %s", absent.Reason)
+		}
+	}
+	if unattempted == 0 {
+		t.Fatal("the failed case was not reported as unattempted, so waiting on it would " +
+			"never resolve and nothing says so")
+	}
+	if waiting == 0 {
+		t.Fatal("no case is still merely pending, so the two reasons are not distinguished")
+	}
+}
+
+// The returned evidence must be a copy. A caller writing to it would otherwise write into
+// the assembly's own evidence, which every other result type here forbids.
+func TestReturnedEvidenceIsACopy(t *testing.T) {
+	fixture := comparisonFixture(t, 2)
+	runBothSides(t, fixture)
+
+	assembly, err := AssembleComparison(t.Context(), fixture.stores, fixture.request)
+	if err != nil {
+		t.Fatalf("AssembleComparison: %v", err)
+	}
+	first, _ := assembly.Evidence()
+	for i := range first.Baseline {
+		first.Baseline[i] = promotion.ComparedCase{}
+	}
+	for i := range first.Candidate {
+		first.Candidate[i] = promotion.ComparedCase{}
+	}
+
+	second, ok := assembly.Evidence()
+	if !ok {
+		t.Fatal("the assembly stopped reporting evidence")
+	}
+	for i, compared := range second.Baseline {
+		if compared.Checkpoint.ID() == "" {
+			t.Fatalf("baseline case %d was cleared through the returned slice", i)
+		}
+	}
+	for i, compared := range second.Candidate {
+		if compared.Checkpoint.ID() == "" {
+			t.Fatalf("candidate case %d was cleared through the returned slice", i)
+		}
+	}
+}
+
+// ── asymmetric fixture ──────────────────────────────────────────────────────
+
+type asymmetricSetup struct {
+	comparisonSetup
+	baselinePlan  semantic.Plan
+	candidatePlan semantic.Plan
+}
+
+// asymmetricComparisonFixture builds a comparison whose two sides genuinely differ, in
+// both dimensions the assembler selects on.
+//
+// The plans differ by a renamed checkpoint, which changes PlanID while leaving the schema
+// alone — so one corpus is replayable under both, which the kernel requires. The executor
+// identities differ, which changes ExecutionID while leaving SemanticRunID alone, so each
+// side resolves to its own executions over the same semantic runs.
+func asymmetricComparisonFixture(t *testing.T, cases int) asymmetricSetup {
+	t.Helper()
+
+	inputs, err := teamhosInputs()
+	if err != nil {
+		t.Fatalf("teamhos inputs: %v", err)
+	}
+	baselinePlan := compilePlan(t, inputs.Compilation)
+
+	renamed := inputs.Compilation
+	checkpoints := append([]semantic.CheckpointDeclaration(nil), renamed.Rules.Checkpoints...)
+	renamedKey := semantic.CheckpointKey("team_hos_reconciled.v2")
+	found := false
+	for i := range checkpoints {
+		if checkpoints[i].Key == "team_hos_aggregated.v1" {
+			checkpoints[i].Key = renamedKey
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the fixture no longer declares team_hos_aggregated.v1")
+	}
+	renamed.Rules.Checkpoints = checkpoints
+	candidatePlan := compilePlan(t, renamed)
+
+	if baselinePlan.SchemaDigest() != candidatePlan.SchemaDigest() {
+		t.Fatal("the two plans must share a schema, or one corpus cannot run under both")
+	}
+
+	otherExecutor, err := semantic.NewExecutorIdentity("go",
+		semantic.Digest("sha256:"+repeatRune('b', 64)))
+	if err != nil {
+		t.Fatalf("NewExecutorIdentity: %v", err)
+	}
+
+	store := memory.NewStore()
+	for _, plan := range []semantic.Plan{baselinePlan, candidatePlan} {
+		compilation := compileFor(t, plan, inputs, renamedKey)
+		if err := store.PutPlan(t.Context(), ports.PlanRecord{
+			TenantID: "acme", PlanID: plan.ID(), Input: compilation.Input(),
+			Schema: inputs.InitialState.Schema(), Compilation: compilation,
+		}); err != nil {
+			t.Fatalf("PutPlan: %v", err)
+		}
+	}
+
+	corpus := corpusWithCompleteObservations(t, inputs.InitialState.Schema(), cases)
+	if err := store.PutCorpus(t.Context(), ports.CorpusRecord{
+		TenantID: "acme", CorpusID: corpus.ID(), Corpus: corpus,
+	}); err != nil {
+		t.Fatalf("PutCorpus: %v", err)
+	}
+
+	profile := compileFor(t, baselinePlan, inputs, renamedKey).Profiles()[0].ID()
+	policy, err := semantic.NewComparisonPolicy(baselinePlan, candidatePlan,
+		[]semantic.CheckpointPair{{Baseline: "team_hos_aggregated.v1", Candidate: renamedKey}})
+	if err != nil {
+		t.Fatalf("NewComparisonPolicy: %v", err)
+	}
+	comparison, err := semantic.NewComparison(semantic.ComparisonRequest{
+		Baseline:  checkpointIdentityIn(t, baselinePlan, "team_hos_aggregated.v1"),
+		Candidate: checkpointIdentityIn(t, candidatePlan, renamedKey),
+		Profile:   profile, World: inputs.World.ID(), Corpus: corpus.ID(), Policy: policy,
+	})
+	if err != nil {
+		t.Fatalf("NewComparison: %v", err)
+	}
+
+	setup := asymmetricSetup{
+		comparisonSetup: comparisonSetup{
+			store:       store,
+			stores:      ComparisonStores{Corpora: store, Plans: store, Executions: store},
+			corpus:      corpus,
+			plan:        candidatePlan,
+			compilation: compileFor(t, candidatePlan, inputs, renamedKey).Input().Request(),
+			profile:     profile,
+			policy: ports.TargetPolicy{
+				TenantID: "acme", CustomerID: "cust", Target: "cm",
+				Version: 1, RequiredProfileID: profile,
+			},
+			request: AssembleComparisonRequest{
+				TenantID: "acme", Comparison: comparison, World: inputs.World,
+				Baseline:  ComparisonSide{ExecutorIdentity: inputs.ExecutorIdentity, Policy: inputs.Policy},
+				Candidate: ComparisonSide{ExecutorIdentity: otherExecutor, Policy: inputs.Policy},
+			},
+		},
+		baselinePlan:  baselinePlan,
+		candidatePlan: candidatePlan,
+	}
+
+	// Execute each side under its own plan and executor, so the two sides really do have
+	// separate executions to be resolved to.
+	runSide(t, setup, baselinePlan, setup.request.Baseline, inputs, renamedKey)
+	runSide(t, setup, candidatePlan, setup.request.Candidate, inputs, renamedKey)
+	return setup
+}
+
+func compilePlan(t *testing.T, request semantic.CompileRequest) semantic.Plan {
+	t.Helper()
+	compilation, err := semantic.Compile(request)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	plan, ok := compilation.Plan()
+	if !ok {
+		t.Fatal("the fixture did not compile")
+	}
+	return plan
+}
+
+// compileFor recompiles whichever of the two plans is asked for, so a record can carry the
+// compilation its plan came from.
+func compileFor(
+	t *testing.T, plan semantic.Plan, inputs teamhos.Inputs, renamedKey semantic.CheckpointKey,
+) semantic.Compilation {
+	t.Helper()
+	request := inputs.Compilation
+	if planDeclaresCheckpoint(plan, renamedKey) {
+		checkpoints := append([]semantic.CheckpointDeclaration(nil), request.Rules.Checkpoints...)
+		for i := range checkpoints {
+			if checkpoints[i].Key == "team_hos_aggregated.v1" {
+				checkpoints[i].Key = renamedKey
+			}
+		}
+		request.Rules.Checkpoints = checkpoints
+	}
+	compilation, err := semantic.Compile(request)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	return compilation
+}
+
+func planDeclaresCheckpoint(plan semantic.Plan, key semantic.CheckpointKey) bool {
+	for _, checkpoint := range plan.Checkpoints() {
+		if checkpoint.Key == key {
+			return true
+		}
+	}
+	return false
+}
+
+// runSide executes every corpus case under one plan and one executor, storing the results
+// the way the worker does.
+func runSide(
+	t *testing.T, fixture asymmetricSetup, plan semantic.Plan, side ComparisonSide,
+	inputs teamhos.Inputs, renamedKey semantic.CheckpointKey,
+) {
+	t.Helper()
+	compilation := compileFor(t, plan, inputs, renamedKey)
+	for index := 0; index < fixture.corpus.Len(); index++ {
+		state, _ := fixture.corpus.Case(index)
+		binding, err := semantic.BindRun(semantic.RunBindingRequest{
+			Plan: plan, InitialState: state, World: inputs.World,
+			ExecutorIdentity: side.ExecutorIdentity, Policy: side.Policy,
+		})
+		if err != nil {
+			t.Fatalf("BindRun: %v", err)
+		}
+		request := ports.ExecutionRequest{
+			TenantID: "acme", ExecutionID: binding.ExecutionID(),
+			RunID: binding.SemanticRunID(), PlanID: plan.ID(),
+			Input: ports.ExecutionInput{
+				InitialState: state, World: inputs.World,
+				ExecutorIdentity: side.ExecutorIdentity, Policy: side.Policy,
+			},
+		}
+		if _, err := fixture.store.Enqueue(t.Context(), request); err != nil {
+			t.Fatalf("Enqueue: %v", err)
+		}
+		result, err := Run(t.Context(), Request{
+			Compilation: compilation.Input().Request(), InitialState: state, World: inputs.World,
+			ExecutorIdentity: side.ExecutorIdentity, Policy: side.Policy,
+		}, nil)
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		projected, err := Project(request, result)
+		if err != nil {
+			t.Fatalf("Project: %v", err)
+		}
+		if _, _, err := fixture.store.Claim(t.Context(), leaseForTest); err != nil {
+			t.Fatalf("Claim: %v", err)
+		}
+		if err := fixture.store.Complete(t.Context(), projected); err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+	}
+}
+
+// assertSideRanUnder requires each of a side's artifacts to be one this side's plan and
+// executor settings actually produced, by re-deriving the execution and requiring the
+// stored result to hold that artifact.
+func assertSideRanUnder(
+	t *testing.T, fixture asymmetricSetup, cases []promotion.ComparedCase,
+	plan semantic.Plan, side ComparisonSide,
+) {
+	t.Helper()
+	inputs, err := teamhosInputs()
+	if err != nil {
+		t.Fatalf("teamhos inputs: %v", err)
+	}
+	for i, compared := range cases {
+		state, ok := fixture.corpus.Case(i)
+		if !ok {
+			t.Fatalf("the corpus has no case %d", i)
+		}
+		binding, err := semantic.BindRun(semantic.RunBindingRequest{
+			Plan: plan, InitialState: state, World: inputs.World,
+			ExecutorIdentity: side.ExecutorIdentity, Policy: side.Policy,
+		})
+		if err != nil {
+			t.Fatalf("BindRun: %v", err)
+		}
+		stored, found, err := fixture.store.Get(t.Context(), "acme", binding.ExecutionID())
+		if err != nil || !found {
+			t.Fatalf("case %d has no execution under this side's settings: found=%t err=%v",
+				i, found, err)
+		}
+		held := false
+		for _, checkpoint := range stored.Result.Checkpoints {
+			if checkpoint.CheckpointArtifactID == compared.Checkpoint.ID() {
+				held = true
+			}
+		}
+		if !held {
+			t.Fatalf("case %d's artifact did not come from this side's execution", i)
+		}
+	}
+}
+
+func checkpointIdentityIn(t *testing.T, plan semantic.Plan, key semantic.CheckpointKey) semantic.CheckpointID {
+	t.Helper()
+	inputs, err := teamhosInputs()
+	if err != nil {
+		t.Fatalf("teamhos inputs: %v", err)
+	}
+	compilation := compileFor(t, plan, inputs, key)
+	result, err := Run(t.Context(), Request{
+		Compilation: compilation.Input().Request(), InitialState: inputs.InitialState,
+		World: inputs.World, ExecutorIdentity: inputs.ExecutorIdentity, Policy: inputs.Policy,
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for _, sealed := range result.Checkpoints() {
+		if sealed.Checkpoint().Key == key {
+			return sealed.CheckpointID()
+		}
+	}
+	t.Fatalf("no sealed checkpoint for %s", key)
+	return ""
 }
