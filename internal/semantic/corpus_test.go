@@ -316,3 +316,71 @@ func TestAnUnconstructedCorpusNamesNoInputs(t *testing.T) {
 		t.Fatalf("a real corpus was refused: %v", err)
 	}
 }
+
+// A corpus whose cases do not share one schema could never be replayed under any plan,
+// because BindRun refuses a state whose schema digest is not the plan's. Refusing at
+// assembly means that is discovered when the corpus is built rather than partway through
+// executing it.
+//
+// Found while working corpus persistence: the storage record needs one schema, and the
+// reason it can have one is that a corpus with several is unusable.
+func TestACorpusRequiresOneSchemaAcrossEveryCase(t *testing.T) {
+	cases := corpusCases(t, 2)
+	other := corpusCasesUnderWiderSchema(t, 1)
+
+	if cases[0].Schema().Digest() == other[0].Schema().Digest() {
+		t.Fatal("the fixture is wrong: the two schemas must differ")
+	}
+	if _, err := NewCorpus(append(slices.Clone(cases), other...)); err == nil {
+		t.Fatal("a corpus accepted cases under two different schemas")
+	}
+
+	// A single-schema corpus reports the schema every case shares, which is what
+	// comparability will compare against both plans.
+	corpus, err := NewCorpus(cases)
+	if err != nil {
+		t.Fatalf("NewCorpus: %v", err)
+	}
+	if corpus.SchemaDigest() != cases[0].Schema().Digest() {
+		t.Fatalf("schema digest = %s, want the cases' %s",
+			corpus.SchemaDigest(), cases[0].Schema().Digest())
+	}
+
+	// The schema is not part of the identity, because every case's StateDigest already
+	// commits to it. Two corpora differing only in schema necessarily differ in their
+	// cases, so this is asserted as the absence of a second statement rather than as a
+	// property that could be violated independently.
+	if corpus.SchemaDigest() == SchemaDigest(corpus.ID()) {
+		t.Fatal("the corpus identity is its schema digest")
+	}
+}
+
+// corpusCasesUnderWiderSchema builds cases under a different schema, so a mixed-schema
+// corpus can be attempted.
+func corpusCasesUnderWiderSchema(t *testing.T, count int) []State {
+	t.Helper()
+	schema, err := NewSchema(
+		[]EntityDeclaration{{Kind: "driver", Fields: []FieldDeclaration{
+			{Name: "assignment_key", Kind: ValueString},
+		}}}, nil)
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "team-hos-team-ab")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+
+	cases := make([]State, 0, count)
+	for i := 0; i < count; i++ {
+		state, err := NewState(schema, lineage, []Entity{
+			mustEntity(t, "driver", SourceEntityID(lineage, "driver", "A"),
+				map[FieldName]Value{"assignment_key": mustString(t, "wider-"+string(rune('a'+i)))}),
+		}, nil)
+		if err != nil {
+			t.Fatalf("NewState: %v", err)
+		}
+		cases = append(cases, state)
+	}
+	return cases
+}

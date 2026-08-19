@@ -34,6 +34,7 @@ import (
 type Corpus struct {
 	cases     []State
 	digests   []StateDigest
+	schema    SchemaDigest
 	canonical []byte
 	id        CorpusID
 }
@@ -60,6 +61,21 @@ func NewCorpus(cases []State) (Corpus, error) {
 			// trustworthy case, and this is the only place it can be caught before its
 			// digest enters an identity.
 			return Corpus{}, fmt.Errorf("replay corpus case: %w", err)
+		}
+	}
+
+	// Every case must share one schema, because a corpus with mixed schemas could never
+	// be replayed under any plan at all: BindRun refuses a state whose schema digest is
+	// not the plan's, so no single plan could execute all the cases. Such a corpus is
+	// unusable for its only purpose, and refusing it here means that is discovered when
+	// it is assembled rather than partway through executing it.
+	//
+	// It also states the constraint comparability will need: both plans under comparison
+	// must pin this schema digest, or the corpus is not replayable under both.
+	schema := normalized[0].Schema().Digest()
+	for _, state := range normalized[1:] {
+		if state.Schema().Digest() != schema {
+			return Corpus{}, fmt.Errorf("replay corpus cases do not share one schema")
 		}
 	}
 	sort.Slice(normalized, func(i, j int) bool {
@@ -93,6 +109,7 @@ func NewCorpus(cases []State) (Corpus, error) {
 	return Corpus{
 		cases:     normalized,
 		digests:   digests,
+		schema:    schema,
 		canonical: canonical,
 		id:        CorpusID(canonicalDigest(canonical)),
 	}, nil
@@ -100,6 +117,18 @@ func NewCorpus(cases []State) (Corpus, error) {
 
 // ID returns the content identity of the canonical corpus.
 func (c Corpus) ID() CorpusID { return c.id }
+
+// SchemaDigest returns the one schema every case shares.
+//
+// It is what comparability will compare against both plans: a plan whose schema digest is
+// not this one cannot execute any case in the corpus, so a comparison naming it is not
+// merely unlikely to work, it cannot be run.
+//
+// The schema is deliberately NOT part of CorpusID. It is already committed to by every
+// case's StateDigest, and a corpus's identity is the set of cases it holds; encoding a
+// value the cases already determine would be a second statement of one fact, able to
+// drift from it only if something had gone very wrong indeed.
+func (c Corpus) SchemaDigest() SchemaDigest { return c.schema }
 
 // Len reports how many cases the corpus holds.
 //
