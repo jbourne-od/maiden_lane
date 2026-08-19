@@ -29,15 +29,22 @@ type ComparisonCorrespondence struct {
 // A caller that reads this record and acts on it has trusted a projection, which is the
 // one thing this system never does.
 //
-// Every field here is a COMPONENT of ComparisonID, through the comparison tuple or
-// through its policy. Nothing is stored beside the identity that the identity does not
-// already commit to, so there is no value a mangled row could carry without the
-// re-derived identity ceasing to match.
+// Every SEMANTIC field here is a component of ComparisonID, through the comparison tuple
+// or through its policy, so a mangled value cannot survive re-derivation: the identity
+// stops matching. Two fields are outside that guarantee and must not be read as if they
+// were inside it.
 //
-// The one thing that is presentation rather than content is the ORDER of Correspondences,
-// which is the policy's canonical order. Rehydration does not depend on it, because the
-// kernel sorts whatever it is given; it is fixed so that two adapters project one
-// comparison into one record and a caller may compare records directly.
+// TenantID is the important one. Tenancy is authorization scope, and ComparisonID commits
+// to nothing about it -- two tenants asking the same question derive the same identity,
+// which is why storage keys by both. So a tenant carried on a record is not authenticated
+// by re-derivation, and RehydrateComparison checks it against the tenant that was asked
+// for rather than trusting it. An earlier version of this comment claimed every field was
+// under the identity, which would have made that check look redundant.
+//
+// The ORDER of Correspondences is the other, and it is presentation rather than content:
+// rehydration does not depend on it because the kernel sorts whatever it is given. It is
+// fixed so that two adapters project one comparison into one record and a caller may
+// compare records directly.
 type ComparisonRecord struct {
 	TenantID     TenantID
 	ComparisonID semantic.ComparisonID
