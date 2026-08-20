@@ -431,11 +431,19 @@ func encodeExpr(encoder *canonicalEncoder, expr Expr) {
 		}
 	default:
 		// EXHAUSTIVE AND FAIL-CLOSED, and the default arm is the point rather than a
-		// formality. The three group kinds deliberately have NO arm here: encodeExpr is
-		// reachable only from CompileExpression, which refuses them, so an arm for them
-		// would be unreachable code that also removes this net for the very kinds whose
-		// encoding nobody has exercised. They get one when a Transform makes them
-		// reachable, together with a golden vector. checkExpr and checkOperandShape both refuse an unrecognised kind, so
+		// formality.
+		//
+		// The three group kinds deliberately have NO arm here. encodeExpr has TWO entry
+		// points, CompileExpression and encodeSelector -- an earlier version of this comment
+		// said one, which is the reasoning error CompileSelector documents having shipped
+		// thirty lines from here. Neither can reach a group kind: CompileExpression refuses
+		// them outright, and encodeSelector only ever encodes CompiledExpression values,
+		// which nothing but CompileExpression produces. An arm here would therefore be
+		// unreachable code that also removes this net for the very kinds whose encoding
+		// nobody has exercised. They get one when a Transform makes them reachable, together
+		// with a golden vector.
+		//
+		// checkExpr and checkOperandShape both refuse an unrecognised kind, so
 		// this arm is unreachable today. It exists because adding a kind is the expected
 		// change: a new kind with a new operand would be caught by both refusal switches,
 		// which error loudly if a case is forgotten, but an encoder whose default merely

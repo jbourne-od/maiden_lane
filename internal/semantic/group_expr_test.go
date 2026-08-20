@@ -17,10 +17,12 @@ func groupMembers(t *testing.T, anchors []string, elapsed []int64) []Entity {
 	for i, token := range anchors {
 		fields := map[FieldName]Value{
 			"hos_elapsed_hours": NewInt64Value(elapsed[i]),
-			// Populated so the two-field LessOrEqualFields form is reachable. Without it that
-			// case could only compare a field with itself, which is unconditionally true and
-			// demonstrates nothing about a two-path predicate.
-			"hos_driving_hours": NewInt64Value(elapsed[i] - 1),
+			// Populated so the two-field LessOrEqualFields form is reachable, and set EQUAL
+			// to elapsed rather than below it. Equality is the only input at which "a at most
+			// b" differs from "a strictly below b", and the kernel predicate this refutes
+			// accepts equality -- a fixture that can never produce it cannot tell the two
+			// apart, so both a correct encoding and a strict one would pass.
+			"hos_driving_hours": NewInt64Value(elapsed[i]),
 		}
 		if token != "" {
 			anchor, err := NewAtomValue(token)
@@ -60,6 +62,7 @@ func TestGroupPredicatesExpressTheFrozenFour(t *testing.T) {
 	complete := groupMembers(t, []string{"T0", "T0"}, []int64{10, 12})
 	sparse := groupMembers(t, []string{"T0", ""}, []int64{10, 12})
 	disagreeing := groupMembers(t, []string{"T0", "T1"}, []int64{10, 12})
+	exceeding := membersWithDriving(t, 10, 11)
 
 	for _, test := range []struct {
 		name    string
@@ -101,8 +104,9 @@ func TestGroupPredicatesExpressTheFrozenFour(t *testing.T) {
 		},
 		{
 			// LessOrEqualFields, exactly two DISTINCT paths: driving <= elapsed, written as
-			// not(elapsed < driving). The fixture sets driving one below elapsed.
-			name: "a at most b holds",
+			// not(elapsed < driving). The fixture sets them EQUAL, which is the boundary a
+			// strict encoding would get wrong.
+			name: "a at most b holds at equality",
 			expr: allMembers(Expr{Kind: ExprNot, Args: []Expr{
 				{Kind: ExprLess, Args: []Expr{
 					field("driver.hos_elapsed_hours"), field("driver.hos_driving_hours")}},
@@ -111,13 +115,21 @@ func TestGroupPredicatesExpressTheFrozenFour(t *testing.T) {
 		},
 		{
 			// And its failing counterpart, which the other three predicates had and this one
-			// did not. Inverted: elapsed <= driving is false when driving is the lower.
-			name: "a at most b fails",
+			// did not. One member has driving ABOVE elapsed, so a at most b is false.
+			name: "a at most b fails when a exceeds b",
 			expr: allMembers(Expr{Kind: ExprNot, Args: []Expr{
 				{Kind: ExprLess, Args: []Expr{
-					field("driver.hos_driving_hours"), field("driver.hos_elapsed_hours")}},
+					field("driver.hos_elapsed_hours"), field("driver.hos_driving_hours")}},
 			}}),
-			members: complete, want: false,
+			members: exceeding, want: false,
+		},
+		{
+			// NonNegativeInt at its own boundary: zero, where >= 0 differs from > 0.
+			name: "non-negative holds at zero",
+			expr: allMembers(Expr{Kind: ExprNot, Args: []Expr{
+				{Kind: ExprLess, Args: []Expr{field("driver.hos_elapsed_hours"), intLiteral(0)}},
+			}}),
+			members: groupMembers(t, []string{"T0"}, []int64{0}), want: true,
 		},
 		{
 			// EqualFieldAcrossSources: the members agree. Genuinely cross-member, so it is
@@ -283,6 +295,146 @@ func TestAllEqualRequiresTheDeclaredKind(t *testing.T) {
 	}
 	if _, err := evaluateGroupExpr(schema, allEqual("driver.hos_anchor"), members); err == nil {
 		t.Fatal("all_equal answered over members whose stored kind contradicts the declaration")
+	}
+
+	// AND THE OTHER DIRECTION, over a differently-declared field. Every all_equal elsewhere in
+	// this suite reads hos_anchor, which is declared ValueAtom, so `value.Kind() != declared`
+	// could be replaced by `value.Kind() != ValueAtom` and survive -- the guard compared
+	// against the one kind the fixture happens to use. assignment_key is declared ValueString.
+	atomWhereStringDeclared := make([]Entity, 0, 2)
+	for _, name := range []string{"p", "q"} {
+		atom, err := NewAtomValue("T0")
+		if err != nil {
+			t.Fatalf("NewAtomValue: %v", err)
+		}
+		entity, err := NewEntity(
+			EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", name)},
+			map[FieldName]Value{"assignment_key": atom})
+		if err != nil {
+			t.Fatalf("NewEntity: %v", err)
+		}
+		atomWhereStringDeclared = append(atomWhereStringDeclared, entity)
+	}
+	if _, err := evaluateGroupExpr(
+		schema, allEqual("driver.assignment_key"), atomWhereStringDeclared); err == nil {
+		t.Fatal("all_equal answered over atoms where a string is declared")
+	}
+
+	// And the control: correctly-typed members of that same non-atom field must ANSWER, so the
+	// guard is refusing on the mismatch rather than on the field.
+	wellTyped := make([]Entity, 0, 2)
+	for _, name := range []string{"r", "s"} {
+		entity, err := NewEntity(
+			EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", name)},
+			map[FieldName]Value{"assignment_key": mustString(t, "k")})
+		if err != nil {
+			t.Fatalf("NewEntity: %v", err)
+		}
+		wellTyped = append(wellTyped, entity)
+	}
+	agreed, err := evaluateGroupExpr(schema, allEqual("driver.assignment_key"), wellTyped)
+	if err != nil {
+		t.Fatalf("all_equal refused correctly-typed strings: %v", err)
+	}
+	if !agreed {
+		t.Fatal("all_equal reported disagreement between two identical strings")
+	}
+}
+
+// membersWithDriving builds one member per driving value, with elapsed held at a fixed level,
+// so a test can put driving above elapsed -- which groupMembers cannot do.
+func membersWithDriving(t *testing.T, elapsed int64, driving ...int64) []Entity {
+	t.Helper()
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "group")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+	anchor, err := NewAtomValue("T0")
+	if err != nil {
+		t.Fatalf("NewAtomValue: %v", err)
+	}
+	members := make([]Entity, 0, len(driving))
+	for i, hours := range driving {
+		entity, err := NewEntity(
+			EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "x"+string(rune('a'+i)))},
+			map[FieldName]Value{
+				"hos_anchor":        anchor,
+				"hos_elapsed_hours": NewInt64Value(elapsed),
+				"hos_driving_hours": NewInt64Value(hours),
+			})
+		if err != nil {
+			t.Fatalf("NewEntity: %v", err)
+		}
+		members = append(members, entity)
+	}
+	return members
+}
+
+// The group layer opened two new doors into the same Args[0] hazard that
+// TestEvaluateIsTotalOnMalformedNodes covers one layer down, and shipped no equivalent.
+// Removing either checkOperandShape call panics rather than refusing.
+func TestGroupEntryPointsAreTotalOnMalformedNodes(t *testing.T) {
+	schema := expressionSchema(t)
+	members := groupMembers(t, []string{"T0"}, []int64{1})
+	for _, expr := range []Expr{
+		{Kind: ExprAllMembers},
+		{Kind: ExprAnyMembers},
+		{Kind: ExprAllMembers, Args: []Expr{intLiteral(1), intLiteral(2)}},
+		{Kind: ExprAllEqual},
+		{Kind: ExprNot},
+		{},
+	} {
+		if _, err := checkGroupExpr(schema, "driver", expr, 0); err == nil {
+			t.Errorf("checkGroupExpr accepted kind %d with %d args", expr.Kind, len(expr.Args))
+		}
+		if _, err := evaluateGroupExpr(schema, expr, members); err == nil {
+			t.Errorf("evaluateGroupExpr accepted kind %d with %d args", expr.Kind, len(expr.Args))
+		}
+	}
+}
+
+// BOOLEAN COMPOSITION AT GROUP LEVEL, which the design comment advertises and nothing
+// evaluated: all three arms of evaluateGroupExpr's composition were dead in the suite, so
+// deleting them would have left the checker admitting `all(all_members(...), all_equal(...))`
+// while the evaluator refused it. any_members was also never observed answering false.
+func TestGroupCompositionEvaluates(t *testing.T) {
+	schema := expressionSchema(t)
+	agreeing := groupMembers(t, []string{"T0", "T0"}, []int64{10, 12})
+	disagreeing := groupMembers(t, []string{"T0", "T1"}, []int64{10, 12})
+	hasAnchor := allMembers(Expr{Kind: ExprExists, Field: "driver.hos_anchor"})
+
+	for _, test := range []struct {
+		name    string
+		expr    Expr
+		members []Entity
+		want    bool
+	}{
+		// The exact composition the design comment names.
+		{"all of two group predicates", Expr{Kind: ExprAll, Args: []Expr{
+			hasAnchor, allEqual("driver.hos_anchor")}}, agreeing, true},
+		{"all fails when one conjunct fails", Expr{Kind: ExprAll, Args: []Expr{
+			hasAnchor, allEqual("driver.hos_anchor")}}, disagreeing, false},
+		{"any succeeds when one disjunct holds", Expr{Kind: ExprAny, Args: []Expr{
+			allEqual("driver.hos_anchor"), hasAnchor}}, disagreeing, true},
+		{"not inverts", Expr{Kind: ExprNot, Args: []Expr{
+			allEqual("driver.hos_anchor")}}, disagreeing, true},
+		// any_members answering FALSE, which no fixture reached: no member lacks the anchor.
+		{"any_members is false when no member matches",
+			anyMembers(Expr{Kind: ExprNot, Args: []Expr{
+				{Kind: ExprExists, Field: "driver.hos_anchor"}}}), agreeing, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := checkGroupExpr(schema, "driver", test.expr, 0); err != nil {
+				t.Fatalf("checkGroupExpr: %v", err)
+			}
+			got, err := evaluateGroupExpr(schema, test.expr, test.members)
+			if err != nil {
+				t.Fatalf("evaluateGroupExpr: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("= %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 
