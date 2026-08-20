@@ -205,6 +205,27 @@ supply — group-scoped expressions above all.
 single bound entity cannot supply. Evaluation against one bound entity ships in slice 2,
 because selection cannot be built without it. Deterministic, total, refusing rather than defaulting on absent fields.
 
+## The next slice, and its acceptance property
+
+**A `Transform` is an architectural boundary, not the next integer.** Everything built so far
+establishes authoring → compile → select → evaluate a group predicate. What it does not
+establish is that any of it is *reachable*: the group entry points have no non-test callers,
+so the machinery is potential semantics rather than semantics.
+
+**Reachability is therefore an acceptance property of that slice, not a consequence of it.**
+The slice is not done because a `Transform` type exists and is unit-tested. It is done when one
+end-to-end fixture demonstrates that **altering a group predicate changes an observable
+transform result** — authored rule, compiled, selected, grouped, predicate evaluated, patch
+proposed, transition observable. Anything less leaves carefully verified machinery behind a
+door nobody opens, which is the state this slice is currently in and which "Done" concealed
+until it was written down.
+
+That slice also unblocks three things recorded as deferred: the group kinds get a canonical
+encoding with a golden vector, because something can finally reach the encoder; decision 4's
+dependency-cycle question becomes answerable, because a set-scoped rule can reach the compiler;
+and reductions get a consumer, because a transform is the first thing that needs a value out of
+a group rather than a predicate about it.
+
 ## Index of everything else
 
 Sites and constraints, with references and without analysis. Each needs an owner before the

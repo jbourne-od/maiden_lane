@@ -154,7 +154,13 @@ every diff.
    only on bad input. A false comment is worse than a small bug here, because the next
    reader builds on it.
 
-7. **Green tests that do not enforce the property.** Demand mutation evidence for every new
+7. **Green tests that do not enforce the property.** The standard is not "did a fixture reach
+   this code" — line coverage will happily report that everyone attended the meeting while the
+   one statement whose correctness matters never spoke. It is: **could the semantic result of
+   this particular arm be inverted while every fixture still passes?** An early return can
+   leave a terminal unreachable inside a function the tests demonstrably enter.
+
+   Demand mutation evidence for every new
    guard, and reject these four specific ways it goes wrong:
    - a mutation that **does not compile or does not run** proves nothing — a broken build
      and a broken SQL query are the same mistake;
@@ -259,7 +265,38 @@ every diff.
     Note the overlap with class 4: "two derivations of one fact" is class 4's shape seen from
     the value's side. File under whichever reads more clearly, not both.
 
-13. **A deliberate omission left unwritten.** Anything the change could plausibly have
+13. **One semantic proposition, implemented more than once.** Five consecutive reviews of one
+    programme found this, which makes it the most productive class on the list. The shape:
+    a single rule about what is legal gets written twice, one copy is hardened or tested, and
+    the other stays wrong. Instances: an entity-kind check in the compiler and again in the
+    evaluator; a predicate call site and a grouping call site of one checker; `any_members`
+    and group-level `any` terminals added in the same commit; a vocabulary walker updated for
+    two of three field-carrying kinds.
+
+    **Testing every duplicate is inferior to eliminating the duplication, and that is what to
+    ask for.** Two boundaries may both refuse — defence in depth is legitimate and sometimes
+    required — but they should refuse because they invoke *the same definition of legality*,
+    not because two authors independently wrote the same comparison. When you find a rule with
+    more than one implementation, the finding is the duplication, not the untested copy;
+    independent implementations of one proposition need explicit justification.
+
+14. **A specialized traversal that closes over its own recursion.** A whole-structure invariant
+    — a depth bound, a node budget, a binding rule, a cycle check, a canonicalization
+    constraint — is typically enforced by the walker that owns the structure. Introduce a
+    second walker for a special case, let it recurse into itself, and its leaves may never
+    reach the original. The invariant is then silently gone on that route while every test
+    passes, because the original walker still enforces it everywhere else.
+
+    Found here as a depth bound: `checkExprInScope` recursed into itself for composition and
+    reached `checkExpr` only at member-scope leaves, so group-scope nesting was unbounded
+    exactly where HLD §8 requires a bound.
+
+    The question to ask: **can this traversal consume the whole structure without ever crossing
+    the guard that owns the invariant?** If yes, every guard downstream of that crossing is
+    suspect. A new recursive visitor must either demonstrate it preserves each whole-structure
+    invariant itself, or delegate recursion to the visitor that owns them.
+
+15. **A deliberate omission left unwritten.** Anything the change could plausibly have
     included and did not must be recorded in the claims file or the programme's progress
     document under `docs/superpowers/sdd/`. Silent scope reduction reads as coverage.
 
