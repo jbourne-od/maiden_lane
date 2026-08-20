@@ -265,38 +265,35 @@ every diff.
     Note the overlap with class 4: "two derivations of one fact" is class 4's shape seen from
     the value's side. File under whichever reads more clearly, not both.
 
-13. **One semantic proposition enforced in more than one place, where nothing forces the
-    places to agree or to all be exercised.** Repeatedly the most productive
-    question to ask on this programme, and the one whose remedy is easiest to get wrong — an earlier draft of
-    this entry prescribed "collapse the duplicates", which this repository's own history
-    refutes. Read the whole entry before filing under it.
+13. **One semantic proposition enforced in more than one place.** A reliable place to look,
+    and — stated plainly because two attempts to say otherwise were both wrong — **no general
+    remedy is known.** File the observation, not a fix.
 
-    The three ways it goes wrong are different defects with different fixes:
+    The observation: when one rule about what is legal is enforced at several points, the
+    points can drift. Instances on this programme include a vocabulary walker that named some
+    of the kinds it had to reach, one checker invoked from two call sites where only one was
+    exercised, and a compiler and an evaluator that mapped a value to a type through functions
+    with different refusal behaviour.
 
-    - **Two implementations that can disagree.** A vocabulary walker naming two of three
-      field-carrying kinds; a compiler and an evaluator mapping a value to a type through
-      functions with different refusal behaviour. Fix: one definition, shared.
-    - **One implementation, several call sites, only some exercised.** `compileSelectorExpr`
-      is written once and invoked twice, and hardcoding a constant in the grouping call
-      survived the whole suite because only the predicate call was pinned. Nothing is
-      duplicated here and collapsing nothing would help — this is class 7's mutation surface,
-      and the fix is to pin every site.
-    - **Collapsing onto the wrong definition.** Class 12 instance 4 was *caused* by a
-      collapse: two literal mappings were merged onto the one that checks the kind and not the
-      validity. "They invoke the same definition" is satisfied by a defective merge and a
-      correct one alike, so it is not the test.
+    **Why no remedy is offered.** Two drafts of this entry each prescribed one and each would
+    have caused a defect:
 
-    **Legitimate defence in depth looks like duplication and is not.** The entity-kind rule is
-    enforced by the compiler against the selector's declared kind and by the evaluator against
-    the bound entity's actual kind. Those compare *different references on purpose*, because
-    the evaluator is reachable without the compiler, and the mandate records the removal of
-    either as a shipped defect. Two enforcements of one proposition are correct exactly when
-    each is reachable independently; the finding is never "delete one".
+    - "Collapse the duplicates" would have had a reviewer demand deletion of `boundField`'s
+      entity-kind guard, whose removal this mandate records as class 12 instances 3 and 5.
+    - "They are correct when each is independently reachable" certifies as correct the very
+      pair that was class 12 instance 4 — both were reachable, and the collapse onto the
+      permissive mapping was itself the defect — while condemning `boundField`'s guard, which
+      cannot fire in production at all.
 
-    So what to ask: **enumerate every place this proposition is enforced. For each, is it
-    reachable independently, and is it independently exercised?** File the sites that are
-    reachable and unpinned, and the pairs that can disagree about what the rule means. Do not
-    file the existence of more than one enforcement.
+    And collapsing is not safe in general: the literal-type mapping went from two implementations
+    (a defect) to one (a worse defect, merged onto the mapping that checks kind and not
+    validity) to one correct one. Nothing in the observation says which definition to keep.
+
+    **So ask the diagnostic question and stop there:** enumerate every place this proposition
+    is enforced, and for each, is it independently exercised by a test that would fail if that
+    place alone were wrong? Report the places that are not. Whether the right fix is to collapse
+    them, to pin each, or to leave them deliberately separate is the author's judgement and
+    depends on which definition is the legal one — a question this class cannot answer.
 
 
 14. **A specialized traversal that closes over its own recursion.** A whole-structure invariant

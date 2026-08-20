@@ -218,15 +218,13 @@ The slice is not done because a `Transform` type exists and is unit-tested. It i
 end-to-end fixture demonstrates that **altering a group predicate changes an observable
 transform result** — authored rule, compiled, selected, grouped, predicate evaluated, patch
 proposed, transition observable. Anything less leaves carefully verified machinery behind a
-door nobody opens, which is the state slices 1 through 3 are in. Worth naming because a slice
+door nobody opens, which is the state every slice so far is in. Worth naming because a slice
 heading that reads "done" means its machinery exists, not that production can reach it, and
 nothing in this document distinguished those until now.
 
-That slice also unblocks three things recorded as deferred: the group kinds get a canonical
-encoding with a golden vector, because something can finally reach the encoder; decision 4's
-dependency-cycle question becomes answerable, because a set-scoped rule can reach the compiler;
-and reductions get a consumer, because a transform is the first thing that needs a value out of
-a group rather than a predicate about it.
+It also unblocks decision 4's dependency-cycle question, which this document does record as
+deferred in three places: answering it needs a set-scoped rule that reaches the compiler, and
+a rule needs a transform.
 
 ## Index of everything else
 
