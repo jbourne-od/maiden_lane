@@ -422,17 +422,20 @@ func encodeExpr(encoder *canonicalEncoder, expr Expr) {
 	switch expr.Kind {
 	case ExprLiteral:
 		encoder.value(*expr.Literal)
-	case ExprField, ExprExists, ExprAllEqual:
+	case ExprField, ExprExists:
 		encoder.string(string(expr.Field))
-	case ExprNot, ExprAll, ExprAny, ExprEqual, ExprLess, ExprAdd,
-		ExprAllMembers, ExprAnyMembers:
+	case ExprNot, ExprAll, ExprAny, ExprEqual, ExprLess, ExprAdd:
 		encoder.uint64(uint64(len(expr.Args)))
 		for i := range expr.Args {
 			encodeExpr(encoder, expr.Args[i])
 		}
 	default:
 		// EXHAUSTIVE AND FAIL-CLOSED, and the default arm is the point rather than a
-		// formality. checkExpr and checkOperandShape both refuse an unrecognised kind, so
+		// formality. The three group kinds deliberately have NO arm here: encodeExpr is
+		// reachable only from CompileExpression, which refuses them, so an arm for them
+		// would be unreachable code that also removes this net for the very kinds whose
+		// encoding nobody has exercised. They get one when a Transform makes them
+		// reachable, together with a golden vector. checkExpr and checkOperandShape both refuse an unrecognised kind, so
 		// this arm is unreachable today. It exists because adding a kind is the expected
 		// change: a new kind with a new operand would be caught by both refusal switches,
 		// which error loudly if a case is forgotten, but an encoder whose default merely

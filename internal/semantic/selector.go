@@ -146,14 +146,27 @@ func compileSelectorExpr(
 	if err != nil {
 		return CompiledExpression{}, err
 	}
+	if err := checkPathsBindKind(expr, kind); err != nil {
+		return CompiledExpression{}, err
+	}
+	return compiled, nil
+}
+
+// checkPathsBindKind requires every field path an expression names to belong to one kind.
+//
+// ONE COPY, deliberately. This rule previously existed here and again in the group checker,
+// and the group copy covered only one of the two node families that read a field. Three
+// successive reviews of this programme found the same shape -- a duplicated rule where only
+// some copies were updated or pinned -- so the rule has one implementation and every caller
+// shares its fate.
+func checkPathsBindKind(expr Expr, kind EntityKind) error {
 	for _, path := range readFieldPaths(expr) {
 		named, _ := splitFieldPath(path)
 		if named != kind {
-			return CompiledExpression{}, fmt.Errorf(
-				"reads %q, but this selector binds only %q", path, kind)
+			return fmt.Errorf("reads %q, but only %q is bound here", path, kind)
 		}
 	}
-	return compiled, nil
+	return nil
 }
 
 // readFieldPaths collects every field path an expression names, in tree order.
@@ -162,7 +175,10 @@ func readFieldPaths(expr Expr) []FieldPath {
 	var walk func(Expr)
 	walk = func(node Expr) {
 		switch node.Kind {
-		case ExprField, ExprExists:
+		case ExprField, ExprExists, ExprAllEqual:
+			// ExprAllEqual carries a Field and no Args, so without naming it here the walk
+			// falls to default, iterates zero children, and silently contributes nothing --
+			// a third walker over the vocabulary that a new field-carrying kind must reach.
 			paths = append(paths, node.Field)
 		default:
 			for i := range node.Args {

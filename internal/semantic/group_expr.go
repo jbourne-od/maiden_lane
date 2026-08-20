@@ -35,18 +35,27 @@ import "fmt"
 type scope uint8
 
 const (
+	// scopeInvalid is the zero value and admits nothing. Its three sibling enumerations in
+	// this package all refuse in their zero state -- TypeInvalid, CardinalityInvalid, and
+	// ExprKind's iota+1 -- and an earlier version of this one made memberScope the zero,
+	// so a call that failed to state its scope silently got the permissive mode.
+	scopeInvalid scope = iota
 	// memberScope is a single bound entity: the selector's candidate, or one group member.
-	memberScope scope = iota
+	memberScope
 	// groupScope is a whole group, where no single entity is bound and a bare field path
 	// therefore has no referent.
 	groupScope
 )
 
 func (s scope) String() string {
-	if s == groupScope {
+	switch s {
+	case memberScope:
+		return "member"
+	case groupScope:
 		return "group"
+	default:
+		return "invalid"
 	}
-	return "member"
 }
 
 // checkGroupExpr types a group-scoped node.
@@ -65,6 +74,9 @@ func checkExprInScope(
 	if depth > maxExprDepth {
 		return TypeInvalid, fmt.Errorf("expression nests deeper than %d", maxExprDepth)
 	}
+	if in != memberScope && in != groupScope {
+		return TypeInvalid, fmt.Errorf("expression checked in %s scope", in)
+	}
 	if err := checkOperandShape(expr); err != nil {
 		return TypeInvalid, err
 	}
@@ -82,6 +94,15 @@ func checkExprInScope(
 		if err != nil {
 			return TypeInvalid, err
 		}
+		// The inner predicate reads the MEMBERS, which are entities of the group's kind, so
+		// it is bound by the same rule all_equal is. An earlier version threaded `kind`
+		// through every recursion and consulted it only in the all_equal arm, so
+		// all_members(exists("team.x")) under a driver group type-checked and then failed at
+		// evaluation inside boundField -- the checker blessing a tree the evaluator can never
+		// answer, which is the disagreement four of this branch's five wrong answers were.
+		if err := checkPathsBindKind(expr.Args[0], kind); err != nil {
+			return TypeInvalid, err
+		}
 		if inner != TypeBool {
 			return TypeInvalid, fmt.Errorf(
 				"a group quantifier requires a bool predicate, got %s", inner)
@@ -97,9 +118,8 @@ func checkExprInScope(
 		if !isDeclared {
 			return TypeInvalid, fmt.Errorf("all_equal reads undeclared field %q", expr.Field)
 		}
-		if named, _ := splitFieldPath(expr.Field); named != kind {
-			return TypeInvalid, fmt.Errorf(
-				"all_equal reads %q, but this group holds %q", expr.Field, kind)
+		if err := checkPathsBindKind(expr, kind); err != nil {
+			return TypeInvalid, err
 		}
 		if _, err := valueKindType(declared); err != nil {
 			return TypeInvalid, err
@@ -180,20 +200,31 @@ func evaluateGroupExpr(schema Schema, expr Expr, members []Entity) (bool, error)
 		// the same reason a member-scoped read refuses it: "all members agree" and "no member
 		// has one" are different claims, and collapsing them would let a group of entities
 		// missing the field entirely pass a check about that field.
-		first, _, present, err := boundField(schema, expr.Field, members[0])
+		// The DECLARED kind is required to match every stored value, which the member-scoped
+		// field arm also does and an earlier version here did not. Two members each holding a
+		// string where the schema declares an atom would otherwise compare equal and answer
+		// "the members agree on their atom" from data that is not of the declared type; the
+		// mirror case answers "they disagree" when the truth is a refusal. NewEntity validates
+		// nothing against a schema, and this function takes entities directly.
+		first, declared, present, err := boundField(schema, expr.Field, members[0])
 		if err != nil {
 			return false, err
 		}
 		if !present {
 			return false, fmt.Errorf("all_equal reads %q, absent on a member", expr.Field)
 		}
-		for _, member := range members[1:] {
+		for _, member := range members {
 			value, _, present, err := boundField(schema, expr.Field, member)
 			if err != nil {
 				return false, err
 			}
 			if !present {
 				return false, fmt.Errorf("all_equal reads %q, absent on a member", expr.Field)
+			}
+			if value.Kind() != declared {
+				return false, fmt.Errorf(
+					"all_equal reads %q, which holds kind %d where %d is declared",
+					expr.Field, value.Kind(), declared)
 			}
 			if !value.Equal(first) {
 				return false, nil

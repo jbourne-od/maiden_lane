@@ -15,7 +15,13 @@ func groupMembers(t *testing.T, anchors []string, elapsed []int64) []Entity {
 	}
 	members := make([]Entity, 0, len(anchors))
 	for i, token := range anchors {
-		fields := map[FieldName]Value{"hos_elapsed_hours": NewInt64Value(elapsed[i])}
+		fields := map[FieldName]Value{
+			"hos_elapsed_hours": NewInt64Value(elapsed[i]),
+			// Populated so the two-field LessOrEqualFields form is reachable. Without it that
+			// case could only compare a field with itself, which is unconditionally true and
+			// demonstrates nothing about a two-path predicate.
+			"hos_driving_hours": NewInt64Value(elapsed[i] - 1),
+		}
 		if token != "" {
 			anchor, err := NewAtomValue(token)
 			if err != nil {
@@ -94,14 +100,24 @@ func TestGroupPredicatesExpressTheFrozenFour(t *testing.T) {
 			members: groupMembers(t, []string{"T0"}, []int64{-1}), want: false,
 		},
 		{
-			// LessOrEqualFields, exactly two paths: every member has a at most b, written as
-			// not(b < a).
+			// LessOrEqualFields, exactly two DISTINCT paths: driving <= elapsed, written as
+			// not(elapsed < driving). The fixture sets driving one below elapsed.
 			name: "a at most b holds",
 			expr: allMembers(Expr{Kind: ExprNot, Args: []Expr{
 				{Kind: ExprLess, Args: []Expr{
-					field("driver.hos_elapsed_hours"), field("driver.hos_elapsed_hours")}},
+					field("driver.hos_elapsed_hours"), field("driver.hos_driving_hours")}},
 			}}),
 			members: complete, want: true,
+		},
+		{
+			// And its failing counterpart, which the other three predicates had and this one
+			// did not. Inverted: elapsed <= driving is false when driving is the lower.
+			name: "a at most b fails",
+			expr: allMembers(Expr{Kind: ExprNot, Args: []Expr{
+				{Kind: ExprLess, Args: []Expr{
+					field("driver.hos_driving_hours"), field("driver.hos_elapsed_hours")}},
+			}}),
+			members: complete, want: false,
 		},
 		{
 			// EqualFieldAcrossSources: the members agree. Genuinely cross-member, so it is
@@ -178,6 +194,96 @@ func TestGroupScopeIsEnforcedBothWays(t *testing.T) {
 			t.Fatal("a quantifier nested inside a quantifier compiled")
 		}
 	})
+}
+
+// Three guards that nothing exercised. Each is the sole reason for its refusal, and each
+// on removal makes the CHECKER admit a tree the EVALUATOR cannot answer -- the disagreement
+// that produced four of this branch's five wrong answers.
+func TestGroupCheckerAndEvaluatorAgreeOnWhatIsAdmissible(t *testing.T) {
+	schema := expressionSchema(t)
+	present := Expr{Kind: ExprExists, Field: "driver.hos_anchor"}
+
+	// all_equal inside member scope. The other member-scope refusals in this file go through
+	// CompileExpression, which is a DIFFERENT copy of the rule, so this arm was untested.
+	if _, err := checkGroupExpr(schema, "driver", allMembers(allEqual("driver.hos_anchor")), 0); err == nil {
+		t.Error("all_equal was accepted inside a quantifier's member-scoped argument")
+	}
+
+	// A quantifier over a non-bool predicate. Every fixture predicate elsewhere is already
+	// bool, so this requirement was never the reason for anything.
+	if _, err := checkGroupExpr(
+		schema, "driver", allMembers(field("driver.hos_elapsed_hours")), 0); err == nil {
+		t.Error("a quantifier accepted an int64 predicate")
+	}
+
+	// A member-reading node at the top of a group evaluation. Without the default refusal it
+	// answers a confident false, which is the failure-becomes-a-vacuous-answer shape the
+	// empty-group guard three lines away exists to prevent.
+	members := groupMembers(t, []string{"T0"}, []int64{1})
+	if _, err := evaluateGroupExpr(schema, present, members); err == nil {
+		t.Error("a member-reading node was evaluated over a group")
+	}
+	if _, err := evaluateGroupExpr(schema, field("driver.hos_anchor"), members); err == nil {
+		t.Error("a field read was evaluated over a group")
+	}
+}
+
+// The bound kind constrains a quantifier's inner predicate, not only all_equal. An earlier
+// version consulted it in the all_equal arm alone, so this type-checked and then failed at
+// evaluation inside boundField.
+func TestQuantifierInnerPredicateIsBoundToTheGroupsKind(t *testing.T) {
+	schema, err := NewSchema([]EntityDeclaration{
+		{Kind: "driver", Fields: []FieldDeclaration{{Name: "assignment_key", Kind: ValueString}}},
+		{Kind: "team", Fields: []FieldDeclaration{{Name: "assignment_key", Kind: ValueString}}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+	// Both kinds, both directions, so neither can be satisfied by a constant.
+	for _, test := range []struct {
+		kind    EntityKind
+		path    FieldPath
+		wantErr bool
+	}{
+		{"driver", "driver.assignment_key", false},
+		{"driver", "team.assignment_key", true},
+		{"team", "team.assignment_key", false},
+		{"team", "driver.assignment_key", true},
+	} {
+		inner := Expr{Kind: ExprExists, Field: test.path}
+		_, err := checkGroupExpr(schema, test.kind, allMembers(inner), 0)
+		if (err != nil) != test.wantErr {
+			t.Errorf("all_members(exists(%q)) under a %q group: err=%v, wantErr=%v",
+				test.path, test.kind, err, test.wantErr)
+		}
+	}
+}
+
+// all_equal makes the declared-kind agreement check its member-scoped sibling makes. Without
+// it, two members each holding a string where the schema declares an atom compare equal and
+// answer "the members agree on their atom" from data that is not of the declared type.
+func TestAllEqualRequiresTheDeclaredKind(t *testing.T) {
+	schema := expressionSchema(t)
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "group")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+	// hos_anchor is declared ValueAtom; these hold strings. NewState would refuse the state,
+	// which is why the entities are built directly -- and why this function, which takes
+	// entities rather than a state, has to check.
+	members := make([]Entity, 0, 2)
+	for i, name := range []string{"m", "n"} {
+		entity, err := NewEntity(
+			EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", name)},
+			map[FieldName]Value{"hos_anchor": mustString(t, "T0")})
+		if err != nil {
+			t.Fatalf("NewEntity %d: %v", i, err)
+		}
+		members = append(members, entity)
+	}
+	if _, err := evaluateGroupExpr(schema, allEqual("driver.hos_anchor"), members); err == nil {
+		t.Fatal("all_equal answered over members whose stored kind contradicts the declaration")
+	}
 }
 
 // A group predicate reads only the kind the group holds, for the same reason a selector's
