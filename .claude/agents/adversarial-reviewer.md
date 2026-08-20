@@ -179,9 +179,15 @@ every diff.
    for the dimension under test is what broken code would use — which for a refusing guard
    means a guard that compares against a hardcoded constant the fixture happens to match. That
    mutant refuses exactly the inputs the test offers, so the fifth tell reports clean while the
-   guard is comprehensively broken for every input the fixture does not contain. Verified in
-   this repository: replacing an entity-kind check with a comparison against one literal kind
-   survives the whole suite, because every fixture binds an entity of that kind.
+   guard is comprehensively broken for every input the fixture does not contain.
+
+   This repository produced it twice, in the two halves of one rule. An entity-kind check in
+   the evaluator, and the identical check in the compiler, each survived replacement by a
+   comparison against one literal kind, because every fixture bound or declared that kind.
+   Both are pinned now. Note which one was found first: the evaluator's copy is unreachable in
+   production, since selection filters by kind before evaluating, so the round that hardened it
+   left the load-bearing half untested — checking one instance of a duplicated rule is not
+   checking the rule.
 
    Bullet 3 is likewise untouched: it is about a dimension the state space cannot vary, and its
    content is the remedy, a golden vector. There is a live example here with no refusal in it

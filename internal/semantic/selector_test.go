@@ -265,6 +265,48 @@ func TestSelectorRefusesAPathOutsideItsKind(t *testing.T) {
 	}
 }
 
+// THE LOAD-BEARING HALF OF THE SAME RULE, pinned against a constant.
+//
+// compileSelectorExpr's `named != kind` is the check that actually gates authored input:
+// Select filters entities by kind before evaluating, so boundField's identical guard is
+// defence-in-depth and cannot fire in production. Every selector in this file that carries a
+// predicate or a grouping declares Kind "driver", so replacing `named != kind` with
+// `named != "driver"` survived the whole suite -- the fixture's value for the dimension under
+// test was exactly the literal the broken code would hardcode.
+//
+// A previous round hardened the unreachable copy and left this one satisfiable by a constant.
+func TestSelectorBindsItsOwnKindWhicheverThatIs(t *testing.T) {
+	schema, err := NewSchema([]EntityDeclaration{
+		{Kind: "driver", Fields: []FieldDeclaration{{Name: "assignment_key", Kind: ValueString}}},
+		{Kind: "team", Fields: []FieldDeclaration{{Name: "assignment_key", Kind: ValueString}}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+
+	// A selector over a NON-driver kind, reading its own field, must compile. Under the
+	// hardcoded mutant this is refused with a message contradicting itself: "reads
+	// team.assignment_key, but this selector binds only team".
+	if _, err := CompileSelector(schema, testCompilerVersion, Selector{
+		Kind:    "team",
+		Where:   ptr(Expr{Kind: ExprExists, Field: "team.assignment_key"}),
+		Members: Cardinality{Kind: CardinalityAny},
+	}); err != nil {
+		t.Fatalf("a team selector reading a team field was refused: %v", err)
+	}
+
+	// And the cross-kind direction from the other side: a team selector reading a DRIVER
+	// path must be refused. Under the mutant it compiles, and Select then filters to teams
+	// and refuses at evaluation -- a compiler admitting an input the evaluator rejects.
+	if _, err := CompileSelector(schema, testCompilerVersion, Selector{
+		Kind:    "team",
+		Where:   ptr(Expr{Kind: ExprExists, Field: "driver.assignment_key"}),
+		Members: Cardinality{Kind: CardinalityAny},
+	}); err == nil {
+		t.Fatal("a team selector accepted a predicate reading a driver path")
+	}
+}
+
 // Every refusal a malformed selector must produce.
 func TestCompileSelectorRefusals(t *testing.T) {
 	schema := expressionSchema(t)
