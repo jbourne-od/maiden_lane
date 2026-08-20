@@ -25,14 +25,22 @@ func executeSelectAndAssign(
 		// A direct assertion rather than errors.As: this package's import allowlist excludes
 		// "errors" (boundary_test.go enforces it), and Select returns the fault unwrapped,
 		// which its declaration states so this assertion stays sound.
-		if _, isData := err.(SelectionDataFault); isData {
+		if fault, isData := err.(selectionDataFault); isData {
 			// The predicate or the grouping expression could not be evaluated against some
 			// entity. That is the same fact as an unevaluable guard and takes the same code:
 			// a refusal with attribution, not an abort. Selecting is evaluation, so the
 			// selector's own two expressions can fail on data exactly as the guard can --
 			// and an earlier version of this function aborted the run for all of them.
-			return rejectInvariant(binding, declaration.ID, state, journal, transformation.invariants,
-				SelectionExpressionUnavailable, nil, nil, nil)
+			//
+			// AT ITS OWN KEY, not at the code. Two obligations carry this code, and
+			// rejectInvariant resolves a key by scanning for the first declaration with a
+			// matching code -- which would have picked the group-scoped one and sealed a
+			// report claiming the cardinality and non-empty obligations had passed before
+			// a single entity was grouped.
+			refs, facts := selectorFaultEvidence(state, fault, transformation.selector)
+			return rejectInvariantAtKey(binding, declaration.ID, state, journal, transformation.invariants,
+				SelectionExpressionUnavailable, invariantKey(declaration.ID, selectorEvaluableSuffix),
+				refs, facts, nil)
 		}
 		// The selector was not compiled, or was compiled against another schema. Those are
 		// artifact faults, and no state can fix them.
@@ -54,13 +62,13 @@ func executeSelectAndAssign(
 		// transition. Silently dropping it means a team with three drivers never forms and
 		// nothing records why.
 		refs, facts := groupEvidence(violations, guardFields)
-		return rejectInvariant(binding, declaration.ID, state, journal, transformation.invariants,
-			SelectionCardinalityInvalid, refs, facts, nil)
+		return rejectInvariantAtKey(binding, declaration.ID, state, journal, transformation.invariants,
+			SelectionCardinalityInvalid, invariantKey(declaration.ID, cardinalitySuffix), refs, facts, nil)
 	}
 	groups := selection.Groups()
 	if len(groups) == 0 {
-		return rejectInvariant(binding, declaration.ID, state, journal, transformation.invariants,
-			SelectionEmpty, nil, nil, nil)
+		return rejectInvariantAtKey(binding, declaration.ID, state, journal, transformation.invariants,
+			SelectionEmpty, invariantKey(declaration.ID, selectionNonEmptySuffix), nil, nil, nil)
 	}
 
 	operations := make([]Operation, 0, len(groups))
@@ -72,8 +80,9 @@ func executeSelectAndAssign(
 		held, guardErr := evaluateGroupExpr(schema, payload.Guard, members)
 		if guardErr != nil {
 			refs, evidence := groupEvidence([]Group{group}, guardFields)
-			return rejectInvariant(binding, declaration.ID, state, journal, transformation.invariants,
-				SelectionExpressionUnavailable, refs, canonicalFactRefs(append(facts, evidence...)), nil)
+			return rejectInvariantAtKey(binding, declaration.ID, state, journal, transformation.invariants,
+				SelectionExpressionUnavailable, invariantKey(declaration.ID, groupEvaluableSuffix),
+				refs, canonicalFactRefs(append(facts, evidence...)), nil)
 		}
 		if !held {
 			continue
@@ -85,9 +94,9 @@ func executeSelectAndAssign(
 				value, valueErr := evaluateValue(schema, assignment.Value, member)
 				if valueErr != nil {
 					sources := memberFacts([]Entity{member}, fieldNames(readFieldPaths(assignment.Value)))
-					return rejectInvariant(binding, declaration.ID, state, journal, transformation.invariants,
-						SelectionExpressionUnavailable, []EntityRef{member.Ref()},
-						canonicalFactRefs(append(facts, sources...)), nil)
+					return rejectInvariantAtKey(binding, declaration.ID, state, journal, transformation.invariants,
+						SelectionExpressionUnavailable, invariantKey(declaration.ID, groupEvaluableSuffix),
+						[]EntityRef{member.Ref()}, canonicalFactRefs(append(facts, sources...)), nil)
 				}
 				facts = append(facts, memberFacts([]Entity{member}, fieldNames(readFieldPaths(assignment.Value)))...)
 				_, target := splitFieldPath(assignment.Target)
@@ -105,8 +114,8 @@ func executeSelectAndAssign(
 	}
 	if qualified == 0 {
 		refs, evidence := groupEvidence(groups, guardFields)
-		return rejectInvariant(binding, declaration.ID, state, journal, transformation.invariants,
-			SelectionGuardUnsatisfied, refs, evidence, nil)
+		return rejectInvariantAtKey(binding, declaration.ID, state, journal, transformation.invariants,
+			SelectionGuardUnsatisfied, invariantKey(declaration.ID, guardSuffix), refs, evidence, nil)
 	}
 
 	facts = canonicalFactRefs(facts)
@@ -137,6 +146,24 @@ func executeSelectAndAssign(
 	acceptedJournal := journal.AppendAccepted(entry)
 	return TransitionOutcome{state: candidate, patch: &patch, journal: acceptedJournal,
 		results: journalInvariantResults(acceptedJournal)}, nil
+}
+
+// selectorFaultEvidence names the entity the selector failed on and the fields its two
+// expressions consulted. Without it the refusal cited no entity and no fact at all, and the
+// obligation it was filed under described a different check.
+func selectorFaultEvidence(state State, fault selectionDataFault, selector CompiledSelector) ([]EntityRef, []FactRef) {
+	paths := make([]FieldPath, 0)
+	if selector.where != nil {
+		paths = append(paths, readFieldPaths(selector.where.expr)...)
+	}
+	if selector.groupBy != nil {
+		paths = append(paths, readFieldPaths(selector.groupBy.expr)...)
+	}
+	entity, found := state.Entity(fault.entity)
+	if !found {
+		return nil, nil
+	}
+	return []EntityRef{entity.Ref()}, canonicalFactRefs(memberFacts([]Entity{entity}, fieldNames(paths)))
 }
 
 // fieldNames reduces qualified paths to the names a FactRef carries.

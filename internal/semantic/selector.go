@@ -304,7 +304,7 @@ func (g Group) Key() Value { return g.key }
 // Members returns copies of the group's entities in canonical order.
 func (g Group) Members() []Entity { return cloneEntities(g.members) }
 
-// SelectionDataFault reports that a Select failure was caused by the STATE, not the selector.
+// selectionDataFault reports that a Select failure was caused by the STATE, not the selector.
 //
 // The distinction decides which channel a failure leaves on, so it cannot be left to the
 // caller's reading of an error string. Select fails for two unrelated reasons: the selector
@@ -318,10 +318,28 @@ func (g Group) Members() []Entity { return cloneEntities(g.members) }
 // Select returns this type UNWRAPPED, so callers may assert on it directly. Stated because
 // the semantic package's import allowlist excludes "errors", so errors.As is unavailable and
 // a future wrap here would silently break every caller's classification.
-type SelectionDataFault struct{ err error }
+//
+// UNEXPORTED, and Error is nil-safe. An exported version with one unexported field could
+// still be built as SelectionDataFault{} from any package, whose Error dereferenced a nil
+// error interface and panicked -- a zero value that crashes rather than refuses, in a package
+// whose other zero values (CardinalityInvalid, TypeInvalid, scopeInvalid) all refuse by
+// construction. Nothing outside this package needs to classify a Select failure.
+//
+// entity names the row the evaluation failed on, so a refusal can cite it. Select builds the
+// fault at the only three sites that can raise one, each of which holds the entity.
+type selectionDataFault struct {
+	err    error
+	entity EntityRef
+}
 
-func (f SelectionDataFault) Error() string { return f.err.Error() }
-func (f SelectionDataFault) Unwrap() error { return f.err }
+func (f selectionDataFault) Error() string {
+	if f.err == nil {
+		return "selection data fault with no cause"
+	}
+	return f.err.Error()
+}
+
+func (f selectionDataFault) Unwrap() error { return f.err }
 
 // Select applies the selector to a state.
 //
@@ -368,7 +386,7 @@ func (c CompiledSelector) Select(state State) (Selection, error) {
 		if c.where != nil {
 			matched, err := evaluateBool(state.Schema(), c.where.expr, entity)
 			if err != nil {
-				return Selection{}, SelectionDataFault{fmt.Errorf("selector predicate: %w", err)}
+				return Selection{}, selectionDataFault{fmt.Errorf("selector predicate: %w", err), entity.Ref()}
 			}
 			if !matched {
 				continue
@@ -382,13 +400,13 @@ func (c CompiledSelector) Select(state State) (Selection, error) {
 		}
 		key, err := evaluateValue(state.Schema(), c.groupBy.expr, entity)
 		if err != nil {
-			return Selection{}, SelectionDataFault{fmt.Errorf("selector grouping: %w", err)}
+			return Selection{}, selectionDataFault{fmt.Errorf("selector grouping: %w", err), entity.Ref()}
 		}
 		encoded, err := encodeGroupKey(key)
 		if err != nil {
 			// The key came out of the state, so a key that cannot be canonicalized is a fact
 			// about the data and not about the selector.
-			return Selection{}, SelectionDataFault{fmt.Errorf("selector grouping key: %w", err)}
+			return Selection{}, selectionDataFault{fmt.Errorf("selector grouping key: %w", err), entity.Ref()}
 		}
 		existing, present := byKey[encoded]
 		if !present {

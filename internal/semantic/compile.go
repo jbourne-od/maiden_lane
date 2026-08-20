@@ -766,8 +766,14 @@ func deriveTransformation(
 			}
 			reads = append(reads, readFieldPaths(payload.Guard)...)
 			seenTargets := make(map[FieldPath]struct{}, len(payload.Assignments))
-			for i, assignment := range payload.Assignments {
-				detail := fmt.Sprintf("assignment_%02d", i)
+			for _, assignment := range payload.Assignments {
+				// THE TARGET, NOT THE INDEX. normalizeTransformationPayload sorts the
+				// assignments, so an index names a position in the sorted slice and not the
+				// one the author wrote -- an author who duplicated their first two
+				// assignments was told the diagnostic concerned their third. A target path
+				// is a bounded typed declaration key, which is what a detail is for, and it
+				// is stable under the sort.
+				detail := string(assignment.Target)
 				if _, duplicate := seenTargets[assignment.Target]; duplicate {
 					// Two assignments to one field would produce two FieldUpdates with the
 					// same name in one Update, which NewPatch refuses as an error rather
@@ -1138,6 +1144,19 @@ func formInvariants(rule RuleID, grouping FieldPath) []InvariantDeclaration {
 // The reads recorded on each obligation are the paths the CHECK reads, not the rule's whole
 // read set: an evidence set wider than the fact that failed makes an attribution that names
 // fields the refusal did not consult.
+// The obligation suffixes of a selector-scoped rule, in the order executeSelectAndAssign
+// checks them. Constants because the compiler derives them and the executor names them, and
+// a string literal in two places is a proposition nothing forces to agree.
+const (
+	selectorEvaluableSuffix = "01-selector-evaluable"
+	cardinalitySuffix       = "02-cardinality"
+	selectionNonEmptySuffix = "03-selection-nonempty"
+	groupEvaluableSuffix    = "04-evaluable"
+	guardSuffix             = "05-guard"
+)
+
+func invariantKey(rule RuleID, suffix string) string { return string(rule) + "/" + suffix }
+
 func selectAssignInvariants(rule RuleID, payload *SelectAssignDeclaration) []InvariantDeclaration {
 	grouping := make([]FieldPath, 0)
 	if payload.Selector.GroupBy != nil {
@@ -1151,15 +1170,30 @@ func selectAssignInvariants(rule RuleID, payload *SelectAssignDeclaration) []Inv
 	// constraint rather than a tidiness one. Obligations are sorted by key, and
 	// evaluatedFailureResults marks every declaration BEFORE the failing key as passed --
 	// so a key ordered ahead of the check that actually runs first produces a sealed,
-	// digested failure report attesting to an obligation nothing established. Numbered the
-	// other way round, a cardinality refusal would record "the selection was non-empty" as
-	// passed for a selection that admitted no group at all.
-	evaluable := append(readFieldPaths(payload.Guard), values...)
+	// digested failure report attesting to an obligation nothing established.
+	//
+	// SELECTION_EXPRESSION_UNAVAILABLE APPEARS TWICE, and that is why. It is raised in two
+	// places that cannot be adjacent: once by the SELECTOR, whose filter and grouping
+	// expressions are evaluated before any group exists, and once by the GUARD and the
+	// assignment values, which are evaluated per group after cardinality and emptiness have
+	// been established. A single obligation carrying both would have to sit either before
+	// the cardinality check or after it, and would lie in whichever case it did not sit
+	// beside -- an earlier version put it fourth, so a selector fault sealed a report
+	// claiming the cardinality obligation and the non-empty obligation had both passed when
+	// nothing had been grouped at all. Two obligations, one code, distinct keys, each
+	// carrying the reads ITS check consults.
+	selectorPaths := make([]FieldPath, 0)
+	if payload.Selector.Where != nil {
+		selectorPaths = append(selectorPaths, readFieldPaths(*payload.Selector.Where)...)
+	}
+	selectorPaths = append(selectorPaths, grouping...)
+	guard := readFieldPaths(payload.Guard)
 	return []InvariantDeclaration{
-		newInvariant(rule, "01-cardinality", SelectionCardinalityInvalid, InvariantRulePrecondition, grouping),
-		newInvariant(rule, "02-selection-nonempty", SelectionEmpty, InvariantRulePrecondition, grouping),
-		newInvariant(rule, "03-evaluable", SelectionExpressionUnavailable, InvariantRulePrecondition, evaluable),
-		newInvariant(rule, "04-guard", SelectionGuardUnsatisfied, InvariantRulePrecondition, readFieldPaths(payload.Guard)),
+		newInvariant(rule, selectorEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, selectorPaths),
+		newInvariant(rule, cardinalitySuffix, SelectionCardinalityInvalid, InvariantRulePrecondition, grouping),
+		newInvariant(rule, selectionNonEmptySuffix, SelectionEmpty, InvariantRulePrecondition, grouping),
+		newInvariant(rule, groupEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, append(slices.Clone(guard), values...)),
+		newInvariant(rule, guardSuffix, SelectionGuardUnsatisfied, InvariantRulePrecondition, guard),
 	}
 }
 

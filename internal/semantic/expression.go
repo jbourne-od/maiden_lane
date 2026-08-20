@@ -419,7 +419,20 @@ func cloneCompiledExpression(input CompiledExpression) CompiledExpression {
 		exprType: input.exprType, canonical: bytes.Clone(input.canonical)}
 }
 
-// checkAuthoredExprBound refuses an authored tree deeper than the language admits.
+// maxExprNodes bounds the NODE COUNT of an authored tree, which depth does not.
+//
+// Expr.Args is a slice of values, so one Expr may appear as several children without being
+// copied: forty levels of Expr{Kind: ExprAll, Args: []Expr{node, node}} is depth forty --
+// comfortably inside maxExprDepth -- and 2^40 nodes. An earlier version of the bound below
+// checked only depth, so it walked all 2^40 of them and never returned. Iterative was the
+// right shape and the wrong dimension: it stopped the stack overflow and left an unbounded
+// amount of work, which is the fail-open half of the same hazard.
+//
+// The number is generous against any authored rule and negligible against an aliased DAG,
+// which is the only gap it has to close.
+const maxExprNodes = 4096
+
+// checkAuthoredExprBound refuses an authored tree deeper, or larger, than the language admits.
 //
 // ITERATIVE, WITH AN EXPLICIT STACK, because it is the guard that protects the recursive
 // walks and must not be one itself.
@@ -438,11 +451,18 @@ func checkAuthoredExprBound(expr Expr) error {
 		depth int
 	}
 	stack := []framed{{node: expr}}
+	visited := 0
 	for len(stack) > 0 {
 		current := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if current.depth > maxExprDepth {
 			return fmt.Errorf("expression nests deeper than %d", maxExprDepth)
+		}
+		visited++
+		if visited > maxExprNodes {
+			// Counted as the walk proceeds rather than measured up front, because measuring
+			// the size of the tree is the very walk that has to be bounded.
+			return fmt.Errorf("expression expands to more than %d nodes", maxExprNodes)
 		}
 		for i := range current.node.Args {
 			stack = append(stack, framed{node: current.node.Args[i], depth: current.depth + 1})

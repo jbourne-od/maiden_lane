@@ -140,38 +140,42 @@ import (
 // sha256:<hex> strings. Optional/Boolean markers are exactly one byte, 0 or 1.
 
 const (
-	lineageRootDomainTag        = "maiden-lane.lineage-root.v1"
-	sourceEntityDomainTag       = "maiden-lane.source-entity-id.v1"
-	schemaDomainTag             = "maiden-lane.schema.v1"
-	stateDomainTag              = "maiden-lane.state.v1"
-	worldDomainTag              = "maiden-lane.world.v1"
-	rulesetDomainTag            = "maiden-lane.ruleset.v1"
-	compilationInputDomainTag   = "maiden-lane.compilation-input.v1"
-	planDomainTag               = "maiden-lane.plan.v1"
-	compiledProfileDomainTag    = "maiden-lane.compiled-profile.v1"
-	compilationFailureDomainTag = "maiden-lane.compilation-failure.v1"
-	patchDomainTag              = "maiden-lane.patch.v1"
-	provenancePolicyDomainTag   = "maiden-lane.provenance-policy.v1"
-	inputIdentityDomainTag      = "maiden-lane.input-id.v1"
-	semanticRunDomainTag        = "maiden-lane.semantic-run-id.v1"
-	executorIdentityDomainTag   = "maiden-lane.executor-identity.v1"
-	executionIdentityDomainTag  = "maiden-lane.execution-id.v1"
-	syntheticEntityDomainTag    = "maiden-lane.synthetic-entity.v1"
-	invariantResultsDomainTag   = "maiden-lane.invariant-results.v1"
-	journalEntryDomainTag       = "maiden-lane.journal-entry.v1"
-	journalPrefixDomainTag      = "maiden-lane.journal-prefix.v1"
-	expressionDomainTag         = "maiden-lane.expression.v1"
-	selectorDomainTag           = "maiden-lane.selector.v1"
-	protectedFailureDomainTag   = "maiden-lane.protected-invariant-failure.v1"
-	artifactFailureDomainTag    = "maiden-lane.artifact-integrity-failure.v1"
-	checkpointIDDomainTag       = "maiden-lane.checkpoint-id.v1"
-	checkpointClaimDomainTag    = "maiden-lane.checkpoint-artifact-id.v1"
-	checkpointArtifactDomainTag = "maiden-lane.checkpoint-artifact.v1"
-	assessmentIDDomainTag       = "maiden-lane.assessment-id.v1"
-	assessmentDomainTag         = "maiden-lane.readiness-assessment.v1"
-	corpusDomainTag             = "maiden-lane.replay-corpus.v1"
-	comparisonPolicyDomainTag   = "maiden-lane.comparison-policy.v1"
-	comparisonIDDomainTag       = "maiden-lane.comparison-id.v1"
+	lineageRootDomainTag  = "maiden-lane.lineage-root.v1"
+	sourceEntityDomainTag = "maiden-lane.source-entity-id.v1"
+	schemaDomainTag       = "maiden-lane.schema.v1"
+	stateDomainTag        = "maiden-lane.state.v1"
+	worldDomainTag        = "maiden-lane.world.v1"
+	rulesetDomainTag      = "maiden-lane.ruleset.v1"
+	// selectAssignPresent marks the select-assign payload. Deliberately outside {0x00, 0x01},
+	// the only two values encoder.optional writes, so the payload's presence is decidable at
+	// one byte without consulting anything around it. See encodeTransformationDeclaration.
+	selectAssignPresent         byte = 0x02
+	compilationInputDomainTag        = "maiden-lane.compilation-input.v1"
+	planDomainTag                    = "maiden-lane.plan.v1"
+	compiledProfileDomainTag         = "maiden-lane.compiled-profile.v1"
+	compilationFailureDomainTag      = "maiden-lane.compilation-failure.v1"
+	patchDomainTag                   = "maiden-lane.patch.v1"
+	provenancePolicyDomainTag        = "maiden-lane.provenance-policy.v1"
+	inputIdentityDomainTag           = "maiden-lane.input-id.v1"
+	semanticRunDomainTag             = "maiden-lane.semantic-run-id.v1"
+	executorIdentityDomainTag        = "maiden-lane.executor-identity.v1"
+	executionIdentityDomainTag       = "maiden-lane.execution-id.v1"
+	syntheticEntityDomainTag         = "maiden-lane.synthetic-entity.v1"
+	invariantResultsDomainTag        = "maiden-lane.invariant-results.v1"
+	journalEntryDomainTag            = "maiden-lane.journal-entry.v1"
+	journalPrefixDomainTag           = "maiden-lane.journal-prefix.v1"
+	expressionDomainTag              = "maiden-lane.expression.v1"
+	selectorDomainTag                = "maiden-lane.selector.v1"
+	protectedFailureDomainTag        = "maiden-lane.protected-invariant-failure.v1"
+	artifactFailureDomainTag         = "maiden-lane.artifact-integrity-failure.v1"
+	checkpointIDDomainTag            = "maiden-lane.checkpoint-id.v1"
+	checkpointClaimDomainTag         = "maiden-lane.checkpoint-artifact-id.v1"
+	checkpointArtifactDomainTag      = "maiden-lane.checkpoint-artifact.v1"
+	assessmentIDDomainTag            = "maiden-lane.assessment-id.v1"
+	assessmentDomainTag              = "maiden-lane.readiness-assessment.v1"
+	corpusDomainTag                  = "maiden-lane.replay-corpus.v1"
+	comparisonPolicyDomainTag        = "maiden-lane.comparison-policy.v1"
+	comparisonIDDomainTag            = "maiden-lane.comparison-id.v1"
 )
 
 // assessmentSemanticsVersion pins the meaning of readiness evaluation (closed
@@ -787,20 +791,29 @@ func encodeTransformationDeclaration(encoder *canonicalEncoder, transformation T
 	// not happened yet, and a declaration reaching here may carry byte 0x01 and this payload
 	// at once. The discriminator that argument named is not reliable where it is needed.
 	//
-	// What is actually relied on: absent, the next byte is Aggregate's presence marker, 0x00
-	// or 0x01; present, the next eight are a uint64 length whose leading byte is 0x00 for any
-	// selector kind shorter than 2^56 bytes. That separates the cases from 0x01 but not from
-	// 0x00, and the rest of the separation comes from the length-prefixing of everything
-	// after. This comment cannot finish that argument by hand, so it does not assert it:
-	// TestRulesetEncodingSeparatesDistinctDeclarations tests it over a table that includes
-	// operator/payload disagreements, and a property test over RulesetDeclaration would
-	// settle it. Recorded as TESTED, not proven.
+	// A ONE-BYTE SENTINEL, written only when the payload is present, is what makes the
+	// boundary unambiguous -- and it is why this is now an argument rather than a hope.
+	//
+	// Absent, the next byte is Aggregate's presence marker, which encoder.optional writes as
+	// 0x00 or 0x01 and nothing else. Present, the next byte is selectAssignPresent, which is
+	// neither. So the two cases are separated at the very first byte, whatever follows them,
+	// and no alignment of later fields can make one read as the other. An earlier version
+	// wrote the selector kind's uint64 length there instead, whose leading byte is 0x00 for
+	// any kind shorter than 2^56 -- indistinguishable from "no payload, no aggregate" at that
+	// position, leaving the separation to depend on the lengths of everything after it. That
+	// was an argument nobody could finish by hand, which is a poor foundation for the digest
+	// that identifies a plan.
+	//
+	// The sentinel costs nothing in append-only terms: a declaration WITHOUT the payload
+	// still writes zero bytes here, which is what kept every stored ruleset's identity
+	// unchanged, and the golden vectors still pass.
 	//
 	// The presence bytes on Form and Aggregate stay. They are what v1 encoded, and removing
 	// them would be the same break in the other direction.
 	if transformation.SelectAssign != nil {
 		payload := transformation.SelectAssign
 		selector := payload.Selector
+		encoder.byte(selectAssignPresent)
 		encoder.string(string(selector.Kind))
 		encoder.byte(byte(selector.Members.Kind))
 		encoder.uint64(selector.Members.Count)

@@ -472,7 +472,7 @@ func TestSelectAssignRefusesMalformedDeclarationsForTheStatedReason(t *testing.T
 			rule.SelectAssign.Assignments[0].Value = stringLiteral(t, "eighteen")
 			rule.DeclaredReads = []FieldPath{"driver.depot", "driver.violations"}
 		},
-		wantDetail: "assignment_00",
+		wantDetail: "driver.shift_total",
 	}, {
 		name: "assignment reads an entity kind the selector does not bind",
 		mutate: func(rule *TransformationDeclaration) {
@@ -482,14 +482,14 @@ func TestSelectAssignRefusesMalformedDeclarationsForTheStatedReason(t *testing.T
 				"driver.rest_hours", "driver.violations",
 			}
 		},
-		wantDetail: "assignment_01",
+		wantDetail: "driver.status",
 	}, {
 		name: "two assignments to one target",
 		mutate: func(rule *TransformationDeclaration) {
 			rule.SelectAssign.Assignments = append(rule.SelectAssign.Assignments,
 				FieldAssignment{Target: "driver.status", Value: stringLiteral(t, "other")})
 		},
-		wantDetail: "assignment_02",
+		wantDetail: "driver.status",
 	}, {
 		name:                   "payload disagrees with the operator tag",
 		mutate:                 func(rule *TransformationDeclaration) { rule.Operator = OperatorFormRelatedEntity },
@@ -1142,4 +1142,240 @@ func TestSelectAssignUnencodableDeclarationIsAnError(t *testing.T) {
 	// still compile -- otherwise this test would also pass against a compiler that had
 	// simply stopped working.
 	mustSelectAssignPlan(t, selectAssignRule(t, 3))
+}
+
+// A diagnostic must name the assignment the author got wrong, not a bystander.
+//
+// normalizeTransformationPayload sorts assignments by target, and the diagnostic detail was
+// the loop index -- a position in the SORTED slice. Authoring the duplicate first and an
+// innocent assignment last therefore reported the innocent one. Every fixture in the
+// malformed table authors its assignments already in sorted order, so sorted index and
+// authored index coincided and the two meanings were indistinguishable to them.
+func TestSelectAssignDiagnosticNamesTheOffendingAssignment(t *testing.T) {
+	rule := selectAssignRule(t, 3)
+	// Authored deliberately OUT of sorted order: the duplicated pair comes first, and
+	// driver.shift_total -- which is not duplicated -- sorts ahead of both.
+	rule.SelectAssign.Assignments = []FieldAssignment{
+		{Target: "driver.status", Value: stringLiteral(t, "certified")},
+		{Target: "driver.status", Value: stringLiteral(t, "provisional")},
+		{Target: "driver.shift_total", Value: Expr{Kind: ExprAdd, Args: []Expr{
+			fieldExpr("driver.driving_hours"), fieldExpr("driver.rest_hours"),
+		}}},
+	}
+	compilation, err := Compile(selectAssignRequest(t, rule))
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	diagnostics := compilationDiagnostics(t, compilation)
+	if !hasDiagnostic(diagnostics, UnsupportedOperator, "driver.status") {
+		t.Fatalf("diagnostics %v, want the duplicated target named", diagnostics)
+	}
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Detail() == "driver.shift_total" {
+			t.Fatalf("the diagnostic named driver.shift_total, which the author did not duplicate: %v", diagnostics)
+		}
+	}
+}
+
+// A selector fault must not seal a report claiming the later obligations passed.
+//
+// SELECTION_EXPRESSION_UNAVAILABLE is raised in two places that cannot be adjacent: by the
+// selector before any group exists, and by the guard and assignment values after cardinality
+// and emptiness have been established. One obligation carrying both had to sit on one side
+// of the cardinality check and lied on the other -- filed fourth, a selector fault recorded
+// the cardinality and non-empty obligations as passed with nothing grouped at all.
+//
+// The three subtests of TestSelectAssignRefusesWhenTheSELECTORCannotBeEvaluated assert only
+// failure.Code(), and the one test that reads InvariantResults exercises only the cardinality
+// path -- where the old numbering happened to be right.
+func TestSelectAssignSelectorFaultAttestsToNothingLater(t *testing.T) {
+	schema := selectAssignSchema(t)
+	rule := selectAssignRule(t, 3)
+	rule.SelectAssign.Selector.Members = Cardinality{Kind: CardinalityExactly, Count: 2}
+	plan := mustSelectAssignPlan(t, rule)
+	// One driver, and no depot to group it by. Nothing is ever grouped, so neither the
+	// cardinality obligation nor the non-empty obligation is established -- and with a
+	// depot of "south" this very rule refuses on cardinality, so "passed" would not merely
+	// be unverified, it would be contradicted by the adjacent state.
+	state := selectAssignStateWith(t, schema, map[string]map[FieldName]Value{
+		"C": {"driving_hours": NewInt64Value(9), "rest_hours": NewInt64Value(11), "violations": NewInt64Value(2)},
+	})
+	outcome, err := ExecuteTransition(selectAssignBinding(t, plan, state), "certify_depot.v1", state, Journal{})
+	if err != nil {
+		t.Fatalf("ExecuteTransition: %v", err)
+	}
+	failure := mustTransitionFailure(t, outcome)
+	if got := failure.Code(); got != string(SelectionExpressionUnavailable) {
+		t.Fatalf("refusal code %s, want %s", got, SelectionExpressionUnavailable)
+	}
+	for _, result := range outcome.InvariantResults() {
+		if !result.Passed() {
+			continue
+		}
+		switch result.Code() {
+		case SelectionCardinalityInvalid:
+			t.Fatal("the report claims cardinality was satisfied, and nothing was grouped")
+		case SelectionEmpty:
+			t.Fatal("the report claims the selection was non-empty, and nothing was grouped")
+		case SelectionGuardUnsatisfied:
+			t.Fatal("the report claims a group satisfied the guard, and none was assessed")
+		}
+	}
+	// And the refusal cites the row it failed on, and the field it consulted, rather than
+	// naming nothing at all -- which is what it did when the fault carried no entity and the
+	// obligation it was filed under described a different check.
+	cited := false
+	for _, result := range outcome.InvariantResults() {
+		if result.Passed() || result.Code() != SelectionExpressionUnavailable {
+			continue
+		}
+		if len(result.Entities()) == 0 {
+			t.Fatal("the refusal names no entity, so nothing attributes it to the driver with no depot")
+		}
+		for _, fact := range result.FactRefs() {
+			if fact.Field() == "depot" {
+				cited = true
+			}
+		}
+	}
+	if !cited {
+		t.Fatal("the refusal cites no fact about driver.depot, the field it could not evaluate")
+	}
+}
+
+// A wide tree is refused as surely as a deep one.
+//
+// Expr.Args holds values, so one node may appear as several children without being copied:
+// this builds depth 30 -- inside maxExprDepth -- and 2^30 logical nodes from thirty
+// allocations. A bound that checked only depth walked every one of them and never returned,
+// which replaced a fatal stack overflow with an indefinite hang. Every subtest of the depth
+// test builds a linear chain where node count equals depth, so a node bound and a depth bound
+// are indistinguishable to them.
+//
+// The assertion is that this RETURNS, and quickly. A test for "does not hang" has to be a
+// test that finishes.
+func TestSelectAssignRefusesAWideAuthoredTree(t *testing.T) {
+	node := Expr{Kind: ExprExists, Field: "driver.violations"}
+	for i := 0; i < 30; i++ {
+		node = Expr{Kind: ExprAll, Args: []Expr{node, node}}
+	}
+	if err := checkAuthoredExprBound(node); err == nil {
+		t.Fatal("a tree of 2^30 aliased nodes was accepted")
+	}
+	rule := selectAssignRule(t, 3)
+	rule.SelectAssign.Guard = Expr{Kind: ExprAllMembers, Args: []Expr{node}}
+	if _, err := Compile(selectAssignRequest(t, rule)); err == nil {
+		t.Fatal("a guard of 2^30 aliased nodes compiled")
+	}
+
+	// And a tree that is wide but small still compiles, so the bound is a budget and not a
+	// refusal of every branching expression.
+	modest := Expr{Kind: ExprAll, Args: []Expr{
+		{Kind: ExprExists, Field: "driver.violations"},
+		{Kind: ExprExists, Field: "driver.driving_hours"},
+		{Kind: ExprExists, Field: "driver.rest_hours"},
+	}}
+	legal := selectAssignRule(t, 3)
+	legal.SelectAssign.Guard = Expr{Kind: ExprAllMembers, Args: []Expr{modest}}
+	legal.DeclaredReads = []FieldPath{
+		"driver.depot", "driver.driving_hours", "driver.rest_hours", "driver.violations",
+	}
+	mustSelectAssignPlan(t, legal)
+}
+
+// The payload's presence must be decidable at one byte, whatever follows it.
+//
+// The marker-less encoding was defended by an argument that could not be finished: absent,
+// the next byte is Aggregate's presence marker 0x00; present, it was the leading byte of the
+// selector kind's uint64 length, also 0x00. Separation then depended on the lengths of
+// everything after, which the previous injectivity table could not probe because every case
+// used a single-transformation, zero-checkpoint ruleset where the totals differ trivially.
+//
+// A one-byte sentinel outside {0x00, 0x01} settles it. This pins that property directly, and
+// pairs the adversarial multi-transformation shapes the old table could not reach.
+func TestRulesetEncodingMarksThePayloadUnambiguously(t *testing.T) {
+	withPayload := selectAssignRule(t, 3)
+	withoutPayload := compileFixtureRequest(t, false).Rules.Transformations[0]
+
+	// The sentinel is neither value encoder.optional can write, so no absent-payload stream
+	// can present it at this position.
+	if selectAssignPresent == 0x00 || selectAssignPresent == 0x01 {
+		t.Fatalf("the payload sentinel is %#x, which encoder.optional also writes", selectAssignPresent)
+	}
+
+	// AND IT IS ACTUALLY WRITTEN. Asserting only that the constant is well chosen leaves
+	// removing the write undetectable, because a table of distinct declarations stays
+	// distinct without it -- the sentinel exists to close a case no fixture demonstrates.
+	// So this locates the payload region directly: two encodings identical but for the
+	// payload diverge exactly where it begins, and the first byte there must be the marker.
+	bare := cloneTransformation(withPayload)
+	bare.SelectAssign = nil
+	present, err := encodeRuleset(normalizedRuleset{transformations: []TransformationDeclaration{withPayload}})
+	if err != nil {
+		t.Fatalf("encodeRuleset with payload: %v", err)
+	}
+	absent, err := encodeRuleset(normalizedRuleset{transformations: []TransformationDeclaration{bare}})
+	if err != nil {
+		t.Fatalf("encodeRuleset without payload: %v", err)
+	}
+	shared := 0
+	for shared < len(present) && shared < len(absent) && present[shared] == absent[shared] {
+		shared++
+	}
+	if shared == len(present) {
+		t.Fatal("the payload contributed no bytes at all")
+	}
+	if present[shared] != selectAssignPresent {
+		t.Fatalf("the payload region begins with %#x, want the sentinel %#x",
+			present[shared], selectAssignPresent)
+	}
+	if absent[shared] != 0x00 && absent[shared] != 0x01 {
+		t.Fatalf("the absent-payload stream carries %#x where the sentinel would be, so the "+
+			"two cases are not separated by that byte alone", absent[shared])
+	}
+
+	// Adversarially aligned pairs: an empty selector kind (nothing validates it before
+	// encoding), author-controlled Members.Count, and a SECOND transformation whose ID
+	// length and operator byte were the fields a collision would have had to borrow.
+	empty := selectAssignRule(t, 3)
+	empty.SelectAssign.Selector.Kind = ""
+	empty.SelectAssign.Selector.Members = Cardinality{Kind: CardinalityExactly, Count: 2}
+
+	other := selectAssignRule(t, 3)
+	other.SelectAssign.Selector.Kind = ""
+	other.SelectAssign.Selector.Members = Cardinality{Kind: CardinalityExactly, Count: 3}
+
+	rulesets := map[string][]TransformationDeclaration{
+		"payload then plain":           {withPayload, rename(t, withoutPayload, "zz.v1")},
+		"plain then payload":           {rename(t, withoutPayload, "aa.v1"), withPayload},
+		"plain alone":                  {rename(t, withoutPayload, "aa.v1")},
+		"payload alone":                {withPayload},
+		"empty kind, count two":        {rename(t, empty, "ab.v1"), rename(t, withoutPayload, "zz.v1")},
+		"empty kind, count three":      {rename(t, other, "ab.v1"), rename(t, withoutPayload, "zz.v1")},
+		"empty kind, longer neighbour": {rename(t, empty, "ab.v1"), rename(t, withoutPayload, "zzz.v1")},
+		"two payloads":                 {rename(t, withPayload, "aa.v1"), rename(t, other, "zz.v1")},
+	}
+	names := make([]string, 0, len(rulesets))
+	for name := range rulesets {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	seen := make(map[string]string, len(rulesets))
+	for _, name := range names {
+		encoded, err := encodeRuleset(normalizedRuleset{transformations: rulesets[name]})
+		if err != nil {
+			t.Fatalf("%s: encodeRuleset: %v", name, err)
+		}
+		if previous, collision := seen[string(encoded)]; collision {
+			t.Fatalf("%q and %q encode to the same ruleset bytes", previous, name)
+		}
+		seen[string(encoded)] = name
+	}
+}
+
+func rename(t *testing.T, declaration TransformationDeclaration, id RuleID) TransformationDeclaration {
+	t.Helper()
+	clone := cloneTransformation(declaration)
+	clone.ID = id
+	return clone
 }

@@ -294,12 +294,13 @@ rather than chosen. `Guard` is a value type, so omitting it yields `Expr{Kind: 0
 canonical bytes has no failure identity to return. The same is already true of a field path
 carrying invalid UTF-8.
 
-*The append-only encoding is tested for injectivity, not proven.* Writing the payload with no
-presence marker is what kept every existing declaration's bytes unchanged, and the argument
-originally given for it -- that the operator byte discriminates -- is wrong, because
-`encodeRuleset` runs before the operator/payload agreement check. A property test over
-`RulesetDeclaration` would settle it; a table covering operator/payload disagreements is what
-exists.
+*The append-only encoding is now argued, not merely tested.* Two earlier attempts justified a
+marker-less payload and both failed: first that the operator byte discriminates -- wrong,
+because `encodeRuleset` runs before the operator/payload agreement check -- and then that the
+length-prefixing of everything after separates the cases, which is true of nothing anyone
+could check by hand. A one-byte sentinel outside `{0x00, 0x01}`, written only when the payload
+is present, makes the boundary decidable at one byte whatever follows it, and costs nothing in
+append-only terms because an absent payload still writes zero bytes.
 
 ## Decision 4's open question, answered
 
