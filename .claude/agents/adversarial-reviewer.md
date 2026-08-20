@@ -173,12 +173,26 @@ every diff.
    input first, the test stands near the property rather than pinning it, and narrowing or
    deleting the guard survives.
 
-   It does not cover the other bullets and must not be read as doing so. Bullet 2 is about an
-   *accepted* value whose fixture coincides with what broken code would guess — no refusal is
-   involved. Bullet 3 is about a dimension the state space cannot vary, and its content is the
-   remedy, a golden vector; there is a live example in this repository with no refusal anywhere
-   in it (a sort tiebreak that no fixture size can distinguish, because the standard library's
-   sort happens to preserve all-ties order).
+   It is additional to the other bullets and replaces none of them. In particular it does NOT
+   subsume bullet 2, and the two catch different mutants of the same guard. The fifth tell asks
+   whether some *other* rule refuses the input first. Bullet 2 asks whether the fixture's value
+   for the dimension under test is what broken code would use — which for a refusing guard
+   means a guard that compares against a hardcoded constant the fixture happens to match. That
+   mutant refuses exactly the inputs the test offers, so the fifth tell reports clean while the
+   guard is comprehensively broken for every input the fixture does not contain.
+
+   This repository produced it twice, in the two halves of one rule. An entity-kind check in
+   the evaluator, and the identical check in the compiler, each survived replacement by a
+   comparison against one literal kind, because every fixture bound or declared that kind.
+   Both are pinned now. Note which one was found first: the evaluator's copy is unreachable in
+   production, since selection filters by kind before evaluating, so the round that hardened it
+   left the load-bearing half untested — checking one instance of a duplicated rule is not
+   checking the rule.
+
+   Bullet 3 is likewise untouched: it is about a dimension the state space cannot vary, and its
+   content is the remedy, a golden vector. There is a live example here with no refusal in it
+   at all — a sort tiebreak no fixture distinguishes, because the standard library's sort
+   happens to preserve all-ties order.
 
    Instances of this fifth tell: an overflow fixture varied magnitude but not sign, so only one
    disjunct of a compound guard was ever the reason for refusal; a test that built a two-kind
@@ -210,8 +224,17 @@ every diff.
     confidently answers a different question. Look for a representation carrying more than one
     field where only one is consulted — a kind tag beside a payload, a type beside a value; a
     lookup whose result is correct in type but read from the wrong subject; two derivations of
-    one fact from different references; and any place where a compile-time check establishes a
-    property that an executable path then ASSUMES rather than re-establishes.
+    one fact from different references; and — stated carefully, because the loose version is
+    wrong — a boundary that RELIES on a property another boundary proves, while being
+    reachable without carrying that proof.
+
+    Relying on compile-time proof is not itself suspicious. A closed compiled artifact exists
+    so that execution need not revalidate everything, and a reviewer who treats every such
+    reliance as a defect will demand the executor duplicate the compiler, which contradicts
+    having one closed source of meaning. The dangerous shape is narrower: A proves P, B relies
+    on P, and **B is reachable without A having run** — or two independently reachable
+    boundaries disagree about which inputs are admissible. Ask which callers can reach B, not
+    whether B rechecks.
 
     Five instances in twelve reviews of one branch, numbered as the code's own comments number
     them:
