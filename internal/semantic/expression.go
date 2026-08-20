@@ -413,6 +413,12 @@ func valueKindType(kind ValueKind) (ExprType, error) {
 	}
 }
 
+// cloneCompiledExpression deep-copies a compiled expression, tree and bytes.
+func cloneCompiledExpression(input CompiledExpression) CompiledExpression {
+	return CompiledExpression{schema: input.schema, version: input.version, expr: cloneExpr(input.expr),
+		exprType: input.exprType, canonical: bytes.Clone(input.canonical)}
+}
+
 // encodeExpr writes one node and its operands.
 //
 // Recursive, with no domain tag of its own: the tag is written once at the top by
@@ -422,9 +428,11 @@ func encodeExpr(encoder *canonicalEncoder, expr Expr) {
 	switch expr.Kind {
 	case ExprLiteral:
 		encoder.value(*expr.Literal)
-	case ExprField, ExprExists:
+	case ExprField, ExprExists, ExprAllEqual:
+		// ExprAllEqual encodes exactly as the other field-carrying kinds: the kind byte is
+		// what separates them, which is the scheme the golden vectors pin.
 		encoder.string(string(expr.Field))
-	case ExprNot, ExprAll, ExprAny, ExprEqual, ExprLess, ExprAdd:
+	case ExprNot, ExprAll, ExprAny, ExprEqual, ExprLess, ExprAdd, ExprAllMembers, ExprAnyMembers:
 		encoder.uint64(uint64(len(expr.Args)))
 		for i := range expr.Args {
 			encodeExpr(encoder, expr.Args[i])
@@ -433,15 +441,11 @@ func encodeExpr(encoder *canonicalEncoder, expr Expr) {
 		// EXHAUSTIVE AND FAIL-CLOSED, and the default arm is the point rather than a
 		// formality.
 		//
-		// The three group kinds deliberately have NO arm here. encodeExpr has TWO entry
-		// points, CompileExpression and encodeSelector -- an earlier version of this comment
-		// said one, which is the reasoning error CompileSelector documents having shipped
-		// thirty lines from here. Neither can reach a group kind: CompileExpression refuses
-		// them outright, and encodeSelector only ever encodes CompiledExpression values,
-		// which nothing but CompileExpression produces. An arm here would therefore be
-		// unreachable code that also removes this net for the very kinds whose encoding
-		// nobody has exercised. They get one when a Transform makes them reachable, together
-		// with a golden vector.
+		// The three group kinds got their arms above when OperatorSelectAndAssign made them
+		// reachable -- a transformation declaration encodes its authored guard, and a guard
+		// is group-scoped -- together with the golden vectors that entry promised. Until
+		// then encodeExpr had two entry points, CompileExpression and encodeSelector, and
+		// neither could reach a group kind; there are now three.
 		//
 		// checkExpr and checkOperandShape both refuse an unrecognised kind, so
 		// this arm is unreachable today. It exists because adding a kind is the expected

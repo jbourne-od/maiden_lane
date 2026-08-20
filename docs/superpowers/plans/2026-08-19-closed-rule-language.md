@@ -222,26 +222,72 @@ language compiles and evaluates group predicates that no production path can rea
 than predicates, and nothing consumes a value from a group until a `Transform` exists. Kind
 bytes are append-only, so adding them later costs no identity. Deterministic, total, refusing rather than defaulting on absent fields.
 
-## The next slice, and its acceptance property
+## Slice 4 -- the Transform. Done, and reachable.
 
-**A `Transform` is an architectural boundary, not the next integer.** The slices so far
-establish authoring → compile → select, and (once slice 3 lands) evaluating a group predicate
-in isolation. What none of them establishes is that any of it is *reachable*: `CompileExpression`,
-`CompileSelector`, `Select` and the group entry points all have no non-test callers, so what
-exists is potential semantics rather than semantics.
+**A `Transform` was an architectural boundary, not the next integer.** Slices 1-3 established
+authoring, compiling, selecting and evaluating a group predicate in isolation. None of them
+established that any of it was *reachable*: `CompileExpression`, `CompileSelector`, `Select`
+and the group entry points had no non-test callers, so what existed was potential semantics.
 
-**Reachability is therefore an acceptance property of that slice, not a consequence of it.**
-The slice is not done because a `Transform` type exists and is unit-tested. It is done when one
-end-to-end fixture demonstrates that **altering a group predicate changes an observable
-transform result** — authored rule, compiled, selected, grouped, predicate evaluated, patch
-proposed, transition observable. Anything less leaves carefully verified machinery behind a
-door nobody opens, which is the state every slice so far is in. Worth naming because a slice
-heading that reads "done" means its machinery exists, not that production can reach it, and
-nothing in this document distinguished those until now.
+`OperatorSelectAndAssign` is the consumer. It declares a grouped selector, a group-scoped
+guard, and field assignments applied to every member of every qualifying group -- compiled by
+`deriveTransformation`, executed by `executeSelectAndAssign`, dispatched from
+`ExecuteTransition` alongside the two frozen operators.
 
-It also unblocks decision 4's dependency-cycle question, which this document does record as
-deferred in three places: answering it needs a set-scoped rule that reaches the compiler, and
-a rule needs a transform.
+**Reachability was the acceptance property, and it is a test.**
+`TestSelectAssignGroupPredicateChangesTheTransformResult` authors one ruleset twice, varying
+only the threshold inside a group predicate, and asserts that the ruleset digest, the plan
+identity, the set of entities the patch touches, and the resulting state digest all differ.
+Authored rule, compiled, selected, grouped, predicate evaluated, patch proposed, transition
+observable. The door opens.
+
+`TestOneSetScopedRuleCoversAFleetTheBaselineCannotExpress` closes the loop on slice 0: one
+rule covers ten depots, where `TestMultiInstanceRulesetBaseline` records that ten per-instance
+rules produce C(10,2) = 45 unresolved write conflicts.
+
+**Decisions this slice had to make, recorded because each could have gone the other way.**
+
+- *The guard is a FILTER, not an obligation.* Qualifying groups receive the assignments;
+  others are skipped. The obligation reading is what this engine's fail-closed habits pull
+  towards, and it was rejected because it could only ever flip a whole transition between
+  accepted and refused -- never change WHICH entities a patch touches, which is what "apply to
+  the teams where every driver shares a domicile" requires. Filtering does not extend to
+  errors: a guard that cannot be evaluated refuses, because "does not qualify" and "could not
+  be assessed" are different facts.
+- *Cardinality violations refuse.* This is the policy `Selection` deliberately left to its
+  consumer. A group that matched the predicate and the grouping but not the declared
+  cardinality is an attributable refusal, not a group quietly dropped.
+- *An empty result refuses,* and this one is forced rather than chosen: an accepted journal
+  entry carries a patch, `NewPatch` refuses an empty operation list, and replay re-applies
+  every entry, so there is no representation for an accepted transition that did nothing. A
+  rule that legitimately applies to nothing cannot be written today. It fails closed.
+- *The payload is encoded append-only, with no presence marker.* Mirroring `Form` and
+  `Aggregate`, which each write one, would have added a byte to every transformation ever
+  encoded -- re-identifying every stored ruleset, plan, checkpoint and journal in a scheme
+  whose durability argument is that a reader recompiles and compares. The golden vectors
+  caught it.
+
+The three group kinds got their canonical encoding and golden vectors here, as `encodeExpr`'s
+default arm promised they would when a Transform made them reachable.
+
+## Decision 4's open question, answered
+
+Set-scoping does not cause dependency cycles by itself, and the feared mechanism is real but
+narrower than the decision stated. `TestSetScopedRulesCycleOnlyWhenWritesFlowBothWays` records
+four cases: two set-scoped rules over one kind are ORDERED when the writes flow one way,
+CYCLIC only when each reads what the other writes, and INDEPENDENT when their writes are
+disjoint and neither reads the other's.
+
+What set-scoping genuinely changes is the blast radius of one particular write. Every rule
+over a kind reads the grouping field, so a rule that WRITES the grouping field gains an edge
+from every other rule over that kind at once, and two such rules are refused on that field
+alone. That is the case worth designing against, and it is narrower than "set-scoping may
+produce more cycles".
+
+The other half of decision 4 -- that `compile.go:800` skips write-conflict analysis for a pair
+a dependency edge already orders, moving pairs from refused to ordered-and-accepted -- is
+still unargued. The test records that a pair which is both conflicting and cyclic reports the
+cycle, and deliberately asserts a disjunction rather than pinning that interaction by accident.
 
 ## Index of everything else
 

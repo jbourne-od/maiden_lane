@@ -450,6 +450,10 @@ func TestSemanticCodeMappingSeparatesSpanAndInvariantVocabularies(t *testing.T) 
 		app.CodeTeamMemberCardinalityInvalid: "TEAM_MEMBER_CARDINALITY_INVALID",
 		app.CodeHOSTupleIncomplete:           "HOS_TUPLE_INCOMPLETE", app.CodeHOSDurationInvalid: "HOS_DURATION_INVALID",
 		app.CodeHOSAnchorMismatch: "HOS_ANCHOR_MISMATCH", app.CodeHOSAggregateInvalid: "HOS_AGGREGATE_INVALID",
+		app.CodeSelectionCardinalityInvalid:    "SELECTION_CARDINALITY_INVALID",
+		app.CodeSelectionEmpty:                 "SELECTION_EMPTY",
+		app.CodeSelectionGuardUnsatisfied:      "SELECTION_GUARD_UNSATISFIED",
+		app.CodeSelectionExpressionUnavailable: "SELECTION_EXPRESSION_UNAVAILABLE",
 	}
 	for value, want := range spanOnly {
 		got, ok := observedCode(value)

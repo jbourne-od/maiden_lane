@@ -394,6 +394,14 @@ func observedInvariantCode(code app.ObservationCode) (closedCode, bool) {
 		return closedCode{"HOS_ANCHOR_MISMATCH"}, true
 	case app.CodeHOSAggregateInvalid:
 		return closedCode{"HOS_AGGREGATE_INVALID"}, true
+	case app.CodeSelectionCardinalityInvalid:
+		return closedCode{"SELECTION_CARDINALITY_INVALID"}, true
+	case app.CodeSelectionEmpty:
+		return closedCode{"SELECTION_EMPTY"}, true
+	case app.CodeSelectionGuardUnsatisfied:
+		return closedCode{"SELECTION_GUARD_UNSATISFIED"}, true
+	case app.CodeSelectionExpressionUnavailable:
+		return closedCode{"SELECTION_EXPRESSION_UNAVAILABLE"}, true
 	default:
 		return closedCode{}, false
 	}

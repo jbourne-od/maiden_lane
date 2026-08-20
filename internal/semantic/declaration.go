@@ -19,6 +19,7 @@ type OperatorKind uint8
 const (
 	OperatorFormRelatedEntity OperatorKind = iota + 1
 	OperatorAggregateRelatedFields
+	OperatorSelectAndAssign
 )
 
 // OutputKeyKind is the closed typed output-key expression supported by the
@@ -110,6 +111,61 @@ type AggregateRelatedFieldsDeclaration struct {
 	ResultPredicates    []AggregatePredicate
 }
 
+// FieldAssignment is one field written on every member of a qualifying group.
+//
+// Value is evaluated in MEMBER scope -- once per member, with that member bound -- so two
+// members of one group may receive different values. Target names a field on the selector's
+// own kind, because a member is the only entity the assignment binds.
+type FieldAssignment struct {
+	Target FieldPath
+	Value  Expr
+}
+
+// SelectAssignDeclaration is a rule that applies to a selected population rather than to
+// entities named one by one.
+//
+// This is the payload the two frozen operators could not express. They resolve their inputs
+// by canonical source key, so one rule handles one team; this one declares a selector and
+// applies to every group it finds.
+type SelectAssignDeclaration struct {
+	// Selector is what the rule applies to. It must be GROUPED. An ungrouped selector is
+	// refused, not silently treated as one member per group: Guard is a group-scoped
+	// expression, and the three group node kinds are refused outside group scope, so an
+	// ungrouped rule could only ever carry a guard that this operator would then reject
+	// at evaluation rather than at compile time.
+	Selector Selector
+
+	// Guard is a group-scoped FILTER: groups satisfying it receive the assignments, groups
+	// that do not are skipped.
+	//
+	// THE ALTERNATIVE WAS AN OBLIGATION -- every selected group must satisfy the guard or
+	// the transition refuses -- and it is recorded here because it is the reading this
+	// engine's fail-closed habits pull towards, and because reinterpreting Guard later
+	// would change what already encoded rules do without changing their bytes.
+	//
+	// Filter won on two grounds. It is the plain meaning of an authored condition: Where
+	// already filters candidates one entity at a time and nobody calls that silent, and a
+	// group-level condition that could only ever refuse would leave "apply to the teams
+	// where every driver shares a domicile" inexpressible -- which is a rule the actual
+	// project has. And an obligation cannot distinguish which groups a predicate describes,
+	// so altering the predicate could only ever flip the whole transition between accepted
+	// and refused, never change WHICH entities a patch touches.
+	//
+	// What filtering does NOT get is silence. A guard that cannot be evaluated against a
+	// group -- an absent field, an overflowing sum -- refuses the transition rather than
+	// quietly excluding that group, because "this group does not qualify" and "this group
+	// could not be assessed" are different facts and only one of them is the author's
+	// intent. And if no group qualifies, the rule refuses rather than proposing an empty
+	// patch. Skipping is a decision the guard makes about a group; it is never a decision
+	// the executor makes about an error.
+	Guard Expr
+
+	// Assignments are the writes applied to every member of every qualifying group. At
+	// least one is required: a rule that writes nothing produces no patch, and the journal
+	// has no representation for an accepted transition without one.
+	Assignments []FieldAssignment
+}
+
 // TransformationDeclaration is a closed tagged union. Exactly one payload
 // must be present and it must agree with Operator.
 type TransformationDeclaration struct {
@@ -120,6 +176,7 @@ type TransformationDeclaration struct {
 	After          []RuleID
 	Form           *FormRelatedEntityDeclaration
 	Aggregate      *AggregateRelatedFieldsDeclaration
+	SelectAssign   *SelectAssignDeclaration
 }
 
 // CheckpointDeclaration names a complete transformation prefix.
@@ -230,7 +287,52 @@ const (
 	HOSDurationInvalid           InvariantCode = "HOS_DURATION_INVALID"
 	HOSAnchorMismatch            InvariantCode = "HOS_ANCHOR_MISMATCH"
 	HOSAggregateInvalid          InvariantCode = "HOS_AGGREGATE_INVALID"
+
+	// SelectionCardinalityInvalid is the policy Selection deliberately left to its consumer:
+	// a group that matched the predicate and the grouping but not the declared cardinality
+	// is an attributable refusal, not a group quietly dropped from the result.
+	SelectionCardinalityInvalid InvariantCode = "SELECTION_CARDINALITY_INVALID"
+
+	// SelectionEmpty refuses a rule that selected no group at all.
+	//
+	// This is forced by the journal model rather than chosen: an accepted entry carries a
+	// patch, NewPatch refuses an empty operation list, and replay re-applies every entry, so
+	// there is no representation for an accepted transition that did nothing. Recorded as a
+	// limitation because it is one -- a rule that legitimately applies to nothing cannot be
+	// written today -- and it fails closed rather than open.
+	SelectionEmpty InvariantCode = "SELECTION_EMPTY"
+
+	// SelectionGuardUnsatisfied refuses a rule whose selector found groups but whose guard
+	// admitted none of them. The rule has nothing to write, and an empty patch is not a
+	// thing this engine can accept.
+	SelectionGuardUnsatisfied InvariantCode = "SELECTION_GUARD_UNSATISFIED"
+
+	// SelectionExpressionUnavailable is an expression the rule needed and the data could not
+	// answer: an absent field, an overflowing arithmetic node. It covers the guard and the
+	// assignment values alike, because in both places the fact is the same -- the rule could
+	// not be evaluated -- and the recorded evidence names which fields were consulted.
+	//
+	// It is emphatically NOT the guard returning false. A guard that answers "no" has been
+	// evaluated; one that raises has not, and treating the second as the first would exclude
+	// a group for a reason the author never wrote.
+	SelectionExpressionUnavailable InvariantCode = "SELECTION_EXPRESSION_UNAVAILABLE"
 )
+
+// AllInvariantCodes is the complete v1 vocabulary, in declaration order.
+//
+// It exists so the boundary mappings can be tested against the vocabulary instead of against
+// a hand-copied list. Three walkers over these codes live outside this package -- the
+// observation code mapping, its string rendering, and the telemetry dimension -- and nothing
+// but a test forces them to reach every one.
+func AllInvariantCodes() []InvariantCode {
+	return []InvariantCode{
+		DeclaredSourceNotFound, DeclaredSourceKindInvalid,
+		TeamAssignmentKeyInvalid, TeamAssignmentKeyMismatch, TeamMemberCardinalityInvalid,
+		HOSTupleIncomplete, HOSDurationInvalid, HOSAnchorMismatch, HOSAggregateInvalid,
+		SelectionCardinalityInvalid, SelectionEmpty, SelectionGuardUnsatisfied,
+		SelectionExpressionUnavailable,
+	}
+}
 
 // InvariantScope is the complete scope vocabulary for derived obligations.
 type InvariantScope uint8
@@ -305,11 +407,26 @@ func cloneAggregate(input *AggregateRelatedFieldsDeclaration) *AggregateRelatedF
 	}
 }
 
+func cloneSelectAssign(input *SelectAssignDeclaration) *SelectAssignDeclaration {
+	if input == nil {
+		return nil
+	}
+	clone := *input
+	clone.Selector = cloneSelector(input.Selector)
+	clone.Guard = cloneExpr(input.Guard)
+	clone.Assignments = make([]FieldAssignment, len(input.Assignments))
+	for i, assignment := range input.Assignments {
+		clone.Assignments[i] = FieldAssignment{Target: assignment.Target, Value: cloneExpr(assignment.Value)}
+	}
+	return &clone
+}
+
 func cloneTransformation(input TransformationDeclaration) TransformationDeclaration {
 	return TransformationDeclaration{
 		ID: input.ID, Operator: input.Operator, DeclaredReads: slices.Clone(input.DeclaredReads),
 		DeclaredWrites: slices.Clone(input.DeclaredWrites), After: slices.Clone(input.After),
 		Form: cloneForm(input.Form), Aggregate: cloneAggregate(input.Aggregate),
+		SelectAssign: cloneSelectAssign(input.SelectAssign),
 	}
 }
 

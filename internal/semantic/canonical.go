@@ -53,6 +53,16 @@ import (
 //   ruleset:      tag, sorted complete transformation declarations, sorted
 //                 compiler-derived invariant declarations, sorted checkpoint
 //                 declarations
+//   transformation declaration: rule ID, operator byte, declared reads,
+//                 declared writes, dependency IDs, then the union payloads in
+//                 order -- Form and Aggregate each behind a one-byte presence
+//                 marker, and SelectAssign written only when present and with
+//                 NO marker, so that adding it left the bytes of every
+//                 declaration that lacks it unchanged. A payload appended
+//                 later must do the same
+//   select-assign payload: selector kind, cardinality kind and count, optional
+//                 filter predicate, optional grouping expression, group guard,
+//                 then each assignment as target path and value expression
 //   compiler input: tag, schema digest, ruleset digest, compiler-semantics
 //                 version, sorted complete profile source declarations
 //   plan:         tag, schema digest, ruleset digest, compiler-semantics
@@ -634,6 +644,10 @@ func encodeRuleset(rules normalizedRuleset) ([]byte, error) {
 			if transformation.Aggregate != nil {
 				invariants = append(invariants, aggregateInvariants(transformation.ID, transformation.Aggregate)...)
 			}
+		case OperatorSelectAndAssign:
+			if transformation.SelectAssign != nil {
+				invariants = append(invariants, selectAssignInvariants(transformation.ID, transformation.SelectAssign)...)
+			}
 		}
 	}
 	sort.Slice(invariants, func(i, j int) bool { return invariants[i].key < invariants[j].key })
@@ -760,6 +774,41 @@ func encodeTransformationDeclaration(encoder *canonicalEncoder, transformation T
 			encoder.string(string(form.OutputKey.Field))
 		})
 	})
+	// APPEND-ONLY, AND DELIBERATELY NOT AN encoder.optional. Form and Aggregate each write a
+	// presence byte, so mirroring them here would have written one more byte into EVERY
+	// transformation ever encoded -- re-identifying every stored ruleset, plan, checkpoint
+	// and journal in a scheme whose durability argument is that storage cannot lie about
+	// identity because the reader recompiles and compares. The golden vectors caught it.
+	//
+	// Writing nothing when the payload is absent leaves those bytes untouched, and cannot
+	// collide: a declaration carrying this payload also carries operator byte 0x03, which no
+	// v1 ruleset could hold, and appending distinct bytes never equals appending none.
+	//
+	// The presence bytes on Form and Aggregate stay. They are what v1 encoded, and removing
+	// them would be the same break in the other direction.
+	if transformation.SelectAssign != nil {
+		payload := transformation.SelectAssign
+		selector := payload.Selector
+		encoder.string(string(selector.Kind))
+		encoder.byte(byte(selector.Members.Kind))
+		encoder.uint64(selector.Members.Count)
+		// Presence is explicit for the same reason encodeSelector makes it explicit: a
+		// selector with no predicate must not encode as one whose predicate is absent for
+		// some other reason.
+		encoder.optional(selector.Where != nil, func() { encodeExpr(encoder, *selector.Where) })
+		encoder.optional(selector.GroupBy != nil, func() { encodeExpr(encoder, *selector.GroupBy) })
+		// THE GUARD PARTICIPATES IN THE RULESET DIGEST, and therefore in the PlanID. Two
+		// rulesets differing only in their guard mean different things, produce different
+		// patches, and must not share an identity -- the acceptance test for this operator
+		// asserts exactly that, because a payload absent from this function would be
+		// invisible here and correct everywhere else.
+		encodeExpr(encoder, payload.Guard)
+		encoder.uint64(uint64(len(payload.Assignments)))
+		for _, assignment := range payload.Assignments {
+			encoder.string(string(assignment.Target))
+			encodeExpr(encoder, assignment.Value)
+		}
+	}
 	encoder.optional(transformation.Aggregate != nil, func() {
 		aggregate := transformation.Aggregate
 		encoder.string(string(aggregate.Target.Rule))
