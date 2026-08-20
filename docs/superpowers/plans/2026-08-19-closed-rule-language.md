@@ -207,18 +207,20 @@ because selection cannot be built without it. Deterministic, total, refusing rat
 
 ## The next slice, and its acceptance property
 
-**A `Transform` is an architectural boundary, not the next integer.** Everything built so far
-establishes authoring → compile → select → evaluate a group predicate. What it does not
-establish is that any of it is *reachable*: the group entry points have no non-test callers,
-so the machinery is potential semantics rather than semantics.
+**A `Transform` is an architectural boundary, not the next integer.** The slices so far
+establish authoring → compile → select, and (once slice 3 lands) evaluating a group predicate
+in isolation. What none of them establishes is that any of it is *reachable*: `CompileExpression`,
+`CompileSelector`, `Select` and the group entry points all have no non-test callers, so what
+exists is potential semantics rather than semantics.
 
 **Reachability is therefore an acceptance property of that slice, not a consequence of it.**
 The slice is not done because a `Transform` type exists and is unit-tested. It is done when one
 end-to-end fixture demonstrates that **altering a group predicate changes an observable
 transform result** — authored rule, compiled, selected, grouped, predicate evaluated, patch
 proposed, transition observable. Anything less leaves carefully verified machinery behind a
-door nobody opens, which is the state this slice is currently in and which "Done" concealed
-until it was written down.
+door nobody opens, which is the state slices 1 through 3 are in. Worth naming because a slice
+heading that reads "done" means its machinery exists, not that production can reach it, and
+nothing in this document distinguished those until now.
 
 That slice also unblocks three things recorded as deferred: the group kinds get a canonical
 encoding with a golden vector, because something can finally reach the encoder; decision 4's

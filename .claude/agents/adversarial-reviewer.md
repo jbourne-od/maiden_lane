@@ -265,20 +265,39 @@ every diff.
     Note the overlap with class 4: "two derivations of one fact" is class 4's shape seen from
     the value's side. File under whichever reads more clearly, not both.
 
-13. **One semantic proposition, implemented more than once.** Five consecutive reviews of one
-    programme found this, which makes it the most productive class on the list. The shape:
-    a single rule about what is legal gets written twice, one copy is hardened or tested, and
-    the other stays wrong. Instances: an entity-kind check in the compiler and again in the
-    evaluator; a predicate call site and a grouping call site of one checker; `any_members`
-    and group-level `any` terminals added in the same commit; a vocabulary walker updated for
-    two of three field-carrying kinds.
+13. **One semantic proposition enforced in more than one place, where nothing forces the
+    places to agree or to all be exercised.** Repeatedly the most productive
+    question to ask on this programme, and the one whose remedy is easiest to get wrong — an earlier draft of
+    this entry prescribed "collapse the duplicates", which this repository's own history
+    refutes. Read the whole entry before filing under it.
 
-    **Testing every duplicate is inferior to eliminating the duplication, and that is what to
-    ask for.** Two boundaries may both refuse — defence in depth is legitimate and sometimes
-    required — but they should refuse because they invoke *the same definition of legality*,
-    not because two authors independently wrote the same comparison. When you find a rule with
-    more than one implementation, the finding is the duplication, not the untested copy;
-    independent implementations of one proposition need explicit justification.
+    The three ways it goes wrong are different defects with different fixes:
+
+    - **Two implementations that can disagree.** A vocabulary walker naming two of three
+      field-carrying kinds; a compiler and an evaluator mapping a value to a type through
+      functions with different refusal behaviour. Fix: one definition, shared.
+    - **One implementation, several call sites, only some exercised.** `compileSelectorExpr`
+      is written once and invoked twice, and hardcoding a constant in the grouping call
+      survived the whole suite because only the predicate call was pinned. Nothing is
+      duplicated here and collapsing nothing would help — this is class 7's mutation surface,
+      and the fix is to pin every site.
+    - **Collapsing onto the wrong definition.** Class 12 instance 4 was *caused* by a
+      collapse: two literal mappings were merged onto the one that checks the kind and not the
+      validity. "They invoke the same definition" is satisfied by a defective merge and a
+      correct one alike, so it is not the test.
+
+    **Legitimate defence in depth looks like duplication and is not.** The entity-kind rule is
+    enforced by the compiler against the selector's declared kind and by the evaluator against
+    the bound entity's actual kind. Those compare *different references on purpose*, because
+    the evaluator is reachable without the compiler, and the mandate records the removal of
+    either as a shipped defect. Two enforcements of one proposition are correct exactly when
+    each is reachable independently; the finding is never "delete one".
+
+    So what to ask: **enumerate every place this proposition is enforced. For each, is it
+    reachable independently, and is it independently exercised?** File the sites that are
+    reachable and unpinned, and the pairs that can disagree about what the rule means. Do not
+    file the existence of more than one enforcement.
+
 
 14. **A specialized traversal that closes over its own recursion.** A whole-structure invariant
     — a depth bound, a node budget, a binding rule, a cycle check, a canonicalization
@@ -288,8 +307,11 @@ every diff.
     passes, because the original walker still enforces it everywhere else.
 
     Found here as a depth bound: `checkExprInScope` recursed into itself for composition and
-    reached `checkExpr` only at member-scope leaves, so group-scope nesting was unbounded
-    exactly where HLD §8 requires a bound.
+    reached `checkExpr` only at member-scope leaves, so group-scope nesting was unbounded. Note
+    what the invariant rests on — HLD §8 requires *bounded arithmetic*, not bounded nesting;
+    the depth limit is a kernel engineering decision justified in its own comment as a stack
+    and encoder hazard. An earlier draft of this entry attributed it to the spec, which would
+    have told a future author the constant is spec-fixed rather than revisable.
 
     The question to ask: **can this traversal consume the whole structure without ever crossing
     the guard that owns the invariant?** If yes, every guard downstream of that crossing is
