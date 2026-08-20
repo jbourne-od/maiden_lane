@@ -270,6 +270,21 @@ rules produce C(10,2) = 45 unresolved write conflicts.
 The three group kinds got their canonical encoding and golden vectors here, as `encodeExpr`'s
 default arm promised they would when a Transform made them reachable.
 
+**The boundary cannot author this rule yet, and that is the same lesson one layer out.**
+`rulesetFromWire` translates a closed operator enum with two values and refuses anything else,
+so no client can submit a `SelectAssign` rule: the operator is reachable from
+`ExecuteTransition` and not from HTTP. Giving the contract this operator means giving JSON a
+representation for a selector, a group-scoped guard and an expression tree, which is its own
+slice. Recorded because "reachable" was the acceptance property of this one, and it was
+demonstrated at the semantic boundary rather than at the API boundary.
+
+Finding it turned up a fail-open defect worth its own line: `transformationToWire`'s switch had
+no default, so a declaration whose operator the contract cannot express projected to a wire
+object carrying the zero operator token and no payload -- a boundary describing a rule nobody
+holds. It now refuses, and the handlers answer with an internal-error problem rather than a
+plausible lie. Unreachable today, since nothing can store such a plan; pinned anyway, because
+"unreachable, therefore fine" is exactly what left the group node kinds unencodable.
+
 **Two limitations, recorded rather than absorbed.**
 
 *A declaration the encoder cannot encode is an error, not a diagnostic,* and this is forced

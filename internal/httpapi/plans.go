@@ -133,8 +133,15 @@ func (s *server) CreatePlan(w http.ResponseWriter, r *http.Request, params opena
 
 	// Creation returns identities only. Whoever just submitted declarations
 	// already holds them; the debug projection belongs on retrieval.
-	writeJSON(w, http.StatusCreated,
-		planToWire(plan, compilation.Profiles(), schema, request.CompilerSemanticsVersion, false))
+	projected, err := planToWire(plan, compilation.Profiles(), schema, request.CompilerSemanticsVersion, false)
+	if err != nil {
+		// The plan compiled but cannot be described in this contract version. Refusing is
+		// the only honest answer: the alternative is a response describing a rule the
+		// server does not hold.
+		writeProblem(w, problemInternalError, nil)
+		return
+	}
+	writeJSON(w, http.StatusCreated, projected)
 }
 
 // GetPlan returns a stored plan, including the declarations the compiler
@@ -160,8 +167,13 @@ func (s *server) GetPlan(w http.ResponseWriter, r *http.Request, planID openapiv
 		return
 	}
 
-	writeJSON(w, http.StatusOK, planToWire(plan, record.Compilation.Profiles(),
-		record.Schema, plan.CompilerVersion(), true))
+	projected, err := planToWire(plan, record.Compilation.Profiles(),
+		record.Schema, plan.CompilerVersion(), true)
+	if err != nil {
+		writeProblem(w, problemInternalError, nil)
+		return
+	}
+	writeJSON(w, http.StatusOK, projected)
 }
 
 // scope validates the tenant header and answers the request when it is
