@@ -167,15 +167,25 @@ every diff.
      cannot test the symmetric case, and the symmetric case is where a storage constraint
      once hid.
 
-   The general form, which subsumes the middle two and has cost this repository several
-   findings: **a guard is only tested when the fixture reaches the state where that guard is
-   the SOLE reason for the refusal.** If a second rule refuses the same input first, the test
-   stands near the property rather than pinning it, and narrowing or deleting the guard
-   survives. Instances so far: every cardinality fixture was ungrouped, where a different rule
-   refused the zero count independently; an overflow fixture varied magnitude but not sign, so
-   only one disjunct of a compound guard was ever the reason; and a test that built a two-kind
+   A fifth tell, specific to guards that REFUSE, and additional to the four above rather than
+   a replacement for any of them: **a guard is only tested when the fixture reaches the state
+   where that guard is the sole reason for the refusal.** If a second rule refuses the same
+   input first, the test stands near the property rather than pinning it, and narrowing or
+   deleting the guard survives.
+
+   It does not cover the other bullets and must not be read as doing so. Bullet 2 is about an
+   *accepted* value whose fixture coincides with what broken code would guess — no refusal is
+   involved. Bullet 3 is about a dimension the state space cannot vary, and its content is the
+   remedy, a golden vector; there is a live example in this repository with no refusal anywhere
+   in it (a sort tiebreak that no fixture size can distinguish, because the standard library's
+   sort happens to preserve all-ties order).
+
+   Instances of this fifth tell: an overflow fixture varied magnitude but not sign, so only one
+   disjunct of a compound guard was ever the reason for refusal; a test that built a two-kind
    schema to isolate an entity-kind check then passed a one-kind schema, so a declaredness
-   check added later refused first.
+   check added later refused first; and a *compound* cardinality guard was half-pinned, because
+   an ungrouped-unsatisfiability rule independently refused the exactly-zero arm while nothing
+   independently refused the at-least-zero arm.
 
 8. **A returned value that shares mutable state.** Copying a struct copies slice headers
    and map references. Every accessor and every record returned from a store must share
@@ -203,13 +213,28 @@ every diff.
     one fact from different references; and any place where a compile-time check establishes a
     property that an executable path then ASSUMES rather than re-establishes.
 
-    Five instances in twelve reviews of one branch, and the fourth lived inside the fix for
-    the second: `equal` over bools read the value field, which is zero for a bool result; an
-    invalid literal typed as invalid with a nil error, so equality took the value path; a
-    literal valid in kind but not content was refused by the compiler and accepted by the
-    evaluator; a field path read its value off an entity of another kind, correctly typed; and
-    `exists()` over an undeclared path answered false rather than refusing. Each compiled,
-    typed and evaluated cleanly.
+    Five instances in twelve reviews of one branch, numbered as the code's own comments number
+    them:
+
+    1. `equal` over bools read the value field, which is the zero Value for a bool result, so
+       `equal(exists(f), exists(f))` was false even when f was present.
+    2. An invalid literal typed as `TypeInvalid` with a nil error, so equality took the value
+       path and answered false for two byte-identical operands.
+    3. A field path read its value off an entity of another kind — a REFERENT mismatch rather
+       than a kind/payload one, and correctly typed.
+    4. A literal valid in kind but not in content: refused by the compiler, accepted by the
+       evaluator. **This one lived inside the fix for the second**, because that fix collapsed
+       two disagreeing mappings onto the wrong one.
+    5. `exists()` over an undeclared path answered false rather than refusing.
+
+    **Four of the five were compiler/evaluator disagreements**, and that is the productive
+    question rather than an incidental detail: the compiler refused the very input the
+    executable path answered. So the check that pays is not "does this crash" but "does every
+    boundary that admits an input agree with every boundary that acts on it". Only the first
+    passed cleanly through both halves.
+
+    Note the overlap with class 4: "two derivations of one fact" is class 4's shape seen from
+    the value's side. File under whichever reads more clearly, not both.
 
 13. **A deliberate omission left unwritten.** Anything the change could plausibly have
     included and did not must be recorded in the claims file or the programme's progress
