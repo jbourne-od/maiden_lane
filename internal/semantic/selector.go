@@ -53,6 +53,23 @@ type Selector struct {
 	Members Cardinality
 }
 
+// cloneSelector deep-copies an authored selector, including the expressions its two
+// pointers reach. A shallow copy would share Where and GroupBy with the caller, and every
+// other declaration clone in this package exists precisely so a compiled artifact cannot be
+// mutated through the value it was built from.
+func cloneSelector(input Selector) Selector {
+	clone := Selector{Kind: input.Kind, Members: input.Members}
+	if input.Where != nil {
+		where := cloneExpr(*input.Where)
+		clone.Where = &where
+	}
+	if input.GroupBy != nil {
+		groupBy := cloneExpr(*input.GroupBy)
+		clone.GroupBy = &groupBy
+	}
+	return clone
+}
+
 // CompiledSelector is a type-checked selector with its canonical bytes.
 type CompiledSelector struct {
 	kind      EntityKind
@@ -71,6 +88,23 @@ func (c CompiledSelector) Grouped() bool { return c.groupBy != nil }
 
 // CanonicalBytes returns a copy of the v1 selector bytes.
 func (c CompiledSelector) CanonicalBytes() []byte { return bytes.Clone(c.canonical) }
+
+// cloneCompiledSelector deep-copies a compiled selector. The zero value clones to the zero
+// value, which still refuses in Select, so an operator that carries no selector stays unable
+// to run one.
+func cloneCompiledSelector(input CompiledSelector) CompiledSelector {
+	clone := CompiledSelector{kind: input.kind, schema: input.schema, members: input.members,
+		canonical: bytes.Clone(input.canonical)}
+	if input.where != nil {
+		where := cloneCompiledExpression(*input.where)
+		clone.where = &where
+	}
+	if input.groupBy != nil {
+		groupBy := cloneCompiledExpression(*input.groupBy)
+		clone.groupBy = &groupBy
+	}
+	return clone
+}
 
 // CompileSelector validates a selector against a schema and identifies it.
 func CompileSelector(
@@ -270,6 +304,43 @@ func (g Group) Key() Value { return g.key }
 // Members returns copies of the group's entities in canonical order.
 func (g Group) Members() []Entity { return cloneEntities(g.members) }
 
+// selectionDataFault reports that a Select failure was caused by the STATE, not the selector.
+//
+// The distinction decides which channel a failure leaves on, so it cannot be left to the
+// caller's reading of an error string. Select fails for two unrelated reasons: the selector
+// is unusable here (never compiled, or compiled against another schema), which is an artifact
+// fault and an abort; or the predicate or grouping expression could not be evaluated against
+// some entity -- an absent field, an overflowing sum -- which is an ordinary refusal with a
+// code, and must not take the run down as an internal error because one driver lacks a depot.
+//
+// An earlier version of executeSelectAndAssign turned every Select error into an abort, on a
+// comment asserting that Select only ever fails for artifact reasons. It does not.
+// Select returns this type UNWRAPPED, so callers may assert on it directly. Stated because
+// the semantic package's import allowlist excludes "errors", so errors.As is unavailable and
+// a future wrap here would silently break every caller's classification.
+//
+// UNEXPORTED, and Error is nil-safe. An exported version with one unexported field could
+// still be built as SelectionDataFault{} from any package, whose Error dereferenced a nil
+// error interface and panicked -- a zero value that crashes rather than refuses, in a package
+// whose other zero values (CardinalityInvalid, TypeInvalid, scopeInvalid) all refuse by
+// construction. Nothing outside this package needs to classify a Select failure.
+//
+// entity names the row the evaluation failed on, so a refusal can cite it. Select builds the
+// fault at the only three sites that can raise one, each of which holds the entity.
+type selectionDataFault struct {
+	err    error
+	entity EntityRef
+}
+
+func (f selectionDataFault) Error() string {
+	if f.err == nil {
+		return "selection data fault with no cause"
+	}
+	return f.err.Error()
+}
+
+func (f selectionDataFault) Unwrap() error { return f.err }
+
 // Select applies the selector to a state.
 //
 // ORDER IS AN IDENTITY PROBLEM HERE, not a presentation one. A set-scoped rule iterates, and
@@ -315,7 +386,7 @@ func (c CompiledSelector) Select(state State) (Selection, error) {
 		if c.where != nil {
 			matched, err := evaluateBool(state.Schema(), c.where.expr, entity)
 			if err != nil {
-				return Selection{}, fmt.Errorf("selector predicate: %w", err)
+				return Selection{}, selectionDataFault{fmt.Errorf("selector predicate: %w", err), entity.Ref()}
 			}
 			if !matched {
 				continue
@@ -329,11 +400,13 @@ func (c CompiledSelector) Select(state State) (Selection, error) {
 		}
 		key, err := evaluateValue(state.Schema(), c.groupBy.expr, entity)
 		if err != nil {
-			return Selection{}, fmt.Errorf("selector grouping: %w", err)
+			return Selection{}, selectionDataFault{fmt.Errorf("selector grouping: %w", err), entity.Ref()}
 		}
 		encoded, err := encodeGroupKey(key)
 		if err != nil {
-			return Selection{}, err
+			// The key came out of the state, so a key that cannot be canonicalized is a fact
+			// about the data and not about the selector.
+			return Selection{}, selectionDataFault{fmt.Errorf("selector grouping key: %w", err), entity.Ref()}
 		}
 		existing, present := byKey[encoded]
 		if !present {

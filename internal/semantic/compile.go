@@ -223,7 +223,13 @@ func (p Plan) MustTransformation(id RuleID) CompiledTransformation {
 // CompiledTransformation contains normalized source meaning plus every
 // compiler-derived access, dependency, invariant, and stable execution level.
 type CompiledTransformation struct {
-	declaration  TransformationDeclaration
+	declaration TransformationDeclaration
+	// selector is the compiled form of a SelectAssign payload's selector, and is the zero
+	// value for every other operator. It is compiled HERE rather than at execution because
+	// Select refuses a selector it was not handed compiled, and re-checking at execution
+	// would make the executor a second compiler -- the shape decision 3 refuses for read/
+	// write derivation, for the same reason.
+	selector     CompiledSelector
 	reads        []FieldPath
 	writes       []FieldPath
 	accesses     []SemanticAccess
@@ -383,7 +389,7 @@ func Compile(request CompileRequest) (Compilation, error) {
 	diagnostics := make([]CompilationDiagnostic, 0)
 	compiledByID := make(map[RuleID]CompiledTransformation, len(rules.transformations))
 	for _, declaration := range rules.transformations {
-		compiled, derivedDiagnostics := deriveTransformation(schema, declaration)
+		compiled, derivedDiagnostics := deriveTransformation(schema, request.CompilerSemanticsVersion, declaration)
 		diagnostics = append(diagnostics, derivedDiagnostics...)
 		compiledByID[declaration.ID] = compiled
 	}
@@ -432,6 +438,10 @@ func normalizeRuleset(input RulesetDeclaration) (normalizedRuleset, error) {
 		if !validSemanticName(string(raw.ID)) {
 			return normalizedRuleset{}, fmt.Errorf("rule ID is empty or invalid UTF-8")
 		}
+		// BEFORE cloneTransformation, which recurses over the authored expression trees.
+		if err := checkAuthoredPayloadBounds(raw); err != nil {
+			return normalizedRuleset{}, fmt.Errorf("rule %q: %w", raw.ID, err)
+		}
 		transformation := cloneTransformation(raw)
 		var err error
 		if transformation.DeclaredReads, err = normalizeFieldSet(transformation.DeclaredReads); err != nil {
@@ -474,7 +484,53 @@ func normalizeRuleset(input RulesetDeclaration) (normalizedRuleset, error) {
 	return normalizedRuleset{transformations: transformations, checkpoints: checkpoints}, nil
 }
 
+// checkAuthoredPayloadBounds bounds every authored expression tree a declaration carries,
+// before anything walks one recursively.
+//
+// It reads the caller's declaration rather than a clone, deliberately: cloning is the first
+// recursion, so a check that ran after it would already have overflowed.
+func checkAuthoredPayloadBounds(raw TransformationDeclaration) error {
+	payload := raw.SelectAssign
+	if payload == nil {
+		// The frozen operators carry no expressions. When one gains them, it comes here.
+		return nil
+	}
+	trees := make([]Expr, 0, 3+len(payload.Assignments))
+	if payload.Selector.Where != nil {
+		trees = append(trees, *payload.Selector.Where)
+	}
+	if payload.Selector.GroupBy != nil {
+		trees = append(trees, *payload.Selector.GroupBy)
+	}
+	trees = append(trees, payload.Guard)
+	for _, assignment := range payload.Assignments {
+		trees = append(trees, assignment.Value)
+	}
+	for _, tree := range trees {
+		if err := checkAuthoredExprBound(tree); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func normalizeTransformationPayload(transformation *TransformationDeclaration) error {
+	if payload := transformation.SelectAssign; payload != nil {
+		// AUTHORED ORDER IS NOT SEMANTIC HERE, and leaving it unnormalized put it in the
+		// ruleset identity. Every value is evaluated against the same pre-state member, no
+		// assignment observes another's result, duplicate targets are refused, and NewPatch
+		// sorts an update's fields by name -- so two rulesets listing the same assignments in
+		// different order produce byte-identical patches, journals and states, and differed
+		// only in their PlanID and therefore their SemanticRunID.
+		//
+		// This is the arm that was missing: every other authored payload list in this
+		// function is sorted, and RulesetDeclaration's own doc says authored order is not
+		// semantic. Duplicate detection stays in deriveTransformation, where it is an
+		// attributable diagnostic rather than an error.
+		sort.Slice(payload.Assignments, func(i, j int) bool {
+			return payload.Assignments[i].Target < payload.Assignments[j].Target
+		})
+	}
 	if form := transformation.Form; form != nil {
 		sort.Slice(form.Sources, func(i, j int) bool {
 			if form.Sources[i].Kind != form.Sources[j].Kind {
@@ -607,7 +663,9 @@ func normalizeProfiles(input []ProfileDeclaration) ([]ProfileDeclaration, error)
 	return profiles, nil
 }
 
-func deriveTransformation(schema Schema, declaration TransformationDeclaration) (CompiledTransformation, []CompilationDiagnostic) {
+func deriveTransformation(
+	schema Schema, version CompilerSemanticsVersion, declaration TransformationDeclaration,
+) (CompiledTransformation, []CompilationDiagnostic) {
 	compiled := CompiledTransformation{declaration: cloneTransformation(declaration)}
 	diagnostics := make([]CompilationDiagnostic, 0)
 	for _, path := range declaration.DeclaredReads {
@@ -623,9 +681,14 @@ func deriveTransformation(schema Schema, declaration TransformationDeclaration) 
 	if declaration.Aggregate != nil {
 		active++
 	}
+	if declaration.SelectAssign != nil {
+		active++
+	}
 	if active != 1 || (declaration.Operator == OperatorFormRelatedEntity && declaration.Form == nil) ||
 		(declaration.Operator == OperatorAggregateRelatedFields && declaration.Aggregate == nil) ||
-		(declaration.Operator != OperatorFormRelatedEntity && declaration.Operator != OperatorAggregateRelatedFields) {
+		(declaration.Operator == OperatorSelectAndAssign && declaration.SelectAssign == nil) ||
+		(declaration.Operator != OperatorFormRelatedEntity && declaration.Operator != OperatorAggregateRelatedFields &&
+			declaration.Operator != OperatorSelectAndAssign) {
 		diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "operator_union"))
 	}
 	reads := make([]FieldPath, 0)
@@ -668,6 +731,77 @@ func deriveTransformation(schema Schema, declaration TransformationDeclaration) 
 				SemanticAccess{Kind: AccessRelation, Mode: AccessWrite, RelationKind: form.RelationKind},
 			)
 			invariants = append(invariants, formInvariants(declaration.ID, form.GroupingField)...)
+		}
+	case OperatorSelectAndAssign:
+		if declaration.SelectAssign != nil {
+			payload := declaration.SelectAssign
+			selector, err := CompileSelector(schema, version, payload.Selector)
+			if err != nil {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "selector"))
+			} else if !selector.Grouped() {
+				// Refused at compile time rather than left to fail at evaluation. An
+				// ungrouped selector cannot carry a group-scoped guard, and the guard is
+				// this operator's whole point.
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "selector_ungrouped"))
+			} else {
+				compiled.selector = selector
+			}
+			if len(payload.Assignments) == 0 {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "assignments_empty"))
+			}
+			kind := payload.Selector.Kind
+			guardType, guardErr := checkGroupExpr(schema, kind, payload.Guard, 0)
+			if guardErr != nil || guardType != TypeBool {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "guard"))
+			}
+			// READS ARE DERIVED FROM THE EXPRESSION TREES, which is the half decision 3
+			// records as missing. Every path the rule can read must appear, or the write-
+			// conflict analysis and DECLARED_ACCESS_MISMATCH both reason over a read set
+			// smaller than the truth -- and under-derivation is the fail-OPEN direction.
+			if payload.Selector.Where != nil {
+				reads = append(reads, readFieldPaths(*payload.Selector.Where)...)
+			}
+			if payload.Selector.GroupBy != nil {
+				reads = append(reads, readFieldPaths(*payload.Selector.GroupBy)...)
+			}
+			reads = append(reads, readFieldPaths(payload.Guard)...)
+			seenTargets := make(map[FieldPath]struct{}, len(payload.Assignments))
+			for _, assignment := range payload.Assignments {
+				// THE TARGET, NOT THE INDEX. normalizeTransformationPayload sorts the
+				// assignments, so an index names a position in the sorted slice and not the
+				// one the author wrote -- an author who duplicated their first two
+				// assignments was told the diagnostic concerned their third. A target path
+				// is a bounded typed declaration key, which is what a detail is for, and it
+				// is stable under the sort.
+				detail := string(assignment.Target)
+				if _, duplicate := seenTargets[assignment.Target]; duplicate {
+					// Two assignments to one field would produce two FieldUpdates with the
+					// same name in one Update, which NewPatch refuses as an error rather
+					// than as a diagnostic -- so the whole compilation would fail with no
+					// attributable subject instead of refusing this rule.
+					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+				}
+				seenTargets[assignment.Target] = struct{}{}
+				writes = append(writes, assignment.Target)
+				reads = append(reads, readFieldPaths(assignment.Value)...)
+				targetKind := validateFieldPath(schema, assignment.Target, kind, 0, declaration.ID, &diagnostics)
+				valueType, valueErr := checkExprInScope(schema, kind, assignment.Value, memberScope, 0)
+				if valueErr != nil {
+					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+				} else if pathErr := checkPathsBindKind(assignment.Value, kind); pathErr != nil {
+					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+				} else if targetKind != 0 {
+					declaredType, typeErr := valueKindType(targetKind)
+					if typeErr != nil || declaredType != valueType {
+						// The assignment writes a value of one type into a field declared as
+						// another. Caught here because ApplyPatch does not re-derive types.
+						diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+					}
+				}
+			}
+			accesses = append(accesses, SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: kind},
+				SemanticAccess{Kind: AccessEntity, Mode: AccessWrite, EntityKind: kind})
+			invariants = append(invariants, selectAssignInvariants(declaration.ID, payload)...)
 		}
 	case OperatorAggregateRelatedFields:
 		if declaration.Aggregate != nil {
@@ -1005,6 +1139,64 @@ func formInvariants(rule RuleID, grouping FieldPath) []InvariantDeclaration {
 	}
 }
 
+// selectAssignInvariants derives the obligations of a selector-scoped rule.
+//
+// The reads recorded on each obligation are the paths the CHECK reads, not the rule's whole
+// read set: an evidence set wider than the fact that failed makes an attribution that names
+// fields the refusal did not consult.
+// The obligation suffixes of a selector-scoped rule, in the order executeSelectAndAssign
+// checks them. Constants because the compiler derives them and the executor names them, and
+// a string literal in two places is a proposition nothing forces to agree.
+const (
+	selectorEvaluableSuffix = "01-selector-evaluable"
+	cardinalitySuffix       = "02-cardinality"
+	selectionNonEmptySuffix = "03-selection-nonempty"
+	groupEvaluableSuffix    = "04-evaluable"
+	guardSuffix             = "05-guard"
+)
+
+func invariantKey(rule RuleID, suffix string) string { return string(rule) + "/" + suffix }
+
+func selectAssignInvariants(rule RuleID, payload *SelectAssignDeclaration) []InvariantDeclaration {
+	grouping := make([]FieldPath, 0)
+	if payload.Selector.GroupBy != nil {
+		grouping = readFieldPaths(*payload.Selector.GroupBy)
+	}
+	values := make([]FieldPath, 0)
+	for _, assignment := range payload.Assignments {
+		values = append(values, readFieldPaths(assignment.Value)...)
+	}
+	// NUMBERED IN THE ORDER executeSelectAndAssign CHECKS THEM, and that is a correctness
+	// constraint rather than a tidiness one. Obligations are sorted by key, and
+	// evaluatedFailureResults marks every declaration BEFORE the failing key as passed --
+	// so a key ordered ahead of the check that actually runs first produces a sealed,
+	// digested failure report attesting to an obligation nothing established.
+	//
+	// SELECTION_EXPRESSION_UNAVAILABLE APPEARS TWICE, and that is why. It is raised in two
+	// places that cannot be adjacent: once by the SELECTOR, whose filter and grouping
+	// expressions are evaluated before any group exists, and once by the GUARD and the
+	// assignment values, which are evaluated per group after cardinality and emptiness have
+	// been established. A single obligation carrying both would have to sit either before
+	// the cardinality check or after it, and would lie in whichever case it did not sit
+	// beside -- an earlier version put it fourth, so a selector fault sealed a report
+	// claiming the cardinality obligation and the non-empty obligation had both passed when
+	// nothing had been grouped at all. Two obligations, one code, distinct keys, each
+	// carrying the reads ITS check consults.
+	selectorPaths := make([]FieldPath, 0)
+	if payload.Selector.Where != nil {
+		selectorPaths = append(selectorPaths, readFieldPaths(*payload.Selector.Where)...)
+	}
+	selectorPaths = append(selectorPaths, grouping...)
+	guard := readFieldPaths(payload.Guard)
+	return []InvariantDeclaration{
+		newInvariant(rule, selectorEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, selectorPaths),
+		newInvariant(rule, cardinalitySuffix, SelectionCardinalityInvalid, InvariantRulePrecondition, grouping),
+		newInvariant(rule, selectionNonEmptySuffix, SelectionEmpty, InvariantRulePrecondition, grouping),
+		newInvariant(rule, groupEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, append(slices.Clone(guard), values...)),
+		newInvariant(rule, guardSuffix, SelectionGuardUnsatisfied, InvariantRulePrecondition, guard),
+	}
+}
+
 func aggregateInvariants(rule RuleID, aggregate *AggregateRelatedFieldsDeclaration) []InvariantDeclaration {
 	result := []InvariantDeclaration{
 		newInvariant(rule, "01-member-cardinality", TeamMemberCardinalityInvalid, InvariantRulePrecondition, nil),
@@ -1210,7 +1402,8 @@ func cloneInvariant(input InvariantDeclaration) InvariantDeclaration {
 
 func cloneCompiledTransformation(input CompiledTransformation) CompiledTransformation {
 	result := CompiledTransformation{declaration: cloneTransformation(input.declaration), reads: slices.Clone(input.reads), writes: slices.Clone(input.writes),
-		accesses: slices.Clone(input.accesses), dependencies: slices.Clone(input.dependencies), level: input.level}
+		accesses: slices.Clone(input.accesses), dependencies: slices.Clone(input.dependencies), level: input.level,
+		selector: cloneCompiledSelector(input.selector)}
 	result.invariants = make([]InvariantDeclaration, len(input.invariants))
 	for i, invariant := range input.invariants {
 		result.invariants[i] = cloneInvariant(invariant)

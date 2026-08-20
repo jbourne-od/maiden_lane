@@ -413,6 +413,64 @@ func valueKindType(kind ValueKind) (ExprType, error) {
 	}
 }
 
+// cloneCompiledExpression deep-copies a compiled expression, tree and bytes.
+func cloneCompiledExpression(input CompiledExpression) CompiledExpression {
+	return CompiledExpression{schema: input.schema, version: input.version, expr: cloneExpr(input.expr),
+		exprType: input.exprType, canonical: bytes.Clone(input.canonical)}
+}
+
+// maxExprNodes bounds the NODE COUNT of an authored tree, which depth does not.
+//
+// Expr.Args is a slice of values, so one Expr may appear as several children without being
+// copied: forty levels of Expr{Kind: ExprAll, Args: []Expr{node, node}} is depth forty --
+// comfortably inside maxExprDepth -- and 2^40 nodes. An earlier version of the bound below
+// checked only depth, so it walked all 2^40 of them and never returned. Iterative was the
+// right shape and the wrong dimension: it stopped the stack overflow and left an unbounded
+// amount of work, which is the fail-open half of the same hazard.
+//
+// The number is generous against any authored rule and negligible against an aliased DAG,
+// which is the only gap it has to close.
+const maxExprNodes = 4096
+
+// checkAuthoredExprBound refuses an authored tree deeper, or larger, than the language admits.
+//
+// ITERATIVE, WITH AN EXPLICIT STACK, because it is the guard that protects the recursive
+// walks and must not be one itself.
+//
+// maxExprDepth is enforced by checkExpr and checkExprInScope, which for a selector-scoped
+// rule run inside deriveTransformation -- and normalizeRuleset clones the authored trees and
+// encodeRuleset walks them, both BEFORE that. Those two recursions therefore consumed a tree
+// nothing had bounded: a guard nested a million deep exhausted the goroutine stack in
+// cloneExpr, which is a fatal runtime error rather than a refusal, and the bound that would
+// have rejected it at 64 never ran. The same shape as a specialized traversal closing over
+// its own recursion, one layer out: a new caller reached the walk without crossing the guard
+// that owns its invariant.
+func checkAuthoredExprBound(expr Expr) error {
+	type framed struct {
+		node  Expr
+		depth int
+	}
+	stack := []framed{{node: expr}}
+	visited := 0
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if current.depth > maxExprDepth {
+			return fmt.Errorf("expression nests deeper than %d", maxExprDepth)
+		}
+		visited++
+		if visited > maxExprNodes {
+			// Counted as the walk proceeds rather than measured up front, because measuring
+			// the size of the tree is the very walk that has to be bounded.
+			return fmt.Errorf("expression expands to more than %d nodes", maxExprNodes)
+		}
+		for i := range current.node.Args {
+			stack = append(stack, framed{node: current.node.Args[i], depth: current.depth + 1})
+		}
+	}
+	return nil
+}
+
 // encodeExpr writes one node and its operands.
 //
 // Recursive, with no domain tag of its own: the tag is written once at the top by
@@ -422,9 +480,11 @@ func encodeExpr(encoder *canonicalEncoder, expr Expr) {
 	switch expr.Kind {
 	case ExprLiteral:
 		encoder.value(*expr.Literal)
-	case ExprField, ExprExists:
+	case ExprField, ExprExists, ExprAllEqual:
+		// ExprAllEqual encodes exactly as the other field-carrying kinds: the kind byte is
+		// what separates them, which is the scheme the golden vectors pin.
 		encoder.string(string(expr.Field))
-	case ExprNot, ExprAll, ExprAny, ExprEqual, ExprLess, ExprAdd:
+	case ExprNot, ExprAll, ExprAny, ExprEqual, ExprLess, ExprAdd, ExprAllMembers, ExprAnyMembers:
 		encoder.uint64(uint64(len(expr.Args)))
 		for i := range expr.Args {
 			encodeExpr(encoder, expr.Args[i])
@@ -433,15 +493,11 @@ func encodeExpr(encoder *canonicalEncoder, expr Expr) {
 		// EXHAUSTIVE AND FAIL-CLOSED, and the default arm is the point rather than a
 		// formality.
 		//
-		// The three group kinds deliberately have NO arm here. encodeExpr has TWO entry
-		// points, CompileExpression and encodeSelector -- an earlier version of this comment
-		// said one, which is the reasoning error CompileSelector documents having shipped
-		// thirty lines from here. Neither can reach a group kind: CompileExpression refuses
-		// them outright, and encodeSelector only ever encodes CompiledExpression values,
-		// which nothing but CompileExpression produces. An arm here would therefore be
-		// unreachable code that also removes this net for the very kinds whose encoding
-		// nobody has exercised. They get one when a Transform makes them reachable, together
-		// with a golden vector.
+		// The three group kinds got their arms above when OperatorSelectAndAssign made them
+		// reachable -- a transformation declaration encodes its authored guard, and a guard
+		// is group-scoped -- together with the golden vectors that entry promised. Until
+		// then encodeExpr had two entry points, CompileExpression and encodeSelector, and
+		// neither could reach a group kind; there are now three.
 		//
 		// checkExpr and checkOperandShape both refuse an unrecognised kind, so
 		// this arm is unreachable today. It exists because adding a kind is the expected

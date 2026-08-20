@@ -437,6 +437,12 @@ func TestSemanticCodeMappingSeparatesSpanAndInvariantVocabularies(t *testing.T) 
 		app.CodeAssessmentIdentityConflict: "ASSESSMENT_IDENTITY_CONFLICT",
 		app.CodeReplayDivergence:           "REPLAY_DIVERGENCE",
 	}
+	// The four SELECTION_* entries below are also covered by
+	// TestEveryInvariantCodeReachesTheTelemetryDimension, which is driven from
+	// semantic.AllInvariantCodes rather than from this map. They stay here because this test
+	// asserts something that one does not: that an invariant code is admitted by
+	// observedCode AND by observedInvariantCode, while a span-only code is admitted by the
+	// first and refused by the second.
 	invariants := map[app.ObservationCode]string{
 		app.CodeOpEntityIdentityCollision:    "OP_ENTITY_IDENTITY_COLLISION",
 		app.CodeOpUpdateTargetNotFound:       "OP_UPDATE_TARGET_NOT_FOUND",
@@ -450,6 +456,10 @@ func TestSemanticCodeMappingSeparatesSpanAndInvariantVocabularies(t *testing.T) 
 		app.CodeTeamMemberCardinalityInvalid: "TEAM_MEMBER_CARDINALITY_INVALID",
 		app.CodeHOSTupleIncomplete:           "HOS_TUPLE_INCOMPLETE", app.CodeHOSDurationInvalid: "HOS_DURATION_INVALID",
 		app.CodeHOSAnchorMismatch: "HOS_ANCHOR_MISMATCH", app.CodeHOSAggregateInvalid: "HOS_AGGREGATE_INVALID",
+		app.CodeSelectionCardinalityInvalid:    "SELECTION_CARDINALITY_INVALID",
+		app.CodeSelectionEmpty:                 "SELECTION_EMPTY",
+		app.CodeSelectionGuardUnsatisfied:      "SELECTION_GUARD_UNSATISFIED",
+		app.CodeSelectionExpressionUnavailable: "SELECTION_EXPRESSION_UNAVAILABLE",
 	}
 	for value, want := range spanOnly {
 		got, ok := observedCode(value)
@@ -970,4 +980,33 @@ func renderAttributes(set attribute.Set) string {
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, ",")
+}
+
+// Every semantic invariant code must reach the invariant_code metric dimension.
+//
+// The map above is hand-copied, so a fifth Selection code wired through internal/app and
+// forgotten here would leave the suite green and silently drop its telemetry dimension --
+// observedCode falls through to observedInvariantCode, which would return false, and the
+// refusal would be counted under no code at all. This is driven from the vocabulary instead.
+func TestEveryInvariantCodeReachesTheTelemetryDimension(t *testing.T) {
+	codes := semantic.AllInvariantCodes()
+	if len(codes) == 0 {
+		t.Fatal("the invariant vocabulary is empty, so this test asserts nothing")
+	}
+	for _, code := range codes {
+		observation := app.ObservationCodeForInvariant(code)
+		if observation == 0 {
+			t.Errorf("semantic invariant %q maps to no observation code", code)
+			continue
+		}
+		invariant, ok := observedInvariantCode(observation)
+		if !ok || invariant.String() != string(code) {
+			t.Errorf("observedInvariantCode(%q) = %q/%t, want %q/true", code, invariant, ok, code)
+		}
+		// And through the general mapping too, since that is what a span carries.
+		general, ok := observedCode(observation)
+		if !ok || general.String() != string(code) {
+			t.Errorf("observedCode(%q) = %q/%t, want %q/true", code, general, ok, code)
+		}
+	}
 }

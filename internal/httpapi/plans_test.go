@@ -256,8 +256,12 @@ func fixtureDeclarations(t *testing.T) openapiv1.PlanDeclarations {
 	// The wire document is obtained by projecting the compiled plan, so the
 	// fixture and the contract cannot drift apart. No production test hook is
 	// exported to do this: the test lives in the package instead.
-	return declarationsToWire(plan, compilation.Profiles(), schema,
+	declarations, err := declarationsToWire(plan, compilation.Profiles(), schema,
 		inputs.Compilation.CompilerSemanticsVersion)
+	if err != nil {
+		t.Fatalf("declarationsToWire: %v", err)
+	}
+	return declarations
 }
 
 func createPlan(t *testing.T, router http.Handler, tenant string, declarations openapiv1.PlanDeclarations) openapiv1.Plan {

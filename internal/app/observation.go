@@ -198,6 +198,12 @@ const (
 	CodeArtifactLinkInconsistent
 	CodeAssessmentIdentityConflict
 	CodeReplayDivergence
+	// Appended, not inserted: the values above are an iota run, and renumbering them would
+	// change every code a stored observation holds.
+	CodeSelectionCardinalityInvalid
+	CodeSelectionEmpty
+	CodeSelectionGuardUnsatisfied
+	CodeSelectionExpressionUnavailable
 )
 
 // String returns the stable closed code token.
@@ -243,6 +249,14 @@ func (c ObservationCode) String() string {
 		return "HOS_ANCHOR_MISMATCH"
 	case CodeHOSAggregateInvalid:
 		return "HOS_AGGREGATE_INVALID"
+	case CodeSelectionCardinalityInvalid:
+		return "SELECTION_CARDINALITY_INVALID"
+	case CodeSelectionEmpty:
+		return "SELECTION_EMPTY"
+	case CodeSelectionGuardUnsatisfied:
+		return "SELECTION_GUARD_UNSATISFIED"
+	case CodeSelectionExpressionUnavailable:
+		return "SELECTION_EXPRESSION_UNAVAILABLE"
 	case CodeArtifactDigestMismatch:
 		return "ARTIFACT_DIGEST_MISMATCH"
 	case CodeArtifactLinkInconsistent:
@@ -439,6 +453,18 @@ func profileKindForKey(key semantic.ProfileKey) ProfileKind {
 	}
 }
 
+// ObservationCodeForInvariant maps a semantic invariant code to its observation code, or
+// zero if none is mapped.
+//
+// Exported so the telemetry package can check its own dimension mapping against
+// semantic.AllInvariantCodes rather than against a list re-typed into a test file. Three
+// walkers over that vocabulary live outside the semantic package -- this mapping, its string
+// rendering, and observedInvariantCode -- and the last of them had no way to be driven from
+// the vocabulary without this.
+func ObservationCodeForInvariant(code semantic.InvariantCode) ObservationCode {
+	return codeForInvariant(code)
+}
+
 func codeForInvariant(code semantic.InvariantCode) ObservationCode {
 	switch code {
 	case semantic.DeclaredSourceNotFound:
@@ -459,7 +485,20 @@ func codeForInvariant(code semantic.InvariantCode) ObservationCode {
 		return CodeHOSAnchorMismatch
 	case semantic.HOSAggregateInvalid:
 		return CodeHOSAggregateInvalid
+	case semantic.SelectionCardinalityInvalid:
+		return CodeSelectionCardinalityInvalid
+	case semantic.SelectionEmpty:
+		return CodeSelectionEmpty
+
+	case semantic.SelectionGuardUnsatisfied:
+		return CodeSelectionGuardUnsatisfied
+	case semantic.SelectionExpressionUnavailable:
+		return CodeSelectionExpressionUnavailable
 	default:
+		// Zero, and a test over semantic.AllInvariantCodes is what keeps this arm from being
+		// where a new code quietly lands. A code that reaches here renders as the empty
+		// token, so the refusal still happens and only its NAME is lost -- which is the
+		// worst possible failure to detect by reading an observation.
 		return 0
 	}
 }

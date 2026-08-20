@@ -722,3 +722,34 @@ func inPackageProjection(result SpineResult) []byte {
 	}
 	return buffer.Bytes()
 }
+
+// Every semantic invariant code must reach a named observation code.
+//
+// THE FAILURE THIS PREVENTS IS SILENT. codeForInvariant's default returns zero, and zero
+// renders as the empty token, so a refusal whose code nobody mapped still refuses -- only its
+// NAME is lost, and it is lost in the observation an operator reads to find out what happened.
+// Nothing else fails: no test, no build, no boundary check.
+//
+// It iterates semantic.AllInvariantCodes rather than a list copied into this file, because a
+// copied list is a fourth place to forget the same thing.
+func TestEveryInvariantCodeReachesANamedObservationCode(t *testing.T) {
+	codes := semantic.AllInvariantCodes()
+	if len(codes) == 0 {
+		t.Fatal("the invariant vocabulary is empty, so this test asserts nothing")
+	}
+	seen := make(map[ObservationCode]semantic.InvariantCode, len(codes))
+	for _, code := range codes {
+		observation := codeForInvariant(code)
+		if observation == 0 {
+			t.Errorf("semantic invariant %q maps to no observation code", code)
+			continue
+		}
+		if got := observation.String(); got != string(code) {
+			t.Errorf("observation code for %q renders as %q", code, got)
+		}
+		if previous, duplicate := seen[observation]; duplicate {
+			t.Errorf("invariants %q and %q share one observation code", previous, code)
+		}
+		seen[observation] = code
+	}
+}

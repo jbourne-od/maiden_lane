@@ -74,6 +74,8 @@ func ExecuteTransition(binding RunBinding, rule RuleID, state State, journal Jou
 		return executeFormRelatedEntity(binding, transformation, state, journal)
 	case OperatorAggregateRelatedFields:
 		return executeAggregateRelatedFields(binding, transformation, state, journal)
+	case OperatorSelectAndAssign:
+		return executeSelectAndAssign(binding, transformation, state, journal)
 	default:
 		return base, fmt.Errorf("execute transition: unsupported compiled operator %d", transformation.Operator())
 	}

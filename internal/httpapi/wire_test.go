@@ -148,7 +148,10 @@ func TestPlanProjectionRoundTripsThroughTheCompiler(t *testing.T) {
 		t.Fatal("fixture did not compile")
 	}
 
-	projected := planToWire(plan, compilation.Profiles(), schema, inputs.Compilation.CompilerSemanticsVersion, true)
+	projected, err := planToWire(plan, compilation.Profiles(), schema, inputs.Compilation.CompilerSemanticsVersion, true)
+	if err != nil {
+		t.Fatalf("planToWire: %v", err)
+	}
 	if projected.PlanID != openapiv1.Digest(plan.ID()) {
 		t.Fatalf("projected planID = %s, want %s", projected.PlanID, plan.ID())
 	}
@@ -187,7 +190,10 @@ func TestCreationProjectionOmitsDeclarations(t *testing.T) {
 	}
 	plan, _ := compilation.Plan()
 
-	projected := planToWire(plan, compilation.Profiles(), schema, inputs.Compilation.CompilerSemanticsVersion, false)
+	projected, err := planToWire(plan, compilation.Profiles(), schema, inputs.Compilation.CompilerSemanticsVersion, false)
+	if err != nil {
+		t.Fatalf("planToWire: %v", err)
+	}
 	if projected.Declarations != nil {
 		t.Fatal("creation response carries declarations")
 	}
@@ -472,5 +478,58 @@ func TestProvenancePolicyTranslationIsClosed(t *testing.T) {
 	}
 	if _, err := provenancePolicyFromWire("changes.v2"); err == nil {
 		t.Fatal("translation accepted an unratified provenance policy")
+	}
+}
+
+// The projection refuses an operator this contract version cannot express.
+//
+// Production break caught: the switch in transformationToWire had no default, so a compiled
+// declaration carrying an operator the wire enum lacks projected to a TransformationDeclaration
+// whose Operator was the ZERO string -- outside the closed enum -- and whose payload was
+// absent entirely. A client reading that response would see a well-formed rule that the server
+// does not hold, and neither the enum's own validator nor any test would have said a word.
+//
+// OperatorSelectAndAssign is that operator today. rulesetFromWire refuses it inbound, so no
+// such plan can be stored through the API and the outbound path is unreachable right now --
+// which is precisely why it needs pinning: the same "unreachable, therefore fine" reasoning
+// is what left the group node kinds unencodable until a consumer arrived.
+func TestTransformationProjectionRefusesAnOperatorTheContractCannotExpress(t *testing.T) {
+	groupBy := semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"}
+	declaration := semantic.TransformationDeclaration{
+		ID:             "certify_depot.v1",
+		Operator:       semantic.OperatorSelectAndAssign,
+		DeclaredReads:  []semantic.FieldPath{"driver.depot"},
+		DeclaredWrites: []semantic.FieldPath{"driver.status"},
+		SelectAssign: &semantic.SelectAssignDeclaration{
+			Selector: semantic.Selector{
+				Kind: "driver", GroupBy: &groupBy,
+				Members: semantic.Cardinality{Kind: semantic.CardinalityAtLeast, Count: 1},
+			},
+			Guard: semantic.Expr{Kind: semantic.ExprAllEqual, Field: "driver.depot"},
+			Assignments: []semantic.FieldAssignment{{
+				Target: "driver.status",
+				Value:  semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"},
+			}},
+		},
+	}
+	projected, err := transformationToWire(declaration)
+	if err == nil {
+		t.Fatalf("projected an inexpressible operator as %+v", projected)
+	}
+	if projected.Operator != "" || projected.Form != nil || projected.Aggregate != nil {
+		t.Fatalf("refused projection still returned content: %+v", projected)
+	}
+
+	// And the two operators the contract DOES express still project, or this test would pass
+	// against a projection that had simply stopped working.
+	for _, expressible := range []semantic.TransformationDeclaration{
+		{ID: "form_team.v1", Operator: semantic.OperatorFormRelatedEntity,
+			Form: &semantic.FormRelatedEntityDeclaration{SourceKind: "driver", OutputKind: "team"}},
+		{ID: "aggregate_team_hos.v1", Operator: semantic.OperatorAggregateRelatedFields,
+			Aggregate: &semantic.AggregateRelatedFieldsDeclaration{SourceKind: "driver"}},
+	} {
+		if _, err := transformationToWire(expressible); err != nil {
+			t.Fatalf("%s: %v", expressible.ID, err)
+		}
 	}
 }

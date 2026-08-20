@@ -554,7 +554,7 @@ func planToWire(
 	schema semantic.Schema,
 	compilerVersion semantic.CompilerSemanticsVersion,
 	withDeclarations bool,
-) openapiv1.Plan {
+) (openapiv1.Plan, error) {
 	rules := make([]string, 0, len(plan.Transformations()))
 	for _, transformation := range plan.Transformations() {
 		rules = append(rules, string(transformation.Declaration().ID))
@@ -583,10 +583,13 @@ func planToWire(
 		Profiles:    compiled,
 	}
 	if withDeclarations {
-		declarations := declarationsToWire(plan, profiles, schema, compilerVersion)
+		declarations, err := declarationsToWire(plan, profiles, schema, compilerVersion)
+		if err != nil {
+			return openapiv1.Plan{}, err
+		}
 		projected.Declarations = &declarations
 	}
-	return projected
+	return projected, nil
 }
 
 func declarationsToWire(
@@ -594,10 +597,14 @@ func declarationsToWire(
 	profiles []semantic.CompiledProfile,
 	schema semantic.Schema,
 	compilerVersion semantic.CompilerSemanticsVersion,
-) openapiv1.PlanDeclarations {
+) (openapiv1.PlanDeclarations, error) {
 	transformations := make([]openapiv1.TransformationDeclaration, 0, len(plan.Transformations()))
 	for _, transformation := range plan.Transformations() {
-		transformations = append(transformations, transformationToWire(transformation.Declaration()))
+		projected, err := transformationToWire(transformation.Declaration())
+		if err != nil {
+			return openapiv1.PlanDeclarations{}, err
+		}
+		transformations = append(transformations, projected)
 	}
 	checkpoints := make([]openapiv1.CheckpointDeclaration, 0, len(plan.Checkpoints()))
 	for _, checkpoint := range plan.Checkpoints() {
@@ -619,7 +626,7 @@ func declarationsToWire(
 			Checkpoints:     &checkpoints,
 		},
 		Profiles: &profileDeclarations,
-	}
+	}, nil
 }
 
 func schemaToWire(schema semantic.Schema) openapiv1.SchemaDeclaration {
@@ -651,7 +658,19 @@ func schemaToWire(schema semantic.Schema) openapiv1.SchemaDeclaration {
 	return openapiv1.SchemaDeclaration{Entities: entities, Relations: &relations}
 }
 
-func transformationToWire(declaration semantic.TransformationDeclaration) openapiv1.TransformationDeclaration {
+// transformationToWire projects one compiled declaration onto the wire contract.
+//
+// IT RETURNS AN ERROR BECAUSE THE PROJECTION IS PARTIAL, and an earlier version hid that. The
+// switch below had no default, so a declaration whose operator the contract cannot express
+// projected to a wire object carrying the ZERO operator -- a token outside the closed enum --
+// and no payload at all. That is a boundary inventing a declaration nobody holds, and it
+// fails open: the response looks well-formed and describes a rule that does not exist.
+//
+// OperatorSelectAndAssign is exactly that case today. rulesetFromWire refuses it inbound
+// (its default arm errors), so no such plan can currently be stored through the API and this
+// path is unreachable -- but "unreachable" was also true of the group node kinds until a
+// consumer arrived, and the contract gaining the operator is what makes this live.
+func transformationToWire(declaration semantic.TransformationDeclaration) (openapiv1.TransformationDeclaration, error) {
 	reads := fieldPathsToWire(declaration.DeclaredReads)
 	writes := fieldPathsToWire(declaration.DeclaredWrites)
 	after := make([]string, 0, len(declaration.After))
@@ -674,8 +693,11 @@ func transformationToWire(declaration semantic.TransformationDeclaration) openap
 		projected.Operator = openapiv1.TransformationDeclarationOperatorAggregateRelatedFields
 		aggregate := aggregateToWire(*declaration.Aggregate)
 		projected.Aggregate = &aggregate
+	default:
+		return openapiv1.TransformationDeclaration{}, translationError(
+			"compiled operator has no representation in this contract version")
 	}
-	return projected
+	return projected, nil
 }
 
 func formToWire(form semantic.FormRelatedEntityDeclaration) openapiv1.FormRelatedEntity {
