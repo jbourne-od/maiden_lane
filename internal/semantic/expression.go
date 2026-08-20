@@ -41,7 +41,47 @@ const (
 	ExprEqual
 	ExprLess
 	ExprAdd
+
+	// GROUP-SCOPED, and appended rather than inserted, so every expression written before
+	// they existed keeps its bytes. They are legal only where a group is in scope; see
+	// group_expr.go for why they need no binder.
+	ExprAllMembers
+	ExprAnyMembers
+	ExprAllEqual
 )
+
+// String names the kind for diagnostics. Scope errors are far easier to read with a name
+// than with a number, and this vocabulary is closed so the mapping cannot drift silently.
+func (k ExprKind) String() string {
+	switch k {
+	case ExprLiteral:
+		return "literal"
+	case ExprField:
+		return "field"
+	case ExprExists:
+		return "exists"
+	case ExprNot:
+		return "not"
+	case ExprAll:
+		return "all"
+	case ExprAny:
+		return "any"
+	case ExprEqual:
+		return "equal"
+	case ExprLess:
+		return "less"
+	case ExprAdd:
+		return "add"
+	case ExprAllMembers:
+		return "all_members"
+	case ExprAnyMembers:
+		return "any_members"
+	case ExprAllEqual:
+		return "all_equal"
+	default:
+		return fmt.Sprintf("kind(%d)", uint8(k))
+	}
+}
 
 // ExprType is the type an expression evaluates to.
 //
@@ -267,6 +307,13 @@ func checkExpr(schema Schema, expr Expr, depth int) (ExprType, error) {
 		}
 		return TypeInt64, nil
 
+	case ExprAllMembers, ExprAnyMembers, ExprAllEqual:
+		// checkExpr is the MEMBER-scope checker. A group predicate reaching it means the
+		// expression was checked in the wrong scope, which is refused rather than delegated:
+		// answering it here would require picking a member.
+		return TypeInvalid, fmt.Errorf(
+			"%s is a group predicate and cannot appear in member scope", expr.Kind)
+
 	default:
 		return TypeInvalid, fmt.Errorf("unknown expression kind %d", expr.Kind)
 	}
@@ -313,6 +360,10 @@ func checkOperandShape(expr Expr) error {
 		wantArgs = len(expr.Args)
 	case ExprEqual, ExprLess, ExprAdd:
 		wantArgs = 2
+	case ExprAllMembers, ExprAnyMembers:
+		wantArgs = 1
+	case ExprAllEqual:
+		wantField = true
 	default:
 		return fmt.Errorf("unknown expression kind %d", expr.Kind)
 	}
@@ -371,9 +422,10 @@ func encodeExpr(encoder *canonicalEncoder, expr Expr) {
 	switch expr.Kind {
 	case ExprLiteral:
 		encoder.value(*expr.Literal)
-	case ExprField, ExprExists:
+	case ExprField, ExprExists, ExprAllEqual:
 		encoder.string(string(expr.Field))
-	case ExprNot, ExprAll, ExprAny, ExprEqual, ExprLess, ExprAdd:
+	case ExprNot, ExprAll, ExprAny, ExprEqual, ExprLess, ExprAdd,
+		ExprAllMembers, ExprAnyMembers:
 		encoder.uint64(uint64(len(expr.Args)))
 		for i := range expr.Args {
 			encodeExpr(encoder, expr.Args[i])
