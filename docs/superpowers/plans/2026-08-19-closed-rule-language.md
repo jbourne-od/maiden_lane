@@ -364,6 +364,31 @@ every transition would then refuse with `SELECTION_CARDINALITY_INVALID` and no c
 schema states a minimum and the translation does not rely on it, because a generated validator
 is not the kernel.
 
+**Recorded rather than absorbed, from the gate on this slice.**
+
+*A `Value` had never been stored before.* Neither frozen operator carries one, so
+`semantic.Value` -- three unexported fields, no marshaller -- serialized to `{}` with no error
+the first time an authored rule contained a literal. The plan wrote, and every read afterwards
+recompiled to a diagnostic: `GetPlan` a permanent 500, and the worker retrying a deterministic
+failure forever. `Value` now implements `encoding.TextMarshaler`, which is an interface rather
+than a dependency, so the kernel keeps `encoding/json` out of its import allowlist. `strconv`
+was admitted to that allowlist deliberately, with the reason written beside it.
+
+The shared storage contract could not see it: `PlanRecordFixture` compiled a request with **no
+transformations**, justified as "domain-free". Domain-free does not mean shapeless -- what a
+store must round-trip is every declaration TYPE, and a ruleset with no rule exercises none of
+them. The fixture now carries a select-and-assign rule with a literal of each value kind, and
+`internal/adapters/postgres` has a database-free test of `encodeDeclarations`/`rebuild`,
+because the drift is in the serialization and every test that needed a database skipped
+without one.
+
+*`proposedOperationCounts` has no arm for the new operator, and that is the answer rather than
+an omission.* Its premise is that the compiled operator fixes the patch's shape; for a
+selector-scoped rule the update count is a fact about the state. The default is correct
+because the branch is unreachable -- the patch is all updates over entities taken from the
+selected state, so no operation failure can arise -- and the argument is written at the
+function so a later operator that breaks it does not have to re-derive it.
+
 ## Index of everything else
 
 Sites and constraints, with references and without analysis. Each needs an owner before the

@@ -2,6 +2,8 @@ package semantic
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -98,6 +100,78 @@ type Value struct {
 	kind    ValueKind
 	text    string
 	integer int64
+}
+
+// MarshalText and UnmarshalText exist because a Value travels inside a stored declaration.
+//
+// TEXT RATHER THAN JSON, deliberately. The kernel's import allowlist excludes encoding/json,
+// and it should: a transport encoding in the kernel is exactly the coupling Inviolate 12
+// forbids. encoding.TextMarshaler is an interface, not a dependency -- json, YAML and any
+// other codec pick it up on their own -- so the kernel describes its value in one canonical
+// text form and owes nothing to any particular transport.
+//
+// THIS IS NOT A CANONICAL DECODER and does not weaken the encoders-only rule. Canonical bytes
+// identify artifacts and are deliberately one-way. A declaration is an authored INPUT that the
+// plan store round-trips and recompiles, checking the reproduced identity against the stored
+// one; what could not be allowed is a Value that serializes to something recompilation does
+// not reproduce.
+//
+// Which is what happened. Value's fields are unexported and it had no marshaller, so
+// encoding/json wrote `{}` and returned NO ERROR. Before the select-and-assign operator no
+// declaration contained a Value at all -- neither frozen operator carries one -- so the first
+// authored rule with a literal was writable to Postgres and unreadable afterwards: the row
+// stored, every read recompiled to an UnsupportedOperator diagnostic, GetPlan became a
+// permanent 500, and the worker treated the storage error as transient and retried it forever.
+//
+// Marshal REFUSES a value with no kind rather than emitting a form that cannot be read back,
+// so a declaration that could not survive storage is rejected at write time instead of at
+// every read.
+func (v Value) MarshalText() ([]byte, error) {
+	switch v.kind {
+	case ValueString:
+		return []byte("string:" + v.text), nil
+	case ValueAtom:
+		return []byte("atom:" + v.text), nil
+	case ValueInt64:
+		return []byte("int64:" + strconv.FormatInt(v.integer, 10)), nil
+	default:
+		return nil, fmt.Errorf("value has no kind and cannot be serialized")
+	}
+}
+
+// UnmarshalText rebuilds a Value through the same constructors an author would use, so a
+// stored value that is no longer legal -- invalid UTF-8, an empty atom, an out-of-range
+// integer -- refuses here rather than becoming a Value the constructors would never produce.
+func (v *Value) UnmarshalText(data []byte) error {
+	text := string(data)
+	// The first colon only: a string value may contain as many more as it likes.
+	kind, payload, separated := strings.Cut(text, ":")
+	if !separated {
+		return fmt.Errorf("value text carries no kind")
+	}
+	switch kind {
+	case "string":
+		result, err := NewStringValue(payload)
+		if err != nil {
+			return err
+		}
+		*v = result
+	case "atom":
+		result, err := NewAtomValue(payload)
+		if err != nil {
+			return err
+		}
+		*v = result
+	case "int64":
+		number, err := strconv.ParseInt(payload, 10, 64)
+		if err != nil {
+			return fmt.Errorf("int64 value is not a base-ten integer: %w", err)
+		}
+		*v = NewInt64Value(number)
+	default:
+		return fmt.Errorf("value kind %q is not in the closed vocabulary", kind)
+	}
+	return nil
 }
 
 // NewStringValue constructs a validated UTF-8 string value.

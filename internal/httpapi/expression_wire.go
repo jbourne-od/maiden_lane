@@ -112,15 +112,27 @@ func exprToWire(expr semantic.Expr) (openapiv1.Expr, error) {
 	return projected, nil
 }
 
+// maxContractCount is the largest count the contract's signed integer can carry. The kernel's
+// is wider, so this is the boundary of what can be projected, and it must equal what
+// cardinalityFromWire admits or a rule becomes authorable and unreadable.
+const maxContractCount = uint64(1<<63 - 1)
+
 var cardinalityFromToken = map[openapiv1.CardinalityKind]semantic.CardinalityKind{
 	openapiv1.CardinalityKindAny:     semantic.CardinalityAny,
 	openapiv1.CardinalityKindExactly: semantic.CardinalityExactly,
 	openapiv1.CardinalityKindAtLeast: semantic.CardinalityAtLeast,
 }
 
+// Inverted like the expression map, and checked like it too. The duplicate check was on one
+// of the two and not the other, which is one proposition enforced in one place out of the two
+// that need it -- the same map silently overwriting would have made a cardinality kind
+// project as the wrong token with nothing to say so.
 var cardinalityToToken = func() map[semantic.CardinalityKind]openapiv1.CardinalityKind {
 	inverted := make(map[semantic.CardinalityKind]openapiv1.CardinalityKind, len(cardinalityFromToken))
 	for token, kind := range cardinalityFromToken {
+		if existing, duplicate := inverted[kind]; duplicate {
+			panic("two wire tokens map to one cardinality kind: " + string(existing) + " and " + string(token))
+		}
 		inverted[kind] = token
 	}
 	return inverted
@@ -154,7 +166,14 @@ func cardinalityToWire(cardinality semantic.Cardinality) (openapiv1.Cardinality,
 	if cardinality.Count > 0 {
 		// The kernel's count is uint64 and the contract's is int64, so a count past the
 		// signed maximum has no representation and must not be projected as a negative one.
-		if cardinality.Count > 1<<62 {
+		//
+		// THE THRESHOLD IS THE SIGNED MAXIMUM, and an earlier version wrote 1<<62 -- half of
+		// it -- while the comment claimed otherwise. Inbound accepted any non-negative int64
+		// and the kernel accepted any positive count, so a count in between was authorable,
+		// storable, and then unreadable: GetPlan answered a permanent 500 on a plan the same
+		// server had just accepted. Two directions of one boundary disagreeing about the
+		// admissible set is the exact shape this file's header claims the design prevents.
+		if cardinality.Count > maxContractCount {
 			return openapiv1.Cardinality{}, translationError("cardinality count exceeds the contract's range")
 		}
 		count := int64(cardinality.Count)

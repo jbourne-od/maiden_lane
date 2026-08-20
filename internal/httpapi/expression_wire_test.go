@@ -131,6 +131,33 @@ func TestCardinalityTranslationRefusesACountItCannotHold(t *testing.T) {
 	}); err == nil {
 		t.Fatal("a count past the contract's range was projected")
 	}
+
+	// THE THRESHOLD ITSELF, because a fixture that only tries 1<<63 cannot see where the
+	// bound actually sits. An earlier version refused at 1<<62 -- half the signed maximum --
+	// while inbound accepted anything non-negative, so a count in between was authorable,
+	// storable and unreadable, and this test passed either way.
+	if _, err := cardinalityToWire(semantic.Cardinality{
+		Kind: semantic.CardinalityExactly, Count: maxContractCount,
+	}); err != nil {
+		t.Fatalf("the largest count the contract can hold was refused: %v", err)
+	}
+	if _, err := cardinalityToWire(semantic.Cardinality{
+		Kind: semantic.CardinalityExactly, Count: maxContractCount + 1,
+	}); err == nil {
+		t.Fatal("a count one past the contract's range was projected")
+	}
+
+	// And the two directions admit the same set: whatever inbound accepts must project back.
+	largest := int64(maxContractCount)
+	admitted, err := cardinalityFromWire(openapiv1.Cardinality{
+		Kind: openapiv1.CardinalityKindAtLeast, Count: &largest,
+	})
+	if err != nil {
+		t.Fatalf("the contract's largest count was refused inbound: %v", err)
+	}
+	if _, err := cardinalityToWire(admitted); err != nil {
+		t.Fatalf("a count this boundary accepted cannot be read back: %v", err)
+	}
 	if _, err := cardinalityFromWire(openapiv1.Cardinality{Kind: openapiv1.CardinalityKind("some")}); err == nil {
 		t.Fatal("an unknown cardinality token was translated")
 	}
@@ -169,5 +196,85 @@ func TestExpressionTranslationDoesNotJudgeShape(t *testing.T) {
 		if _, err := exprFromWire(malformed); err != nil {
 			t.Fatalf("the boundary rejected a shape the compiler owns: %v", err)
 		}
+	}
+}
+
+// The selector's filter must survive both directions, and no fixture exercised either arm.
+//
+// Grep found `Where` only in the translation and the generated type: the acceptance fixture
+// sets GroupBy alone, and the read-back fidelity test recompiles a document with no filter, so
+// a projection that dropped it would still recompile to the same PlanID. Dropping it inbound
+// is worse than losing a field: encodeSelector writes `where` under an optional marker, so a
+// rule whose filter vanished shares a ruleset digest with the identical rule that never had
+// one -- two materially different authored rulesets collapsing onto one semantic identity --
+// and the derived read set silently shrinks, which is the fail-open direction.
+func TestSelectorFilterSurvivesBothDirections(t *testing.T) {
+	path := "driver.status"
+	active := "active"
+	where := openapiv1.Expr{Kind: openapiv1.ExprKindEqual, Args: &[]openapiv1.Expr{
+		{Kind: openapiv1.ExprKindField, Field: &path},
+		{Kind: openapiv1.ExprKindLiteral, Literal: &openapiv1.Value{
+			Kind: openapiv1.ValueKindString, String: &active,
+		}},
+	}}
+	groupBy := openapiv1.Expr{Kind: openapiv1.ExprKindField, Field: &path}
+	count := int64(1)
+	target := "driver.status"
+	payload := openapiv1.SelectAndAssign{
+		Selector: openapiv1.Selector{
+			Kind: "driver", Where: &where, GroupBy: &groupBy,
+			Members: openapiv1.Cardinality{Kind: openapiv1.CardinalityKindAtLeast, Count: &count},
+		},
+		Guard: openapiv1.Expr{Kind: openapiv1.ExprKindAllEqual, Field: &path},
+		Assignments: []openapiv1.FieldAssignment{{
+			Target: target,
+			Value:  openapiv1.Expr{Kind: openapiv1.ExprKindLiteral, Literal: &openapiv1.Value{Kind: openapiv1.ValueKindString, String: &active}},
+		}},
+	}
+
+	translated, err := selectAssignFromWire(payload)
+	if err != nil {
+		t.Fatalf("selectAssignFromWire: %v", err)
+	}
+	if translated.Selector.Where == nil {
+		t.Fatal("the filter was discarded inbound")
+	}
+	if translated.Selector.GroupBy == nil {
+		t.Fatal("the grouping expression was discarded inbound")
+	}
+	// A filter that arrived as something else is as bad as one that vanished, so this
+	// compares the tree rather than merely checking for a non-nil pointer.
+	expected, err := exprFromWire(where)
+	if err != nil {
+		t.Fatalf("exprFromWire: %v", err)
+	}
+	if !reflect.DeepEqual(*translated.Selector.Where, expected) {
+		t.Fatalf("filter arrived as %+v, want %+v", *translated.Selector.Where, expected)
+	}
+
+	projected, err := selectAssignToWire(translated)
+	if err != nil {
+		t.Fatalf("selectAssignToWire: %v", err)
+	}
+	if projected.Selector.Where == nil {
+		t.Fatal("the filter was discarded outbound")
+	}
+	if !reflect.DeepEqual(*projected.Selector.Where, where) {
+		t.Fatalf("filter projected as %+v, want %+v", *projected.Selector.Where, where)
+	}
+	if projected.Selector.GroupBy == nil || !reflect.DeepEqual(*projected.Selector.GroupBy, groupBy) {
+		t.Fatal("the grouping expression did not survive the projection")
+	}
+
+	// And a selector with NO filter must not acquire one, or the arm would be untested in the
+	// direction that matters least and wrong in the one that matters most.
+	bare := payload
+	bare.Selector.Where = nil
+	plain, err := selectAssignFromWire(bare)
+	if err != nil {
+		t.Fatalf("selectAssignFromWire without a filter: %v", err)
+	}
+	if plain.Selector.Where != nil {
+		t.Fatal("a selector with no filter acquired one")
 	}
 }

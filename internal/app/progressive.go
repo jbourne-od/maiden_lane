@@ -423,6 +423,21 @@ func committedOperationCounts(patch semantic.Patch) (inserts, relates, updates u
 // the semantic outcome retains no rejected patch, but the compiled operator
 // fixes it as one insert plus one relation per declared source for form, and
 // exactly one update for aggregate.
+//
+// THERE IS DELIBERATELY NO ARM FOR OperatorSelectAndAssign, and the reason is that this
+// function's premise does not hold for it. A selector-scoped rule proposes one update per
+// member of every qualifying group, which is a fact about the STATE and not about the
+// declaration -- there is no count to project from a compiled operator that never knew how
+// many drivers a depot had. An arm returning some plausible number would be worse than none.
+//
+// The default is correct rather than merely safe, because the branch is unreachable for that
+// operator. These counts are read only when a rejected patch was materialized, which requires
+// ApplyPatch to fail. A select-and-assign patch is entirely Updates whose targets are entities
+// taken from the selected state and whose before-images are read from that same state, and
+// each entity joins exactly one group, so neither OP_UPDATE_TARGET_NOT_FOUND nor
+// OP_BEFORE_IMAGE_MISMATCH can arise. Should a later operator break that argument -- an insert,
+// a relation, or two operations touching one entity -- this default becomes a live wrong
+// answer, so the argument is written here rather than left to be re-derived.
 func proposedOperationCounts(transformation semantic.CompiledTransformation) (inserts, relates, updates uint64) {
 	declaration := transformation.Declaration()
 	switch {
