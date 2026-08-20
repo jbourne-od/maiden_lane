@@ -201,9 +201,26 @@ expression against a bound entity and selecting with it are one indivisible thin
 together. What remains for slice 3 is evaluation in contexts a single bound entity does not
 supply — group-scoped expressions above all.
 
-**Slice 3 — evaluation beyond a single binding.** Group-scoped expressions and whatever else a
-single bound entity cannot supply. Evaluation against one bound entity ships in slice 2,
-because selection cannot be built without it. Deterministic, total, refusing rather than defaulting on absent fields.
+**Slice 3 — evaluation beyond a single binding. Done.** Three appended node kinds —
+`all_members`, `any_members`, `all_equal` — with scope enforced in both directions.
+
+**No binder was needed, and the reason generalises.** Three of the four frozen aggregate
+predicates are "for every member, <something about that member>", and their inner predicate is
+an ordinary member-scoped expression evaluated with each member bound. The member IS the
+binding, exactly as a selector binds one entity, so nothing has to name it. Only
+`EqualFieldAcrossSources` is genuinely cross-member and it gets its own node. The plan's
+refutation criterion — that a replacement must express all four — is now a test.
+
+Nesting needs no rule of its own: a quantifier's argument is checked in member scope, where
+quantifiers are refused, so `all_members(all_members(x))` falls out as an error.
+
+**Reachability, recorded because "Done" would otherwise overstate it:** the group entry points
+have no non-test callers. Nothing consumes a `Selection` until a `Transform` exists, so the
+language compiles and evaluates group predicates that no production path can reach yet.
+
+**Deliberately absent: reductions** (`min`, `max`, `sum`, `count`). They produce values rather
+than predicates, and nothing consumes a value from a group until a `Transform` exists. Kind
+bytes are append-only, so adding them later costs no identity. Deterministic, total, refusing rather than defaulting on absent fields.
 
 ## Index of everything else
 

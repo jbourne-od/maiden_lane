@@ -288,8 +288,8 @@ func TestSelectorBindsItsOwnKindWhicheverThatIs(t *testing.T) {
 	}
 
 	// A selector over a NON-driver kind, reading its own field, must compile. Under the
-	// hardcoded mutant this is refused with a message contradicting itself: "reads
-	// team.assignment_key, but this selector binds only team".
+	// hardcoded mutant it is refused by a message that contradicts itself, naming the very
+	// kind it claims is the only one bound.
 	if _, err := CompileSelector(schema, testCompilerVersion, Selector{
 		Kind:    "team",
 		Where:   ptr(Expr{Kind: ExprExists, Field: "team.assignment_key"}),
