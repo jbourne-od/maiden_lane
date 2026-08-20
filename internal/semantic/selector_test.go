@@ -739,6 +739,24 @@ func TestEvaluateRefusesAPathNamingAnotherKind(t *testing.T) {
 	if _, err := evaluateBool(schema, field("driver.assignment_key"), driver); err == nil {
 		t.Fatal("a string-typed expression was accepted as a bool")
 	}
+
+	// AND THE SYMMETRIC CASE, because binding only a driver lets the guard be satisfied by a
+	// constant. Replacing `kind != entity.Ref().Kind` with `kind != "driver"` refuses exactly
+	// the inputs above and survives the whole suite, while being wrong for every entity of any
+	// other kind. A guard compared against the one value the fixture happens to hold is not
+	// tested; found by mutation while reviewing the failure-class list that names this shape.
+	team, err := NewEntity(
+		EntityRef{Kind: "team", ID: SourceEntityID(lineage, "team", "t")},
+		map[FieldName]Value{"assignment_key": key})
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	if _, err := evaluateExpr(schema, field("team.assignment_key"), team); err != nil {
+		t.Fatalf("the team's own path did not resolve against a team: %v", err)
+	}
+	if _, err := evaluateExpr(schema, field("driver.assignment_key"), team); err == nil {
+		t.Fatal("a driver path read a team's field")
+	}
 }
 
 // The negative branch of the overflow check. An earlier test covered only maxInt64 + 1, which

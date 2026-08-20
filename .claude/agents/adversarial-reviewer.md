@@ -173,12 +173,20 @@ every diff.
    input first, the test stands near the property rather than pinning it, and narrowing or
    deleting the guard survives.
 
-   It does not cover the other bullets and must not be read as doing so. Bullet 2 is about an
-   *accepted* value whose fixture coincides with what broken code would guess — no refusal is
-   involved. Bullet 3 is about a dimension the state space cannot vary, and its content is the
-   remedy, a golden vector; there is a live example in this repository with no refusal anywhere
-   in it (a sort tiebreak that no fixture size can distinguish, because the standard library's
-   sort happens to preserve all-ties order).
+   It is additional to the other bullets and replaces none of them. In particular it does NOT
+   subsume bullet 2, and the two catch different mutants of the same guard. The fifth tell asks
+   whether some *other* rule refuses the input first. Bullet 2 asks whether the fixture's value
+   for the dimension under test is what broken code would use — which for a refusing guard
+   means a guard that compares against a hardcoded constant the fixture happens to match. That
+   mutant refuses exactly the inputs the test offers, so the fifth tell reports clean while the
+   guard is comprehensively broken for every input the fixture does not contain. Verified in
+   this repository: replacing an entity-kind check with a comparison against one literal kind
+   survives the whole suite, because every fixture binds an entity of that kind.
+
+   Bullet 3 is likewise untouched: it is about a dimension the state space cannot vary, and its
+   content is the remedy, a golden vector. There is a live example here with no refusal in it
+   at all — a sort tiebreak no fixture distinguishes, because the standard library's sort
+   happens to preserve all-ties order.
 
    Instances of this fifth tell: an overflow fixture varied magnitude but not sign, so only one
    disjunct of a compound guard was ever the reason for refusal; a test that built a two-kind
