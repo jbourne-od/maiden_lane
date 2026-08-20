@@ -214,6 +214,10 @@ refutation criterion — that a replacement must express all four — is now a t
 Nesting needs no rule of its own: a quantifier's argument is checked in member scope, where
 quantifiers are refused, so `all_members(all_members(x))` falls out as an error.
 
+**Reachability, recorded because "Done" would otherwise overstate it:** the group entry points
+have no non-test callers. Nothing consumes a `Selection` until a `Transform` exists, so the
+language compiles and evaluates group predicates that no production path can reach yet.
+
 **Deliberately absent: reductions** (`min`, `max`, `sum`, `count`). They produce values rather
 than predicates, and nothing consumes a value from a group until a `Transform` exists. Kind
 bytes are append-only, so adding them later costs no identity. Deterministic, total, refusing rather than defaulting on absent fields.

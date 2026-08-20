@@ -416,8 +416,19 @@ func TestGroupCompositionEvaluates(t *testing.T) {
 			hasAnchor, allEqual("driver.hos_anchor")}}, disagreeing, false},
 		{"any succeeds when one disjunct holds", Expr{Kind: ExprAny, Args: []Expr{
 			allEqual("driver.hos_anchor"), hasAnchor}}, disagreeing, true},
-		{"not inverts", Expr{Kind: ExprNot, Args: []Expr{
+		// THE FALSE TERMINAL, which the case above never reaches: it returns from inside the
+		// loop on the second disjunct. Group-level any and any_members are twins added in one
+		// commit, and only the second had its terminal pinned -- so `return false` here could
+		// become `return true` and a group failing every disjunct would be admitted.
+		{"any is false when every disjunct fails", Expr{Kind: ExprAny, Args: []Expr{
+			allEqual("driver.hos_anchor"),
+			allMembers(Expr{Kind: ExprExists, Field: "driver.assignment_key"}),
+		}}, disagreeing, false},
+		{"not inverts a false operand", Expr{Kind: ExprNot, Args: []Expr{
 			allEqual("driver.hos_anchor")}}, disagreeing, true},
+		// And the other polarity, so not() is observed at both outcomes.
+		{"not inverts a true operand", Expr{Kind: ExprNot, Args: []Expr{
+			allEqual("driver.hos_anchor")}}, agreeing, false},
 		// any_members answering FALSE, which no fixture reached: no member lacks the anchor.
 		{"any_members is false when no member matches",
 			anyMembers(Expr{Kind: ExprNot, Args: []Expr{
@@ -435,6 +446,54 @@ func TestGroupCompositionEvaluates(t *testing.T) {
 				t.Fatalf("= %v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+// GROUP SCOPE HAS ITS OWN DEPTH BOUND AND NOTHING ELSE PROVIDES IT.
+//
+// In member scope a deep tree is refused by checkExpr's guard, reached through
+// checkExprInScope's default arm. In group scope the composition arm recurses within
+// checkExprInScope and the leaf is handled by its own arms, so checkExpr is never reached on
+// any node -- removing this bound leaves authored nesting unbounded at group scope, and
+// evaluateGroupExpr recurses to the same depth with no bound of its own.
+func TestGroupScopeBoundsNesting(t *testing.T) {
+	schema := expressionSchema(t)
+	deep := allEqual("driver.hos_anchor")
+	for range maxExprDepth + 2 {
+		deep = Expr{Kind: ExprNot, Args: []Expr{deep}}
+	}
+	if _, err := checkGroupExpr(schema, "driver", deep, 0); err == nil {
+		t.Fatal("a group expression nested past the bound type-checked")
+	}
+
+	// The control: a tree just inside the bound still compiles, so the refusal is about depth
+	// rather than about composition being rejected outright.
+	shallow := allEqual("driver.hos_anchor")
+	for range 3 {
+		shallow = Expr{Kind: ExprNot, Args: []Expr{shallow}}
+	}
+	if _, err := checkGroupExpr(schema, "driver", shallow, 0); err != nil {
+		t.Fatalf("a shallow group expression was refused: %v", err)
+	}
+}
+
+// An unstated scope admits nothing. Both call sites pass a valid scope today, so this guard is
+// latent -- but its adjacent comment claims the design prevents a call that forgot its scope
+// from silently getting the permissive member mode, and without the guard that claim is false:
+// scopeInvalid would refuse group predicates and then fall through to checkExpr.
+func TestUnstatedScopeAdmitsNothing(t *testing.T) {
+	schema := expressionSchema(t)
+	for _, expr := range []Expr{
+		field("driver.hos_anchor"),
+		{Kind: ExprExists, Field: "driver.hos_anchor"},
+		allEqual("driver.hos_anchor"),
+	} {
+		if _, err := checkExprInScope(schema, "driver", expr, scopeInvalid, 0); err == nil {
+			t.Errorf("kind %d was accepted under an unstated scope", expr.Kind)
+		}
+	}
+	if got := scopeInvalid.String(); got != "invalid" {
+		t.Fatalf("scopeInvalid.String() = %q, want \"invalid\"", got)
 	}
 }
 
