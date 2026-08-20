@@ -419,6 +419,38 @@ func cloneCompiledExpression(input CompiledExpression) CompiledExpression {
 		exprType: input.exprType, canonical: bytes.Clone(input.canonical)}
 }
 
+// checkAuthoredExprBound refuses an authored tree deeper than the language admits.
+//
+// ITERATIVE, WITH AN EXPLICIT STACK, because it is the guard that protects the recursive
+// walks and must not be one itself.
+//
+// maxExprDepth is enforced by checkExpr and checkExprInScope, which for a selector-scoped
+// rule run inside deriveTransformation -- and normalizeRuleset clones the authored trees and
+// encodeRuleset walks them, both BEFORE that. Those two recursions therefore consumed a tree
+// nothing had bounded: a guard nested a million deep exhausted the goroutine stack in
+// cloneExpr, which is a fatal runtime error rather than a refusal, and the bound that would
+// have rejected it at 64 never ran. The same shape as a specialized traversal closing over
+// its own recursion, one layer out: a new caller reached the walk without crossing the guard
+// that owns its invariant.
+func checkAuthoredExprBound(expr Expr) error {
+	type framed struct {
+		node  Expr
+		depth int
+	}
+	stack := []framed{{node: expr}}
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if current.depth > maxExprDepth {
+			return fmt.Errorf("expression nests deeper than %d", maxExprDepth)
+		}
+		for i := range current.node.Args {
+			stack = append(stack, framed{node: current.node.Args[i], depth: current.depth + 1})
+		}
+	}
+	return nil
+}
+
 // encodeExpr writes one node and its operands.
 //
 // Recursive, with no domain tag of its own: the tag is written once at the top by

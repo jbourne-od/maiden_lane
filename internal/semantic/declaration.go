@@ -320,10 +320,16 @@ const (
 
 // AllInvariantCodes is the complete v1 vocabulary, in declaration order.
 //
-// It exists so the boundary mappings can be tested against the vocabulary instead of against
-// a hand-copied list. Three walkers over these codes live outside this package -- the
-// observation code mapping, its string rendering, and the telemetry dimension -- and nothing
-// but a test forces them to reach every one.
+// Three walkers over these codes live outside this package -- the observation code mapping,
+// its string rendering, and the telemetry dimension -- and nothing but a test forces them to
+// reach every one. This list exists so those tests can be driven from the vocabulary.
+//
+// IT IS ITSELF HAND-MAINTAINED, and nothing forces it to agree with the const block above.
+// Go offers no way to enumerate a const group, so the honest description is that this
+// reduces four hand-maintained lists to one -- not that it removes the hazard. A code added
+// to the block and forgotten here is invisible to every test that iterates this. The
+// mitigation is that this list sits directly beneath the block it mirrors, and that the
+// tests naming it say what they cannot see.
 func AllInvariantCodes() []InvariantCode {
 	return []InvariantCode{
 		DeclaredSourceNotFound, DeclaredSourceKindInvalid,

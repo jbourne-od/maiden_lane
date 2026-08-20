@@ -270,6 +270,22 @@ rules produce C(10,2) = 45 unresolved write conflicts.
 The three group kinds got their canonical encoding and golden vectors here, as `encodeExpr`'s
 default arm promised they would when a Transform made them reachable.
 
+**Two limitations, recorded rather than absorbed.**
+
+*A declaration the encoder cannot encode is an error, not a diagnostic,* and this is forced
+rather than chosen. `Guard` is a value type, so omitting it yields `Expr{Kind: 0}`, which
+`encodeExpr`'s fail-closed default refuses. A `CompilationFailure` is identified by its
+`CompilationInputDigest`, that digest comes from the ruleset bytes, and a declaration with no
+canonical bytes has no failure identity to return. The same is already true of a field path
+carrying invalid UTF-8.
+
+*The append-only encoding is tested for injectivity, not proven.* Writing the payload with no
+presence marker is what kept every existing declaration's bytes unchanged, and the argument
+originally given for it -- that the operator byte discriminates -- is wrong, because
+`encodeRuleset` runs before the operator/payload agreement check. A property test over
+`RulesetDeclaration` would settle it; a table covering operator/payload disagreements is what
+exists.
+
 ## Decision 4's open question, answered
 
 Set-scoping does not cause dependency cycles by itself, and the feared mechanism is real but

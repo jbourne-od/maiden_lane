@@ -453,6 +453,18 @@ func profileKindForKey(key semantic.ProfileKey) ProfileKind {
 	}
 }
 
+// ObservationCodeForInvariant maps a semantic invariant code to its observation code, or
+// zero if none is mapped.
+//
+// Exported so the telemetry package can check its own dimension mapping against
+// semantic.AllInvariantCodes rather than against a list re-typed into a test file. Three
+// walkers over that vocabulary live outside the semantic package -- this mapping, its string
+// rendering, and observedInvariantCode -- and the last of them had no way to be driven from
+// the vocabulary without this.
+func ObservationCodeForInvariant(code semantic.InvariantCode) ObservationCode {
+	return codeForInvariant(code)
+}
+
 func codeForInvariant(code semantic.InvariantCode) ObservationCode {
 	switch code {
 	case semantic.DeclaredSourceNotFound:
@@ -477,6 +489,7 @@ func codeForInvariant(code semantic.InvariantCode) ObservationCode {
 		return CodeSelectionCardinalityInvalid
 	case semantic.SelectionEmpty:
 		return CodeSelectionEmpty
+
 	case semantic.SelectionGuardUnsatisfied:
 		return CodeSelectionGuardUnsatisfied
 	case semantic.SelectionExpressionUnavailable:

@@ -780,9 +780,21 @@ func encodeTransformationDeclaration(encoder *canonicalEncoder, transformation T
 	// and journal in a scheme whose durability argument is that storage cannot lie about
 	// identity because the reader recompiles and compares. The golden vectors caught it.
 	//
-	// Writing nothing when the payload is absent leaves those bytes untouched, and cannot
-	// collide: a declaration carrying this payload also carries operator byte 0x03, which no
-	// v1 ruleset could hold, and appending distinct bytes never equals appending none.
+	// WHAT KEEPS THIS INJECTIVE IS NOT THE OPERATOR BYTE, and an earlier version of this
+	// comment claimed it was. The claim was that a declaration carrying this payload also
+	// carries operator byte 0x03, which no v1 ruleset could hold -- but encodeRuleset runs
+	// inside Compile BEFORE deriveTransformation, so the operator/payload agreement check has
+	// not happened yet, and a declaration reaching here may carry byte 0x01 and this payload
+	// at once. The discriminator that argument named is not reliable where it is needed.
+	//
+	// What is actually relied on: absent, the next byte is Aggregate's presence marker, 0x00
+	// or 0x01; present, the next eight are a uint64 length whose leading byte is 0x00 for any
+	// selector kind shorter than 2^56 bytes. That separates the cases from 0x01 but not from
+	// 0x00, and the rest of the separation comes from the length-prefixing of everything
+	// after. This comment cannot finish that argument by hand, so it does not assert it:
+	// TestRulesetEncodingSeparatesDistinctDeclarations tests it over a table that includes
+	// operator/payload disagreements, and a property test over RulesetDeclaration would
+	// settle it. Recorded as TESTED, not proven.
 	//
 	// The presence bytes on Form and Aggregate stay. They are what v1 encoded, and removing
 	// them would be the same break in the other direction.

@@ -304,6 +304,25 @@ func (g Group) Key() Value { return g.key }
 // Members returns copies of the group's entities in canonical order.
 func (g Group) Members() []Entity { return cloneEntities(g.members) }
 
+// SelectionDataFault reports that a Select failure was caused by the STATE, not the selector.
+//
+// The distinction decides which channel a failure leaves on, so it cannot be left to the
+// caller's reading of an error string. Select fails for two unrelated reasons: the selector
+// is unusable here (never compiled, or compiled against another schema), which is an artifact
+// fault and an abort; or the predicate or grouping expression could not be evaluated against
+// some entity -- an absent field, an overflowing sum -- which is an ordinary refusal with a
+// code, and must not take the run down as an internal error because one driver lacks a depot.
+//
+// An earlier version of executeSelectAndAssign turned every Select error into an abort, on a
+// comment asserting that Select only ever fails for artifact reasons. It does not.
+// Select returns this type UNWRAPPED, so callers may assert on it directly. Stated because
+// the semantic package's import allowlist excludes "errors", so errors.As is unavailable and
+// a future wrap here would silently break every caller's classification.
+type SelectionDataFault struct{ err error }
+
+func (f SelectionDataFault) Error() string { return f.err.Error() }
+func (f SelectionDataFault) Unwrap() error { return f.err }
+
 // Select applies the selector to a state.
 //
 // ORDER IS AN IDENTITY PROBLEM HERE, not a presentation one. A set-scoped rule iterates, and
@@ -349,7 +368,7 @@ func (c CompiledSelector) Select(state State) (Selection, error) {
 		if c.where != nil {
 			matched, err := evaluateBool(state.Schema(), c.where.expr, entity)
 			if err != nil {
-				return Selection{}, fmt.Errorf("selector predicate: %w", err)
+				return Selection{}, SelectionDataFault{fmt.Errorf("selector predicate: %w", err)}
 			}
 			if !matched {
 				continue
@@ -363,11 +382,13 @@ func (c CompiledSelector) Select(state State) (Selection, error) {
 		}
 		key, err := evaluateValue(state.Schema(), c.groupBy.expr, entity)
 		if err != nil {
-			return Selection{}, fmt.Errorf("selector grouping: %w", err)
+			return Selection{}, SelectionDataFault{fmt.Errorf("selector grouping: %w", err)}
 		}
 		encoded, err := encodeGroupKey(key)
 		if err != nil {
-			return Selection{}, err
+			// The key came out of the state, so a key that cannot be canonicalized is a fact
+			// about the data and not about the selector.
+			return Selection{}, SelectionDataFault{fmt.Errorf("selector grouping key: %w", err)}
 		}
 		existing, present := byKey[encoded]
 		if !present {

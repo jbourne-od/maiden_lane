@@ -761,18 +761,22 @@ func TestSelectAssignIdentityCoversEveryAuthoredPart(t *testing.T) {
 			slices.Sort(rule.DeclaredReads)
 		},
 	}, {
-		// Identical value expressions, so only the TARGETS separate these two.
-		name: "assignment targets",
+		// The same two targets and the same two values, PAIRED THE OTHER WAY ROUND. Since
+		// assignments are now sorted by target, a pair that merely reordered them would be
+		// the same rule -- so what has to separate these is which value each target receives.
+		name: "value paired with target",
 		left: func(rule *TransformationDeclaration) {
 			rule.SelectAssign.Assignments = []FieldAssignment{
-				{Target: "driver.status", Value: certified}, {Target: "driver.depot", Value: certified},
+				{Target: "driver.depot", Value: certified},
+				{Target: "driver.status", Value: stringLiteral(t, "north")},
 			}
 			rule.DeclaredReads = []FieldPath{"driver.depot", "driver.violations"}
 			rule.DeclaredWrites = []FieldPath{"driver.depot", "driver.status"}
 		},
 		right: func(rule *TransformationDeclaration) {
 			rule.SelectAssign.Assignments = []FieldAssignment{
-				{Target: "driver.depot", Value: certified}, {Target: "driver.status", Value: certified},
+				{Target: "driver.depot", Value: stringLiteral(t, "north")},
+				{Target: "driver.status", Value: certified},
 			}
 			rule.DeclaredReads = []FieldPath{"driver.depot", "driver.violations"}
 			rule.DeclaredWrites = []FieldPath{"driver.depot", "driver.status"}
@@ -815,4 +819,327 @@ func TestSelectAssignIdentityCoversEveryAuthoredPart(t *testing.T) {
 			}
 		})
 	}
+}
+
+// selectAssignStateWith builds a state from raw field maps, for fixtures whose point is an
+// ABSENT field that the typed driverFixture cannot express.
+func selectAssignStateWith(t *testing.T, schema Schema, drivers map[string]map[FieldName]Value) State {
+	t.Helper()
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "depot-fleet")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+	keys := make([]string, 0, len(drivers))
+	for key := range drivers {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	entities := make([]Entity, 0, len(drivers))
+	for _, key := range keys {
+		entities = append(entities, mustEntity(t, "driver", SourceEntityID(lineage, "driver", key), drivers[key]))
+	}
+	state, err := NewState(schema, lineage, entities, nil)
+	if err != nil {
+		t.Fatalf("NewState: %v", err)
+	}
+	return state
+}
+
+// SELECTING IS EVALUATION, so the selector's own two expressions fail on data exactly as the
+// guard does -- and must refuse with a code rather than abort the transition.
+//
+// An earlier version of executeSelectAndAssign turned every Select error into a returned Go
+// error, on a comment asserting Select only fails for artifact reasons. It does not:
+// evaluateBool over Where and evaluateValue over GroupBy both refuse an absent field. One
+// driver missing its depot would have left the spine on the machinery-inability channel as an
+// internal error, with no SELECTION_* code and no invariant result -- an operational outage
+// standing in for a deterministic refusal about one row of data.
+//
+// The guard fixtures could not catch it: they omit the guard's field and the assignment's
+// field, never the grouping or filter field, and no other test executes a rule carrying a
+// Where at all.
+func TestSelectAssignRefusesWhenTheSELECTORCannotBeEvaluated(t *testing.T) {
+	schema := selectAssignSchema(t)
+	complete := map[FieldName]Value{
+		"depot": mustString(t, "north"), "driving_hours": NewInt64Value(8),
+		"rest_hours": NewInt64Value(10), "violations": NewInt64Value(1),
+	}
+	withoutDepot := map[FieldName]Value{
+		"driving_hours": NewInt64Value(9), "rest_hours": NewInt64Value(11), "violations": NewInt64Value(2),
+	}
+	withoutStatus := map[FieldName]Value{
+		"depot": mustString(t, "south"), "driving_hours": NewInt64Value(9),
+		"rest_hours": NewInt64Value(11), "violations": NewInt64Value(2),
+	}
+
+	t.Run("grouping expression", func(t *testing.T) {
+		state := selectAssignStateWith(t, schema, map[string]map[FieldName]Value{"A": complete, "B": withoutDepot})
+		plan := mustSelectAssignPlan(t, selectAssignRule(t, 3))
+		outcome, err := ExecuteTransition(selectAssignBinding(t, plan, state), "certify_depot.v1", state, Journal{})
+		if err != nil {
+			t.Fatalf("a driver with no depot aborted the transition instead of refusing it: %v", err)
+		}
+		failure := mustTransitionFailure(t, outcome)
+		if got := failure.Code(); got != string(SelectionExpressionUnavailable) {
+			t.Fatalf("refusal code %s, want %s", got, SelectionExpressionUnavailable)
+		}
+	})
+
+	t.Run("filter predicate", func(t *testing.T) {
+		// A rule with a Where, executed. Nothing else in this package executes one, so
+		// without this the filter is compiled and encoded but never run.
+		rule := selectAssignRule(t, 3)
+		where := Expr{Kind: ExprLess, Args: []Expr{fieldExpr("driver.driving_hours"), intLiteral(100)}}
+		rule.SelectAssign.Selector.Where = &where
+		state := selectAssignStateWith(t, schema, map[string]map[FieldName]Value{
+			"A": complete,
+			"B": {"depot": mustString(t, "south"), "rest_hours": NewInt64Value(11), "violations": NewInt64Value(2)},
+		})
+		plan := mustSelectAssignPlan(t, rule)
+		outcome, err := ExecuteTransition(selectAssignBinding(t, plan, state), "certify_depot.v1", state, Journal{})
+		if err != nil {
+			t.Fatalf("a driver the filter cannot evaluate aborted the transition: %v", err)
+		}
+		failure := mustTransitionFailure(t, outcome)
+		if got := failure.Code(); got != string(SelectionExpressionUnavailable) {
+			t.Fatalf("refusal code %s, want %s", got, SelectionExpressionUnavailable)
+		}
+	})
+
+	t.Run("a filter that excludes is not a filter that fails", func(t *testing.T) {
+		// The other half: a Where that evaluates and answers false must SELECT less, not
+		// refuse. Without this, the subtest above would pass on a rule that refused whenever
+		// a Where was present at all.
+		rule := selectAssignRule(t, 3)
+		where := Expr{Kind: ExprExists, Field: "driver.status"}
+		rule.SelectAssign.Selector.Where = &where
+		rule.DeclaredReads = append(rule.DeclaredReads, "driver.status")
+		slices.Sort(rule.DeclaredReads)
+		selected := make(map[FieldName]Value, len(complete)+1)
+		for name, value := range complete {
+			selected[name] = value
+		}
+		selected["status"] = mustString(t, "provisional")
+		state := selectAssignStateWith(t, schema, map[string]map[FieldName]Value{
+			"A": selected,      // has status, so the filter admits it
+			"B": withoutStatus, // no status, so the filter excludes it
+		})
+		plan := mustSelectAssignPlan(t, rule)
+		outcome := mustAcceptedTransition(t, selectAssignBinding(t, plan, state), "certify_depot.v1", state, Journal{})
+		if got := len(outcome.Patch().Operations()); got != 1 {
+			t.Fatalf("patch holds %d operations, want only the filtered-in driver", got)
+		}
+	})
+}
+
+// A refusal may not attest to obligations that were never established.
+//
+// evaluatedFailureResults marks every declaration ordered BEFORE the failing key as passed,
+// and those results are sealed into a digested ProtectedInvariantFailureReport. So the
+// obligation keys have to be numbered in the order the executor checks them; numbered any
+// other way, a cardinality refusal records "the selection was non-empty" as passed for a
+// selection that admitted no group at all.
+func TestSelectAssignRefusalRecordsNoUnestablishedObligation(t *testing.T) {
+	schema := selectAssignSchema(t)
+	rule := selectAssignRule(t, 3)
+	rule.SelectAssign.Selector.Members = Cardinality{Kind: CardinalityExactly, Count: 2}
+	plan := mustSelectAssignPlan(t, rule)
+	// ONE depot holding ONE driver: the only group violates the cardinality, so the set of
+	// qualifying groups is empty and "the selection was non-empty" is false.
+	state := selectAssignState(t, schema, []driverFixture{
+		{key: "C", depot: "south", driving: 4, rest: 5, violations: 1},
+	})
+	outcome, err := ExecuteTransition(selectAssignBinding(t, plan, state), "certify_depot.v1", state, Journal{})
+	if err != nil {
+		t.Fatalf("ExecuteTransition: %v", err)
+	}
+	failure := mustTransitionFailure(t, outcome)
+	if got := failure.Code(); got != string(SelectionCardinalityInvalid) {
+		t.Fatalf("refusal code %s, want %s", got, SelectionCardinalityInvalid)
+	}
+	for _, result := range outcome.InvariantResults() {
+		if result.Code() == SelectionEmpty && result.Passed() {
+			t.Fatal("the refusal record claims the selection was non-empty, and it was empty")
+		}
+		if result.Code() == SelectionGuardUnsatisfied && result.Passed() {
+			t.Fatal("the refusal record claims a group satisfied the guard, and none was assessed")
+		}
+	}
+}
+
+// Authored assignment order is not semantic, so it must not reach the identity.
+//
+// Two rulesets listing the same assignments in different order produce byte-identical
+// patches, journals and states -- every value is evaluated against the same pre-state member,
+// none observes another, and NewPatch sorts an update's fields by name. Before
+// normalizeTransformationPayload gained its arm they nonetheless carried different ruleset
+// digests, so the same rule written twice was two rules with two SemanticRunIDs.
+func TestSelectAssignAuthoredOrderIsNotIdentity(t *testing.T) {
+	certified := stringLiteral(t, "certified")
+	total := Expr{Kind: ExprAdd, Args: []Expr{
+		fieldExpr("driver.driving_hours"), fieldExpr("driver.rest_hours"),
+	}}
+	authored := func(assignments ...FieldAssignment) TransformationDeclaration {
+		rule := selectAssignRule(t, 3)
+		rule.SelectAssign.Assignments = assignments
+		return rule
+	}
+	first := mustSelectAssignPlan(t, authored(
+		FieldAssignment{Target: "driver.shift_total", Value: total},
+		FieldAssignment{Target: "driver.status", Value: certified},
+	))
+	second := mustSelectAssignPlan(t, authored(
+		FieldAssignment{Target: "driver.status", Value: certified},
+		FieldAssignment{Target: "driver.shift_total", Value: total},
+	))
+	if first.RulesetDigest() != second.RulesetDigest() {
+		t.Fatal("the same rule authored in two orders produced two ruleset digests")
+	}
+	if first.ID() != second.ID() {
+		t.Fatal("the same rule authored in two orders produced two plan identities")
+	}
+}
+
+// An authored tree deeper than the language admits must be REFUSED, not walked.
+//
+// maxExprDepth is enforced in checkExpr and checkExprInScope, which run inside
+// deriveTransformation -- and normalizeRuleset clones the authored trees and encodeRuleset
+// encodes them, both before that. Until checkAuthoredPayloadBounds ran first, those two
+// recursions consumed a tree nothing had bounded, and a deep enough guard exhausted the
+// goroutine stack: a fatal runtime error, not a refusal, and not recoverable.
+//
+// The nesting here is far past maxExprDepth but small enough to build and to survive if the
+// bound holds, which is the point: the test must fail by REPORTING, not by crashing the
+// process, so it cannot be written at the depth that actually overflows.
+func TestSelectAssignRefusesAnUnboundedAuthoredTree(t *testing.T) {
+	nested := func(leaf Expr, depth int) Expr {
+		for i := 0; i < depth; i++ {
+			leaf = Expr{Kind: ExprNot, Args: []Expr{leaf}}
+		}
+		return leaf
+	}
+	exists := Expr{Kind: ExprExists, Field: "driver.violations"}
+
+	// EVERY TREE THE PAYLOAD CARRIES, not just the guard. A bound applied to one of the four
+	// leaves the other three walked unbounded, and a version checking only the guard passed
+	// a single-case version of this test.
+	trees := map[string]func(*TransformationDeclaration, Expr){
+		"guard": func(rule *TransformationDeclaration, deep Expr) {
+			rule.SelectAssign.Guard = Expr{Kind: ExprAllMembers, Args: []Expr{deep}}
+		},
+		"assignment value": func(rule *TransformationDeclaration, deep Expr) {
+			// A bool-typed value would not type-check against an int64 target, but the bound
+			// must refuse the tree before any of that is reached.
+			rule.SelectAssign.Assignments[0].Value = deep
+		},
+		"filter predicate": func(rule *TransformationDeclaration, deep Expr) {
+			rule.SelectAssign.Selector.Where = &deep
+		},
+		"grouping expression": func(rule *TransformationDeclaration, deep Expr) {
+			rule.SelectAssign.Selector.GroupBy = &deep
+		},
+	}
+	for name, place := range trees {
+		t.Run(name, func(t *testing.T) {
+			rule := selectAssignRule(t, 3)
+			place(&rule, nested(exists, maxExprDepth+10))
+			if _, err := Compile(selectAssignRequest(t, rule)); err == nil {
+				t.Fatalf("a %s nested past maxExprDepth was accepted by canonicalization", name)
+			}
+		})
+	}
+
+	// And the bound is a bound, not a blanket refusal: a tree just inside it still compiles,
+	// or every subtest above would pass against an implementation that refused all guards.
+	t.Run("a shallow tree still compiles", func(t *testing.T) {
+		legal := selectAssignRule(t, 3)
+		legal.SelectAssign.Guard = Expr{Kind: ExprAllMembers, Args: []Expr{nested(exists, 4)}}
+		mustSelectAssignPlan(t, legal)
+	})
+}
+
+// Distinct declarations must encode to distinct ruleset bytes, INCLUDING declarations the
+// compiler will later refuse.
+//
+// The payload is written with no presence marker so that adding it left every existing
+// declaration's bytes untouched. The comment justifying that once argued injectivity from the
+// operator byte -- which is wrong, because encodeRuleset runs before the operator/payload
+// agreement check, so a declaration carrying operator 0x01 AND a SelectAssign payload reaches
+// the encoder. RulesetDigest feeds CompilationInputDigest, which is computed for refused
+// compilations too, so the set this must be injective over is every declaration that reaches
+// the encoder, not the subset that survives validation.
+//
+// This does not prove injectivity; it tests the cases the broken argument left uncovered.
+func TestRulesetEncodingSeparatesDistinctDeclarations(t *testing.T) {
+	base := selectAssignRule(t, 3)
+	form := compileFixtureRequest(t, false).Rules.Transformations[0]
+	form.ID = "certify_depot.v1"
+
+	withStray := form
+	withStray.SelectAssign = base.SelectAssign
+
+	strayOnly := form
+	strayOnly.Form = nil
+	strayOnly.SelectAssign = base.SelectAssign
+
+	aggregate := compileFixtureRequest(t, false).Rules.Transformations[1]
+	aggregate.ID = "certify_depot.v1"
+
+	aggregateWithStray := aggregate
+	aggregateWithStray.SelectAssign = base.SelectAssign
+
+	otherThreshold := selectAssignRule(t, 9)
+
+	candidates := map[string]TransformationDeclaration{
+		"select-assign":                         base,
+		"select-assign with another threshold":  otherThreshold,
+		"form only":                             form,
+		"form carrying a stray select-assign":   withStray,
+		"select-assign under the form operator": strayOnly,
+		"aggregate only":                        aggregate,
+		"aggregate carrying a stray payload":    aggregateWithStray,
+	}
+	seen := make(map[string]string, len(candidates))
+	names := make([]string, 0, len(candidates))
+	for name := range candidates {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		encoded, err := encodeRuleset(normalizedRuleset{
+			transformations: []TransformationDeclaration{candidates[name]},
+		})
+		if err != nil {
+			t.Fatalf("%s: encodeRuleset: %v", name, err)
+		}
+		key := string(encoded)
+		if previous, collision := seen[key]; collision {
+			t.Fatalf("%q and %q encode to the same ruleset bytes", previous, name)
+		}
+		seen[key] = name
+	}
+}
+
+// A declaration the encoder cannot encode is an ERROR, not a diagnostic, and that is forced.
+//
+// Guard is a value type, so omitting it yields Expr{Kind: 0}, which encodeExpr's fail-closed
+// default refuses -- and Compile returns an error rather than the UNSUPPORTED_OPERATOR/"guard"
+// diagnostic that deriveTransformation would produce. This is not a choice that could go the
+// other way: a CompilationFailure is identified by its CompilationInputDigest, that digest is
+// derived from the ruleset bytes, and a declaration with no canonical bytes has no failure
+// identity to return. The same is already true of a field path containing invalid UTF-8.
+//
+// Pinned so the behaviour is a recorded limitation rather than a surprise, and so that the
+// error names the rule.
+func TestSelectAssignUnencodableDeclarationIsAnError(t *testing.T) {
+	rule := selectAssignRule(t, 3)
+	rule.SelectAssign.Guard = Expr{}
+	_, err := Compile(selectAssignRequest(t, rule))
+	if err == nil {
+		t.Fatal("a declaration with no canonical encoding compiled")
+	}
+	// The compiler must still be usable afterwards, and the neighbouring legal rule must
+	// still compile -- otherwise this test would also pass against a compiler that had
+	// simply stopped working.
+	mustSelectAssignPlan(t, selectAssignRule(t, 3))
 }

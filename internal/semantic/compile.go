@@ -438,6 +438,10 @@ func normalizeRuleset(input RulesetDeclaration) (normalizedRuleset, error) {
 		if !validSemanticName(string(raw.ID)) {
 			return normalizedRuleset{}, fmt.Errorf("rule ID is empty or invalid UTF-8")
 		}
+		// BEFORE cloneTransformation, which recurses over the authored expression trees.
+		if err := checkAuthoredPayloadBounds(raw); err != nil {
+			return normalizedRuleset{}, fmt.Errorf("rule %q: %w", raw.ID, err)
+		}
 		transformation := cloneTransformation(raw)
 		var err error
 		if transformation.DeclaredReads, err = normalizeFieldSet(transformation.DeclaredReads); err != nil {
@@ -480,7 +484,53 @@ func normalizeRuleset(input RulesetDeclaration) (normalizedRuleset, error) {
 	return normalizedRuleset{transformations: transformations, checkpoints: checkpoints}, nil
 }
 
+// checkAuthoredPayloadBounds bounds every authored expression tree a declaration carries,
+// before anything walks one recursively.
+//
+// It reads the caller's declaration rather than a clone, deliberately: cloning is the first
+// recursion, so a check that ran after it would already have overflowed.
+func checkAuthoredPayloadBounds(raw TransformationDeclaration) error {
+	payload := raw.SelectAssign
+	if payload == nil {
+		// The frozen operators carry no expressions. When one gains them, it comes here.
+		return nil
+	}
+	trees := make([]Expr, 0, 3+len(payload.Assignments))
+	if payload.Selector.Where != nil {
+		trees = append(trees, *payload.Selector.Where)
+	}
+	if payload.Selector.GroupBy != nil {
+		trees = append(trees, *payload.Selector.GroupBy)
+	}
+	trees = append(trees, payload.Guard)
+	for _, assignment := range payload.Assignments {
+		trees = append(trees, assignment.Value)
+	}
+	for _, tree := range trees {
+		if err := checkAuthoredExprBound(tree); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func normalizeTransformationPayload(transformation *TransformationDeclaration) error {
+	if payload := transformation.SelectAssign; payload != nil {
+		// AUTHORED ORDER IS NOT SEMANTIC HERE, and leaving it unnormalized put it in the
+		// ruleset identity. Every value is evaluated against the same pre-state member, no
+		// assignment observes another's result, duplicate targets are refused, and NewPatch
+		// sorts an update's fields by name -- so two rulesets listing the same assignments in
+		// different order produce byte-identical patches, journals and states, and differed
+		// only in their PlanID and therefore their SemanticRunID.
+		//
+		// This is the arm that was missing: every other authored payload list in this
+		// function is sorted, and RulesetDeclaration's own doc says authored order is not
+		// semantic. Duplicate detection stays in deriveTransformation, where it is an
+		// attributable diagnostic rather than an error.
+		sort.Slice(payload.Assignments, func(i, j int) bool {
+			return payload.Assignments[i].Target < payload.Assignments[j].Target
+		})
+	}
 	if form := transformation.Form; form != nil {
 		sort.Slice(form.Sources, func(i, j int) bool {
 			if form.Sources[i].Kind != form.Sources[j].Kind {
@@ -1097,12 +1147,19 @@ func selectAssignInvariants(rule RuleID, payload *SelectAssignDeclaration) []Inv
 	for _, assignment := range payload.Assignments {
 		values = append(values, readFieldPaths(assignment.Value)...)
 	}
+	// NUMBERED IN THE ORDER executeSelectAndAssign CHECKS THEM, and that is a correctness
+	// constraint rather than a tidiness one. Obligations are sorted by key, and
+	// evaluatedFailureResults marks every declaration BEFORE the failing key as passed --
+	// so a key ordered ahead of the check that actually runs first produces a sealed,
+	// digested failure report attesting to an obligation nothing established. Numbered the
+	// other way round, a cardinality refusal would record "the selection was non-empty" as
+	// passed for a selection that admitted no group at all.
+	evaluable := append(readFieldPaths(payload.Guard), values...)
 	return []InvariantDeclaration{
-		newInvariant(rule, "01-selection-nonempty", SelectionEmpty, InvariantRulePrecondition, grouping),
-		newInvariant(rule, "02-cardinality", SelectionCardinalityInvalid, InvariantRulePrecondition, grouping),
-		newInvariant(rule, "03-guard", SelectionGuardUnsatisfied, InvariantRulePrecondition, readFieldPaths(payload.Guard)),
-		newInvariant(rule, "04-evaluable", SelectionExpressionUnavailable, InvariantRulePrecondition,
-			append(readFieldPaths(payload.Guard), values...)),
+		newInvariant(rule, "01-cardinality", SelectionCardinalityInvalid, InvariantRulePrecondition, grouping),
+		newInvariant(rule, "02-selection-nonempty", SelectionEmpty, InvariantRulePrecondition, grouping),
+		newInvariant(rule, "03-evaluable", SelectionExpressionUnavailable, InvariantRulePrecondition, evaluable),
+		newInvariant(rule, "04-guard", SelectionGuardUnsatisfied, InvariantRulePrecondition, readFieldPaths(payload.Guard)),
 	}
 }
 

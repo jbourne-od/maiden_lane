@@ -22,8 +22,20 @@ func executeSelectAndAssign(
 	}
 	selection, err := transformation.selector.Select(state)
 	if err != nil {
-		// The selector was not compiled, or was compiled against another schema. Both are
-		// artifact faults rather than data faults.
+		// A direct assertion rather than errors.As: this package's import allowlist excludes
+		// "errors" (boundary_test.go enforces it), and Select returns the fault unwrapped,
+		// which its declaration states so this assertion stays sound.
+		if _, isData := err.(SelectionDataFault); isData {
+			// The predicate or the grouping expression could not be evaluated against some
+			// entity. That is the same fact as an unevaluable guard and takes the same code:
+			// a refusal with attribution, not an abort. Selecting is evaluation, so the
+			// selector's own two expressions can fail on data exactly as the guard can --
+			// and an earlier version of this function aborted the run for all of them.
+			return rejectInvariant(binding, declaration.ID, state, journal, transformation.invariants,
+				SelectionExpressionUnavailable, nil, nil, nil)
+		}
+		// The selector was not compiled, or was compiled against another schema. Those are
+		// artifact faults, and no state can fix them.
 		return base, fmt.Errorf("execute select: %w", err)
 	}
 	if !selection.Ran() {
