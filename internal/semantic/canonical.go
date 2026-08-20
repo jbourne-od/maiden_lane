@@ -23,6 +23,31 @@ import (
 //                 relations(kind, from ref(kind+digest), to ref(kind+digest))
 //   world:        tag, sorted closed references(kind byte, content digest)
 //
+
+// Expression encoding table (v1)
+//
+//	expression      tag ‖ compilerVersion ‖ schemaDigest ‖ node
+//	node            kindByte ‖ operands, selected by kind:
+//	                  literal            value
+//	                  field, exists      fieldPath
+//	                  not, all, any,     uint64(argCount) ‖ node...
+//	                  equal, less, add
+//
+// Selector encoding table (v1)
+//
+//	selector        tag ‖ compilerVersion ‖ schemaDigest ‖ entityKind
+//	                    ‖ cardinalityKindByte ‖ uint64(cardinalityCount)
+//	                    ‖ optional(node) ‖ optional(node)
+//
+// The two optionals are the predicate and the grouping expression, each written as an
+// expression node with no tag of its own. Presence bytes precede both, so a selector with
+// only a predicate cannot encode as one with only a grouping.
+//
+// The compiler version and schema digest lead because Type() is a fact about
+// (schema, expression) rather than about the expression alone, so the bytes must fix what
+// determined it -- the same reason compiledProfile carries both. Nested nodes carry no tag of
+// their own; the tag is written once at the top. Kind bytes are append-only.
+
 // Compiler artifact encoding table (v1):
 //
 //   ruleset:      tag, sorted complete transformation declarations, sorted
@@ -125,6 +150,8 @@ const (
 	invariantResultsDomainTag   = "maiden-lane.invariant-results.v1"
 	journalEntryDomainTag       = "maiden-lane.journal-entry.v1"
 	journalPrefixDomainTag      = "maiden-lane.journal-prefix.v1"
+	expressionDomainTag         = "maiden-lane.expression.v1"
+	selectorDomainTag           = "maiden-lane.selector.v1"
 	protectedFailureDomainTag   = "maiden-lane.protected-invariant-failure.v1"
 	artifactFailureDomainTag    = "maiden-lane.artifact-integrity-failure.v1"
 	checkpointIDDomainTag       = "maiden-lane.checkpoint-id.v1"
@@ -248,6 +275,14 @@ func (e *canonicalEncoder) value(value Value) {
 		e.string(value.text)
 	case ValueInt64:
 		e.int64(value.integer)
+	}
+}
+
+// fail poisons the encoder, so an exhaustive switch can refuse an unrecognised case instead
+// of writing something plausible. Without it a default arm has no way to say "no".
+func (e *canonicalEncoder) fail(err error) {
+	if e.err == nil {
+		e.err = err
 	}
 }
 
