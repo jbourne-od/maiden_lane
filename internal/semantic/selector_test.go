@@ -269,12 +269,15 @@ func TestSelectorRefusesAPathOutsideItsKind(t *testing.T) {
 //
 // compileSelectorExpr's `named != kind` is the check that actually gates authored input:
 // Select filters entities by kind before evaluating, so boundField's identical guard is
-// defence-in-depth and cannot fire in production. Every selector in this file that carries a
-// predicate or a grouping declares Kind "driver", so replacing `named != kind` with
-// `named != "driver"` survived the whole suite -- the fixture's value for the dimension under
-// test was exactly the literal the broken code would hardcode.
+// defence-in-depth and cannot fire in production.
 //
-// A previous round hardened the unreachable copy and left this one satisfiable by a constant.
+// BEFORE THIS TEST EXISTED, every selector in the suite carrying a predicate or a grouping
+// declared Kind "driver", so replacing `named != kind` with `named != "driver"` survived the
+// whole suite: the fixture's value for the dimension under test was exactly the literal the
+// broken code would hardcode. A previous round hardened the unreachable copy and left this
+// one satisfiable by a constant. Both are pinned now, which is why the sentence above is in
+// the past tense -- a comment claiming a live gap the same commit closes is the defect this
+// suite exists to catch.
 func TestSelectorBindsItsOwnKindWhicheverThatIs(t *testing.T) {
 	schema, err := NewSchema([]EntityDeclaration{
 		{Kind: "driver", Fields: []FieldDeclaration{{Name: "assignment_key", Kind: ValueString}}},
@@ -304,6 +307,26 @@ func TestSelectorBindsItsOwnKindWhicheverThatIs(t *testing.T) {
 		Members: Cardinality{Kind: CardinalityAny},
 	}); err == nil {
 		t.Fatal("a team selector accepted a predicate reading a driver path")
+	}
+
+	// THE OTHER DOOR. CompileSelector passes selector.Kind into compileSelectorExpr twice,
+	// independently, once for the predicate and once for the grouping. Pinning the predicate
+	// path leaves the grouping path satisfiable by a constant: hardcoding "driver" in the
+	// GroupBy call alone survives the whole suite otherwise. Two call sites of one rule are
+	// two things to pin, which is the same lesson as the compiler/evaluator pair one level up.
+	if _, err := CompileSelector(schema, testCompilerVersion, Selector{
+		Kind:    "team",
+		GroupBy: ptr(field("team.assignment_key")),
+		Members: Cardinality{Kind: CardinalityAny},
+	}); err != nil {
+		t.Fatalf("a team selector grouping on a team field was refused: %v", err)
+	}
+	if _, err := CompileSelector(schema, testCompilerVersion, Selector{
+		Kind:    "team",
+		GroupBy: ptr(field("driver.assignment_key")),
+		Members: Cardinality{Kind: CardinalityAny},
+	}); err == nil {
+		t.Fatal("a team selector accepted a grouping reading a driver path")
 	}
 }
 
@@ -783,10 +806,11 @@ func TestEvaluateRefusesAPathNamingAnotherKind(t *testing.T) {
 	}
 
 	// AND THE SYMMETRIC CASE, because binding only a driver lets the guard be satisfied by a
-	// constant. Replacing `kind != entity.Ref().Kind` with `kind != "driver"` refuses exactly
-	// the inputs above and survives the whole suite, while being wrong for every entity of any
-	// other kind. A guard compared against the one value the fixture happens to hold is not
-	// tested; found by mutation while reviewing the failure-class list that names this shape.
+	// constant. Before this block, replacing `kind != entity.Ref().Kind` with
+	// `kind != "driver"` refused exactly the inputs above and survived the whole suite, while
+	// being wrong for every entity of any other kind. A guard compared against the one value
+	// the fixture happens to hold is not tested. Past tense deliberately: this block kills
+	// that mutant.
 	team, err := NewEntity(
 		EntityRef{Kind: "team", ID: SourceEntityID(lineage, "team", "t")},
 		map[FieldName]Value{"assignment_key": key})

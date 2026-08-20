@@ -224,8 +224,17 @@ every diff.
     confidently answers a different question. Look for a representation carrying more than one
     field where only one is consulted — a kind tag beside a payload, a type beside a value; a
     lookup whose result is correct in type but read from the wrong subject; two derivations of
-    one fact from different references; and any place where a compile-time check establishes a
-    property that an executable path then ASSUMES rather than re-establishes.
+    one fact from different references; and — stated carefully, because the loose version is
+    wrong — a boundary that RELIES on a property another boundary proves, while being
+    reachable without carrying that proof.
+
+    Relying on compile-time proof is not itself suspicious. A closed compiled artifact exists
+    so that execution need not revalidate everything, and a reviewer who treats every such
+    reliance as a defect will demand the executor duplicate the compiler, which contradicts
+    having one closed source of meaning. The dangerous shape is narrower: A proves P, B relies
+    on P, and **B is reachable without A having run** — or two independently reachable
+    boundaries disagree about which inputs are admissible. Ask which callers can reach B, not
+    whether B rechecks.
 
     Five instances in twelve reviews of one branch, numbered as the code's own comments number
     them:
