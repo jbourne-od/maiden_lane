@@ -167,6 +167,16 @@ every diff.
      cannot test the symmetric case, and the symmetric case is where a storage constraint
      once hid.
 
+   The general form, which subsumes the middle two and has cost this repository several
+   findings: **a guard is only tested when the fixture reaches the state where that guard is
+   the SOLE reason for the refusal.** If a second rule refuses the same input first, the test
+   stands near the property rather than pinning it, and narrowing or deleting the guard
+   survives. Instances so far: every cardinality fixture was ungrouped, where a different rule
+   refused the zero count independently; an overflow fixture varied magnitude but not sign, so
+   only one disjunct of a compound guard was ever the reason; and a test that built a two-kind
+   schema to isolate an entity-kind check then passed a one-kind schema, so a declaredness
+   check added later refused first.
+
 8. **A returned value that shares mutable state.** Copying a struct copies slice headers
    and map references. Every accessor and every record returned from a store must share
    nothing with what it came from.
@@ -184,7 +194,24 @@ every diff.
     behavioural test cannot distinguish the omission. Encoders only — a new decoder in
     `internal/semantic` is a `REJECT`.
 
-12. **A deliberate omission left unwritten.** Anything the change could plausibly have
+12. **A value that is well-formed and answers the wrong question.** The hardest defects here
+    are not crashes or type errors. They are values that pass every local check and denote
+    something other than what was asked: nothing panics, nothing goes red, and the system
+    confidently answers a different question. Look for a representation carrying more than one
+    field where only one is consulted — a kind tag beside a payload, a type beside a value; a
+    lookup whose result is correct in type but read from the wrong subject; two derivations of
+    one fact from different references; and any place where a compile-time check establishes a
+    property that an executable path then ASSUMES rather than re-establishes.
+
+    Five instances in twelve reviews of one branch, and the fourth lived inside the fix for
+    the second: `equal` over bools read the value field, which is zero for a bool result; an
+    invalid literal typed as invalid with a nil error, so equality took the value path; a
+    literal valid in kind but not content was refused by the compiler and accepted by the
+    evaluator; a field path read its value off an entity of another kind, correctly typed; and
+    `exists()` over an undeclared path answered false rather than refusing. Each compiled,
+    typed and evaluated cleanly.
+
+13. **A deliberate omission left unwritten.** Anything the change could plausibly have
     included and did not must be recorded in the claims file or the programme's progress
     document under `docs/superpowers/sdd/`. Silent scope reduction reads as coverage.
 
