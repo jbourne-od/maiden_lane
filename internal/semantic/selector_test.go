@@ -714,17 +714,21 @@ func TestEvaluateRefusesAPathNamingAnotherKind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEntity: %v", err)
 	}
-	_ = schema
+	// THE TWO-KIND SCHEMA, not expressionSchema. This test built one and then discarded it,
+	// so `team.assignment_key` was refused by the DECLAREDNESS check -- expressionSchema does
+	// not declare `team` at all -- and the kind guard this test names was never reached.
+	// Deleting that guard left the whole suite green. A guard is only tested when the fixture
+	// reaches the state where that guard is the sole reason for refusal.
 
 	// The driver's own path resolves; the team's must not, even though both kinds declare a
 	// field of that name and the driver holds a value for it.
-	if _, err := evaluateExpr(expressionSchema(t), field("driver.assignment_key"), driver); err != nil {
+	if _, err := evaluateExpr(schema, field("driver.assignment_key"), driver); err != nil {
 		t.Fatalf("the bound kind's own path did not resolve: %v", err)
 	}
-	if _, err := evaluateExpr(expressionSchema(t), field("team.assignment_key"), driver); err == nil {
+	if _, err := evaluateExpr(schema, field("team.assignment_key"), driver); err == nil {
 		t.Fatal("a team path read a driver's field")
 	}
-	if _, err := evaluateExpr(expressionSchema(t),
+	if _, err := evaluateExpr(schema,
 		Expr{Kind: ExprExists, Field: "team.assignment_key"}, driver); err == nil {
 		t.Fatal("exists on a team path answered against a driver")
 	}
@@ -732,7 +736,7 @@ func TestEvaluateRefusesAPathNamingAnotherKind(t *testing.T) {
 	// evaluateBool's type refusal has the same shape: on removal it returns .boolean, which
 	// is false for a value-typed result, so a non-bool operand answers false rather than
 	// refusing.
-	if _, err := evaluateBool(expressionSchema(t), field("driver.assignment_key"), driver); err == nil {
+	if _, err := evaluateBool(schema, field("driver.assignment_key"), driver); err == nil {
 		t.Fatal("a string-typed expression was accepted as a bool")
 	}
 }
@@ -927,6 +931,93 @@ func TestSelectorUngroupedOrderIsTheStatesOrder(t *testing.T) {
 				t.Fatalf("pass %d ordered ungrouped groups differently from pass 0", pass)
 			}
 		}
+	}
+}
+
+// equal's operand-type refusal. Without it, bool-vs-string reaches the bool arm and compares
+// left.boolean against right.boolean -- which is the zero false for a string result -- so it
+// answers false, totally and deterministically. That is the round-eleven defect's shape in
+// the arm immediately below the one written to fix it.
+func TestEvaluateRefusesEqualAcrossTypes(t *testing.T) {
+	schema := expressionSchema(t)
+	state := selectorState(t, "a")
+	entity := state.Entities()[0]
+
+	crossType := Expr{Kind: ExprEqual, Args: []Expr{
+		{Kind: ExprExists, Field: "driver.hos_anchor"}, // bool, and true for this entity
+		field("driver.assignment_key"),                 // string
+	}}
+	if _, err := evaluateExpr(schema, crossType, entity); err == nil {
+		t.Fatal("equal compared a bool with a string instead of refusing")
+	}
+	// The compiler refuses the same node, so the two halves agree.
+	if _, err := CompileExpression(schema, testCompilerVersion, crossType); err == nil {
+		t.Fatal("the compiler accepted a cross-type equal")
+	}
+}
+
+// ExprAny's short circuit, which only ExprAll was covering. The comment justifying short
+// circuiting names any(not(exists(f)), less(f, 10)) as one of its two motivating forms, and
+// nothing exercised it.
+func TestEvaluateAnyShortCircuits(t *testing.T) {
+	schema := expressionSchema(t)
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "selector")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+	sparse, err := NewEntity(
+		EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "sparse")},
+		map[FieldName]Value{"hos_driving_hours": NewInt64Value(1)})
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+
+	// The first disjunct is true, so the second -- which reads an absent field and would
+	// error -- must never run.
+	tolerant := Expr{Kind: ExprAny, Args: []Expr{
+		{Kind: ExprNot, Args: []Expr{{Kind: ExprExists, Field: "driver.hos_elapsed_hours"}}},
+		{Kind: ExprLess, Args: []Expr{field("driver.hos_elapsed_hours"), intLiteral(10)}},
+	}}
+	got, err := evaluateBool(schema, tolerant, sparse)
+	if err != nil {
+		t.Fatalf("any did not short circuit past an absent field: %v", err)
+	}
+	if !got {
+		t.Fatal("any returned false when its first disjunct was true")
+	}
+}
+
+// ONE DERIVATION OF A FIELD'S TYPE, from the declaration, which is what the compiler uses.
+//
+// This is constructible because NewEntity takes no schema: only NewState enforces that a
+// stored value's kind matches its declaration. So an Entity built directly -- the "reachable
+// without a compiled selector" class the evaluator's own comments claim to defend -- can hold
+// a string in an int64-declared field, and that is the only input distinguishing "type from
+// the declaration" from "type from the value".
+func TestEvaluateTypesAFieldFromItsDeclaration(t *testing.T) {
+	schema := expressionSchema(t)
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "selector")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+	wrongKind, err := NewStringValue("not-an-int")
+	if err != nil {
+		t.Fatalf("NewStringValue: %v", err)
+	}
+	// hos_elapsed_hours is declared ValueInt64; this holds a string. NewState would refuse
+	// the state, which is why this entity is built directly.
+	mismatched, err := NewEntity(
+		EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "mismatched")},
+		map[FieldName]Value{"hos_elapsed_hours": wrongKind})
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	if _, err := NewState(schema, lineage, []Entity{mismatched}, nil); err == nil {
+		t.Fatal("NewState accepted the mismatch, so this entity is not the unreachable case")
+	}
+
+	if _, err := evaluateExpr(schema, field("driver.hos_elapsed_hours"), mismatched); err == nil {
+		t.Fatal("a field whose stored kind contradicts its declaration was typed and returned")
 	}
 }
 

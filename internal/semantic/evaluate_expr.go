@@ -82,7 +82,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: kind, value: *expr.Literal}, nil
 
 	case ExprField:
-		value, present, err := boundField(schema, expr.Field, entity)
+		value, declared, present, err := boundField(schema, expr.Field, entity)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -95,16 +95,28 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 			// short circuit keeps it expressible.
 			return evaluated{}, fmt.Errorf("field %q is absent", expr.Field)
 		}
-		kind, err := valueKindType(value.Kind())
+		// ONE DERIVATION, from the DECLARATION, which is what checkExpr uses. An earlier
+		// version derived this type from the stored value's kind, so the compiler typed a
+		// field from schema.fieldKind and the evaluator typed it from value.Kind() -- two
+		// derivations of one fact from two references, which is the shape that produced four
+		// of this branch's wrong-answer defects. What kept them equal was validateEntityFields,
+		// and the comment here cited it as refusing invalid values, which it does not: it
+		// checks kind agreement and required-field presence, not Valid().
+		kind, err := valueKindType(declared)
 		if err != nil {
-			// Unreachable: NewEntity and validateEntityFields refuse an invalid field value,
-			// which is the invariant literalKindOf's removed comment claimed for literals too.
 			return evaluated{}, fmt.Errorf("field %q: %w", expr.Field, err)
+		}
+		// And the stored value is required to agree with the declaration rather than assumed
+		// to. NewState enforces this; a caller reaching the evaluator with an Entity that did
+		// not pass through it would otherwise get a value tagged with a type it is not.
+		if value.Kind() != declared {
+			return evaluated{}, fmt.Errorf(
+				"field %q holds a value of kind %d, declared %d", expr.Field, value.Kind(), declared)
 		}
 		return evaluated{kind: kind, value: value}, nil
 
 	case ExprExists:
-		_, present, err := boundField(schema, expr.Field, entity)
+		_, _, present, err := boundField(schema, expr.Field, entity)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -229,23 +241,26 @@ func evaluateInt64Pair(schema Schema, expr Expr, entity Entity) (int64, int64, e
 // A compiled selector has already established that every path names the selected kind, so
 // this cannot fire through that route. It is checked anyway because the evaluator is reachable
 // without one and must not read a field off an entity the path does not describe.
-func boundField(schema Schema, path FieldPath, entity Entity) (Value, bool, error) {
+func boundField(
+	schema Schema, path FieldPath, entity Entity,
+) (value Value, declared ValueKind, present bool, err error) {
 	kind, name := splitFieldPath(path)
 	if kind == "" || name == "" {
-		return Value{}, false, fmt.Errorf("malformed field path %q", path)
+		return Value{}, 0, false, fmt.Errorf("malformed field path %q", path)
 	}
 	// DECLAREDNESS, re-established rather than relied on. Without this, exists() over a path
 	// no schema declares answered false rather than refusing -- absence of a DECLARATION
 	// collapsed into absence of a VALUE, so not(exists(driver.typo)) was true for every
 	// entity while the compiler refused the identical node. The kind half of this guard was
 	// added a round earlier; this is the other half of the same sentence.
-	if _, declared := schema.fieldKind(path); !declared {
-		return Value{}, false, fmt.Errorf("field %q is not declared by this schema", path)
+	declaredKind, isDeclared := schema.fieldKind(path)
+	if !isDeclared {
+		return Value{}, 0, false, fmt.Errorf("field %q is not declared by this schema", path)
 	}
 	if kind != entity.Ref().Kind {
-		return Value{}, false, fmt.Errorf(
+		return Value{}, 0, false, fmt.Errorf(
 			"path %q does not name the bound entity kind %q", path, entity.Ref().Kind)
 	}
-	value, present := entity.Field(name)
-	return value, present, nil
+	stored, found := entity.Field(name)
+	return stored, declaredKind, found, nil
 }

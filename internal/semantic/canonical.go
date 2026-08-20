@@ -33,6 +33,16 @@ import (
 //	                  not, all, any,     uint64(argCount) ‖ node...
 //	                  equal, less, add
 //
+// Selector encoding table (v1)
+//
+//	selector        tag ‖ compilerVersion ‖ schemaDigest ‖ entityKind
+//	                    ‖ cardinalityKindByte ‖ uint64(cardinalityCount)
+//	                    ‖ optional(node) ‖ optional(node)
+//
+// The two optionals are the predicate and the grouping expression, each written as an
+// expression node with no tag of its own. Presence bytes precede both, so a selector with
+// only a predicate cannot encode as one with only a grouping.
+//
 // The compiler version and schema digest lead because Type() is a fact about
 // (schema, expression) rather than about the expression alone, so the bytes must fix what
 // determined it -- the same reason compiledProfile carries both. Nested nodes carry no tag of
