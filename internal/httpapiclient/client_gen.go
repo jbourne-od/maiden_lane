@@ -40,6 +40,27 @@ func (e AggregatePredicateKind) Valid() bool {
 	}
 }
 
+// Defines values for CardinalityKind.
+const (
+	CardinalityKindAny     CardinalityKind = "any"
+	CardinalityKindAtLeast CardinalityKind = "at_least"
+	CardinalityKindExactly CardinalityKind = "exactly"
+)
+
+// Valid indicates whether the value is a known member of the CardinalityKind enum.
+func (e CardinalityKind) Valid() bool {
+	switch e {
+	case CardinalityKindAny:
+		return true
+	case CardinalityKindAtLeast:
+		return true
+	case CardinalityKindExactly:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CompilerDiagnosticCode.
 const (
 	CompilerDiagnosticCodeDECLAREDACCESSMISMATCH  CompilerDiagnosticCode = "DECLARED_ACCESS_MISMATCH"
@@ -124,6 +145,54 @@ func (e ExecutionStatus) Valid() bool {
 	case ExecutionStatusRunning:
 		return true
 	case ExecutionStatusSucceeded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ExprKind.
+const (
+	ExprKindAdd        ExprKind = "add"
+	ExprKindAll        ExprKind = "all"
+	ExprKindAllEqual   ExprKind = "all_equal"
+	ExprKindAllMembers ExprKind = "all_members"
+	ExprKindAny        ExprKind = "any"
+	ExprKindAnyMembers ExprKind = "any_members"
+	ExprKindEqual      ExprKind = "equal"
+	ExprKindExists     ExprKind = "exists"
+	ExprKindField      ExprKind = "field"
+	ExprKindLess       ExprKind = "less"
+	ExprKindLiteral    ExprKind = "literal"
+	ExprKindNot        ExprKind = "not"
+)
+
+// Valid indicates whether the value is a known member of the ExprKind enum.
+func (e ExprKind) Valid() bool {
+	switch e {
+	case ExprKindAdd:
+		return true
+	case ExprKindAll:
+		return true
+	case ExprKindAllEqual:
+		return true
+	case ExprKindAllMembers:
+		return true
+	case ExprKindAny:
+		return true
+	case ExprKindAnyMembers:
+		return true
+	case ExprKindEqual:
+		return true
+	case ExprKindExists:
+		return true
+	case ExprKindField:
+		return true
+	case ExprKindLess:
+		return true
+	case ExprKindLiteral:
+		return true
+	case ExprKindNot:
 		return true
 	default:
 		return false
@@ -368,6 +437,7 @@ func (e SemanticFailureKind) Valid() bool {
 const (
 	TransformationDeclarationOperatorAggregateRelatedFields TransformationDeclarationOperator = "aggregate_related_fields"
 	TransformationDeclarationOperatorFormRelatedEntity      TransformationDeclarationOperator = "form_related_entity"
+	TransformationDeclarationOperatorSelectAndAssign        TransformationDeclarationOperator = "select_and_assign"
 )
 
 // Valid indicates whether the value is a known member of the TransformationDeclarationOperator enum.
@@ -376,6 +446,8 @@ func (e TransformationDeclarationOperator) Valid() bool {
 	case TransformationDeclarationOperatorAggregateRelatedFields:
 		return true
 	case TransformationDeclarationOperatorFormRelatedEntity:
+		return true
+	case TransformationDeclarationOperatorSelectAndAssign:
 		return true
 	default:
 		return false
@@ -463,6 +535,25 @@ type Assessment struct {
 	// Verdict A readiness answer. `needs_input` is a successful assessment, not a failure.
 	Verdict ReadinessVerdict `json:"verdict"`
 }
+
+// Cardinality defines model for Cardinality.
+type Cardinality struct {
+	// Count Required by `exactly` and `at_least`, and refused with `any`.
+	// Negative values are rejected by the boundary rather than wrapped.
+	Count *int64 `json:"count,omitempty"`
+
+	// Kind How many members a group must hold to be selected. There is no token
+	// for "unstated": a selector must say which of these it means, because
+	// forgetting to constrain a group is not the same choice as choosing not
+	// to.
+	Kind CardinalityKind `json:"kind"`
+}
+
+// CardinalityKind How many members a group must hold to be selected. There is no token
+// for "unstated": a selector must say which of these it means, because
+// forgetting to constrain a group is not the same choice as choosing not
+// to.
+type CardinalityKind string
 
 // Checkpoint defines model for Checkpoint.
 type Checkpoint struct {
@@ -653,6 +744,50 @@ type ExecutorIdentity struct {
 
 	// Version A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
 	Version Digest `json:"version"`
+}
+
+// Expr One expression node. Recursive through `args`.
+//
+// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+// literal, a field path, a fixed or variadic argument list -- is a
+// semantic rule the compiler owns, and stating it a second time in this
+// contract would be one proposition enforced in two places with nothing
+// forcing them to agree. This schema therefore admits any combination and
+// the compiler refuses the ones that are not legal, so a rejected rule is
+// rejected for a reason the author can read in a diagnostic rather than
+// in a schema violation.
+type Expr struct {
+	// Args Operands, in the order the kind gives them meaning.
+	Args *[]Expr `json:"args,omitempty"`
+
+	// Field A qualified path, `entityKind.fieldName`. Present for the kinds that read one.
+	Field *string `json:"field,omitempty"`
+
+	// Kind The closed expression vocabulary. Append-only: a kind is never removed
+	// and never reused, because a rule's identity is derived from the tree it
+	// names. The order here is presentational; it carries no encoding weight,
+	// since the canonical bytes are produced by the kernel from its own kind
+	// tags and never from these tokens.
+	Kind ExprKind `json:"kind"`
+
+	// Literal Present when kind is literal.
+	Literal *Value `json:"literal,omitempty"`
+}
+
+// ExprKind The closed expression vocabulary. Append-only: a kind is never removed
+// and never reused, because a rule's identity is derived from the tree it
+// names. The order here is presentational; it carries no encoding weight,
+// since the canonical bytes are produced by the kernel from its own kind
+// tags and never from these tokens.
+type ExprKind string
+
+// FieldAssignment One field written on every member of a qualifying group.
+type FieldAssignment struct {
+	// Target A qualified path on the selector's own kind.
+	Target string `json:"target"`
+
+	// Value Evaluated once per member, with that member bound.
+	Value Expr `json:"value"`
 }
 
 // FieldCopy defines model for FieldCopy.
@@ -954,6 +1089,36 @@ type SchemaDeclaration struct {
 	Relations *[]RelationDeclaration `json:"relations,omitempty"`
 }
 
+// SelectAndAssign The selector-scoped transformation payload: a rule applied to a
+// population rather than to entities named one by one.
+type SelectAndAssign struct {
+	Assignments []FieldAssignment `json:"assignments"`
+
+	// Guard A group-scoped filter. Groups satisfying it receive the
+	// assignments; groups that do not are skipped. A guard that cannot be
+	// evaluated against a group refuses the transition rather than
+	// excluding that group, because "does not qualify" and "could not be
+	// assessed" are different facts.
+	Guard Expr `json:"guard"`
+
+	// Selector What a rule applies to.
+	Selector Selector `json:"selector"`
+}
+
+// Selector What a rule applies to.
+type Selector struct {
+	// GroupBy Partitions the matches. Required by the select-and-assign operator.
+	GroupBy *Expr `json:"groupBy,omitempty"`
+
+	// Kind The entity kind selected from, and the only kind any path in this
+	// rule may name, because it is the only kind the selection binds.
+	Kind    string      `json:"kind"`
+	Members Cardinality `json:"members"`
+
+	// Where Filters candidates. Absent selects every entity of `kind`.
+	Where *Expr `json:"where,omitempty"`
+}
+
 // SemanticFailure A deterministic semantic rejection. Its presence does not make the HTTP
 // response an error: the run produced a real answer, and every artifact
 // verified before the rejection is retained.
@@ -1000,6 +1165,10 @@ type TransformationDeclaration struct {
 	Form     *FormRelatedEntity                `json:"form,omitempty"`
 	Id       string                            `json:"id"`
 	Operator TransformationDeclarationOperator `json:"operator"`
+
+	// SelectAssign The selector-scoped transformation payload: a rule applied to a
+	// population rather than to entities named one by one.
+	SelectAssign *SelectAndAssign `json:"selectAssign,omitempty"`
 }
 
 // TransformationDeclarationOperator defines model for TransformationDeclaration.Operator.

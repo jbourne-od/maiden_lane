@@ -52,6 +52,27 @@ const (
 
 // String names the kind for diagnostics. Scope errors are far easier to read with a name
 // than with a number, and this vocabulary is closed so the mapping cannot drift silently.
+// AllExprKinds is the complete v1 node vocabulary, in kind-byte order.
+//
+// It exists so a boundary that must map every kind can be tested against the vocabulary
+// rather than against a list re-typed into a test file. Like AllInvariantCodes, it is itself
+// hand-maintained and nothing forces it to agree with the const block above -- Go cannot
+// enumerate a const group -- so it reduces the number of hand-kept lists rather than removing
+// the hazard.
+func AllExprKinds() []ExprKind {
+	return []ExprKind{
+		ExprLiteral, ExprField, ExprExists, ExprNot, ExprAll, ExprAny,
+		ExprEqual, ExprLess, ExprAdd, ExprAllMembers, ExprAnyMembers, ExprAllEqual,
+	}
+}
+
+// String renders a kind for a human.
+//
+// IT IS NOT A WIRE TOKEN, however exactly the strings happen to coincide with one today. This
+// function is total and falls back to kind(%d) for anything unrecognised, which is right for a
+// diagnostic and wrong for a contract: a boundary using it would ship an off-enum token for a
+// kind nobody had mapped, silently, in the fail-open direction. internal/httpapi keeps its own
+// switch with no fallback for exactly that reason.
 func (k ExprKind) String() string {
 	switch k {
 	case ExprLiteral:

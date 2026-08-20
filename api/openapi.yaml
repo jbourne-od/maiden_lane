@@ -463,6 +463,133 @@ components:
           description: Present when kind is int64.
       additionalProperties: false
 
+    ExprKind:
+      type: string
+      description: |
+        The closed expression vocabulary. Append-only: a kind is never removed
+        and never reused, because a rule's identity is derived from the tree it
+        names. The order here is presentational; it carries no encoding weight,
+        since the canonical bytes are produced by the kernel from its own kind
+        tags and never from these tokens.
+      enum:
+        - literal
+        - field
+        - exists
+        - not
+        - all
+        - any
+        - equal
+        - less
+        - add
+        - all_members
+        - any_members
+        - all_equal
+
+    Expr:
+      type: object
+      description: |
+        One expression node. Recursive through `args`.
+
+        THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+        literal, a field path, a fixed or variadic argument list -- is a
+        semantic rule the compiler owns, and stating it a second time in this
+        contract would be one proposition enforced in two places with nothing
+        forcing them to agree. This schema therefore admits any combination and
+        the compiler refuses the ones that are not legal, so a rejected rule is
+        rejected for a reason the author can read in a diagnostic rather than
+        in a schema violation.
+      required: [kind]
+      properties:
+        kind: { $ref: "#/components/schemas/ExprKind" }
+        literal:
+          allOf: [{ $ref: "#/components/schemas/Value" }]
+          description: Present when kind is literal.
+        field:
+          type: string
+          description: A qualified path, `entityKind.fieldName`. Present for the kinds that read one.
+        args:
+          type: array
+          description: Operands, in the order the kind gives them meaning.
+          items: { $ref: "#/components/schemas/Expr" }
+      additionalProperties: false
+
+    CardinalityKind:
+      type: string
+      description: |
+        How many members a group must hold to be selected. There is no token
+        for "unstated": a selector must say which of these it means, because
+        forgetting to constrain a group is not the same choice as choosing not
+        to.
+      enum: [any, exactly, at_least]
+
+    Cardinality:
+      type: object
+      required: [kind]
+      properties:
+        kind: { $ref: "#/components/schemas/CardinalityKind" }
+        count:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Required by `exactly` and `at_least`, and refused with `any`.
+            Negative values are rejected by the boundary rather than wrapped.
+      additionalProperties: false
+
+    Selector:
+      type: object
+      description: What a rule applies to.
+      required: [kind, members]
+      properties:
+        kind:
+          type: string
+          description: |
+            The entity kind selected from, and the only kind any path in this
+            rule may name, because it is the only kind the selection binds.
+        where:
+          allOf: [{ $ref: "#/components/schemas/Expr" }]
+          description: Filters candidates. Absent selects every entity of `kind`.
+        groupBy:
+          allOf: [{ $ref: "#/components/schemas/Expr" }]
+          description: Partitions the matches. Required by the select-and-assign operator.
+        members: { $ref: "#/components/schemas/Cardinality" }
+      additionalProperties: false
+
+    FieldAssignment:
+      type: object
+      description: One field written on every member of a qualifying group.
+      required: [target, value]
+      properties:
+        target:
+          type: string
+          description: A qualified path on the selector's own kind.
+        value:
+          allOf: [{ $ref: "#/components/schemas/Expr" }]
+          description: Evaluated once per member, with that member bound.
+      additionalProperties: false
+
+    SelectAndAssign:
+      type: object
+      description: |
+        The selector-scoped transformation payload: a rule applied to a
+        population rather than to entities named one by one.
+      required: [selector, guard, assignments]
+      properties:
+        selector: { $ref: "#/components/schemas/Selector" }
+        guard:
+          allOf: [{ $ref: "#/components/schemas/Expr" }]
+          description: |
+            A group-scoped filter. Groups satisfying it receive the
+            assignments; groups that do not are skipped. A guard that cannot be
+            evaluated against a group refuses the transition rather than
+            excluding that group, because "does not qualify" and "could not be
+            assessed" are different facts.
+        assignments:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/FieldAssignment" }
+      additionalProperties: false
+
     FieldDeclaration:
       type: object
       required: [name, kind]
@@ -619,7 +746,7 @@ components:
         id: { type: string }
         operator:
           type: string
-          enum: [form_related_entity, aggregate_related_fields]
+          enum: [form_related_entity, aggregate_related_fields, select_and_assign]
         declaredReads:
           type: array
           items: { type: string }
@@ -631,6 +758,7 @@ components:
           items: { type: string }
         form: { $ref: "#/components/schemas/FormRelatedEntity" }
         aggregate: { $ref: "#/components/schemas/AggregateRelatedFields" }
+        selectAssign: { $ref: "#/components/schemas/SelectAndAssign" }
       additionalProperties: false
 
     CheckpointDeclaration:

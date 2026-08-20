@@ -270,13 +270,7 @@ rules produce C(10,2) = 45 unresolved write conflicts.
 The three group kinds got their canonical encoding and golden vectors here, as `encodeExpr`'s
 default arm promised they would when a Transform made them reachable.
 
-**The boundary cannot author this rule yet, and that is the same lesson one layer out.**
-`rulesetFromWire` translates a closed operator enum with two values and refuses anything else,
-so no client can submit a `SelectAssign` rule: the operator is reachable from
-`ExecuteTransition` and not from HTTP. Giving the contract this operator means giving JSON a
-representation for a selector, a group-scoped guard and an expression tree, which is its own
-slice. Recorded because "reachable" was the acceptance property of this one, and it was
-demonstrated at the semantic boundary rather than at the API boundary.
+**The boundary could not author this rule, and slice 5 fixed that.** See below.
 
 Finding it turned up a fail-open defect worth its own line: `transformationToWire`'s switch had
 no default, so a declaration whose operator the contract cannot express projected to a wire
@@ -320,6 +314,55 @@ The other half of decision 4 -- that `compile.go:800` skips write-conflict analy
 a dependency edge already orders, moving pairs from refused to ordered-and-accepted -- is
 still unargued. The test records that a pair which is both conflicting and cyclic reports the
 cycle, and deliberately asserts a disjunction rather than pinning that interaction by accident.
+
+## Slice 5 -- the rule becomes authorable. Done.
+
+Slice 4 proved the operator reachable from `ExecuteTransition` and recorded plainly that it
+was not reachable from the API. "Reachable" is a property of a path, not of a package, and the
+path a customer uses starts at JSON.
+
+`api/openapi.yaml` gains `ExprKind`, `Expr` (recursive through `args`), `CardinalityKind`,
+`Cardinality`, `Selector`, `FieldAssignment` and `SelectAndAssign`, plus the
+`select_and_assign` operator token. `internal/httpapi/expression_wire.go` translates both
+directions.
+
+**The acceptance property, again one layer out.**
+`TestSelectorScopedRuleIsAuthorableAndRunnableOverHTTP` writes the rule as the wire document a
+client would send -- nothing builds a semantic declaration and projects it, because a test
+starting from the kernel's types proves the projection works and says nothing about whether
+the contract can express the rule. Two rulesets differing only in the group predicate's
+threshold get different plan identities, both execute through the queue and the worker, and
+their final state digests differ. `TestAuthoredSelectorRuleReadsBackUnchanged` recompiles the
+document `GetPlan` returns and requires the same PlanID, so the projection is faithful rather
+than merely populated.
+
+**The boundary decides nothing about expression shape,** and that is a decision rather than an
+omission. Which operand a kind carries, how many arguments it takes, which entity kinds its
+paths may name, how deep it nests -- every one is a rule the compiler owns, and stating any of
+them in the schema would be one proposition in two places with nothing forcing agreement. The
+schema admits any combination; the compiler refuses the illegal ones, so an author gets a
+diagnostic naming the rule instead of a schema violation naming a JSON path.
+`TestExpressionTranslationDoesNotJudgeShape` pins it, because the tempting mistake is to help.
+
+**What the boundary does owe is refusing what it cannot represent.** A token outside the
+closed enum has no meaning to invent; a kernel kind with no token cannot be projected. The
+outbound map is derived by INVERTING the inbound one rather than written twice, so a kind is
+round-trippable or it is in neither direction -- two hand-written switches over one vocabulary
+is exactly the shape that lets a rule be authorable and unreadable.
+`TestEveryExpressionKindSurvivesTheRoundTrip` drives from `semantic.AllExprKinds` and goes
+through `encoding/json`, not just through the structs.
+
+**`ExprKind.String()` is not a wire token,** however exactly the strings coincide today. It is
+total and falls back to `kind(%d)`, which is right for a diagnostic and fail-open for a
+contract: a boundary using it would ship an off-enum token for an unmapped kind, silently. The
+two mappings are deliberately separate and the reason is written where the coincidence invites
+the shortcut.
+
+A negative cardinality count is refused rather than converted: the contract's count is int64
+and the kernel's is uint64, so `-1` would become a cardinality no group could satisfy, and
+every transition would then refuse with `SELECTION_CARDINALITY_INVALID` and no clue why. The
+schema states a minimum and the translation does not rely on it, because a generated validator
+is not the kernel.
 
 ## Index of everything else
 
