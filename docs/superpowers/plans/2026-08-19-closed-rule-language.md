@@ -222,6 +222,27 @@ language compiles and evaluates group predicates that no production path can rea
 than predicates, and nothing consumes a value from a group until a `Transform` exists. Kind
 bytes are append-only, so adding them later costs no identity. Deterministic, total, refusing rather than defaulting on absent fields.
 
+## The next slice, and its acceptance property
+
+**A `Transform` is an architectural boundary, not the next integer.** The slices so far
+establish authoring → compile → select, and (once slice 3 lands) evaluating a group predicate
+in isolation. What none of them establishes is that any of it is *reachable*: `CompileExpression`,
+`CompileSelector`, `Select` and the group entry points all have no non-test callers, so what
+exists is potential semantics rather than semantics.
+
+**Reachability is therefore an acceptance property of that slice, not a consequence of it.**
+The slice is not done because a `Transform` type exists and is unit-tested. It is done when one
+end-to-end fixture demonstrates that **altering a group predicate changes an observable
+transform result** — authored rule, compiled, selected, grouped, predicate evaluated, patch
+proposed, transition observable. Anything less leaves carefully verified machinery behind a
+door nobody opens, which is the state every slice so far is in. Worth naming because a slice
+heading that reads "done" means its machinery exists, not that production can reach it, and
+nothing in this document distinguished those until now.
+
+It also unblocks decision 4's dependency-cycle question, which this document does record as
+deferred in three places: answering it needs a set-scoped rule that reaches the compiler, and
+a rule needs a transform.
+
 ## Index of everything else
 
 Sites and constraints, with references and without analysis. Each needs an owner before the

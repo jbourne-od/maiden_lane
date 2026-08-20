@@ -154,7 +154,13 @@ every diff.
    only on bad input. A false comment is worse than a small bug here, because the next
    reader builds on it.
 
-7. **Green tests that do not enforce the property.** Demand mutation evidence for every new
+7. **Green tests that do not enforce the property.** The standard is not "did a fixture reach
+   this code" — line coverage will happily report that everyone attended the meeting while the
+   one statement whose correctness matters never spoke. It is: **could the semantic result of
+   this particular arm be inverted while every fixture still passes?** An early return can
+   leave a terminal unreachable inside a function the tests demonstrably enter.
+
+   Demand mutation evidence for every new
    guard, and reject these four specific ways it goes wrong:
    - a mutation that **does not compile or does not run** proves nothing — a broken build
      and a broken SQL query are the same mistake;
@@ -259,7 +265,57 @@ every diff.
     Note the overlap with class 4: "two derivations of one fact" is class 4's shape seen from
     the value's side. File under whichever reads more clearly, not both.
 
-13. **A deliberate omission left unwritten.** Anything the change could plausibly have
+13. **One semantic proposition enforced in more than one place.** A reliable place to look,
+    and — stated plainly because two attempts to say otherwise were both wrong — **no general
+    remedy is known.** File the observation, not a fix.
+
+    The observation: when one rule about what is legal is enforced at several points, the
+    points can drift. Instances on this programme include a vocabulary walker that named some
+    of the kinds it had to reach, one checker invoked from two call sites where only one was
+    exercised, and a compiler and an evaluator that mapped a value to a type through functions
+    with different refusal behaviour.
+
+    **Why no remedy is offered.** Two drafts of this entry each prescribed one and each would
+    have caused a defect:
+
+    - "Collapse the duplicates" would have had a reviewer demand deletion of `boundField`'s
+      entity-kind guard, whose removal this mandate records as class 12 instances 3 and 5.
+    - "They are correct when each is independently reachable" certifies as correct the very
+      pair that was class 12 instance 4 — both were reachable, and the collapse onto the
+      permissive mapping was itself the defect — while condemning `boundField`'s guard, which
+      cannot fire in production at all.
+
+    And collapsing is not safe in general: the literal-type mapping went from two implementations
+    (a defect) to one (a worse defect, merged onto the mapping that checks kind and not
+    validity) to one correct one. Nothing in the observation says which definition to keep.
+
+    **So ask the diagnostic question and stop there:** enumerate every place this proposition
+    is enforced, and for each, is it independently exercised by a test that would fail if that
+    place alone were wrong? Report the places that are not. Whether the right fix is to collapse
+    them, to pin each, or to leave them deliberately separate is the author's judgement and
+    depends on which definition is the legal one — a question this class cannot answer.
+
+
+14. **A specialized traversal that closes over its own recursion.** A whole-structure invariant
+    — a depth bound, a node budget, a binding rule, a cycle check, a canonicalization
+    constraint — is typically enforced by the walker that owns the structure. Introduce a
+    second walker for a special case, let it recurse into itself, and its leaves may never
+    reach the original. The invariant is then silently gone on that route while every test
+    passes, because the original walker still enforces it everywhere else.
+
+    Found here as a depth bound: `checkExprInScope` recursed into itself for composition and
+    reached `checkExpr` only at member-scope leaves, so group-scope nesting was unbounded. Note
+    what the invariant rests on — HLD §8 requires *bounded arithmetic*, not bounded nesting;
+    the depth limit is a kernel engineering decision justified in its own comment as a stack
+    and encoder hazard. An earlier draft of this entry attributed it to the spec, which would
+    have told a future author the constant is spec-fixed rather than revisable.
+
+    The question to ask: **can this traversal consume the whole structure without ever crossing
+    the guard that owns the invariant?** If yes, every guard downstream of that crossing is
+    suspect. A new recursive visitor must either demonstrate it preserves each whole-structure
+    invariant itself, or delegate recursion to the visitor that owns them.
+
+15. **A deliberate omission left unwritten.** Anything the change could plausibly have
     included and did not must be recorded in the claims file or the programme's progress
     document under `docs/superpowers/sdd/`. Silent scope reduction reads as coverage.
 
