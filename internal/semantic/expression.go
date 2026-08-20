@@ -50,8 +50,6 @@ const (
 	ExprAllEqual
 )
 
-// String names the kind for diagnostics. Scope errors are far easier to read with a name
-// than with a number, and this vocabulary is closed so the mapping cannot drift silently.
 // AllExprKinds is the complete v1 node vocabulary, in kind-byte order.
 //
 // It exists so a boundary that must map every kind can be tested against the vocabulary

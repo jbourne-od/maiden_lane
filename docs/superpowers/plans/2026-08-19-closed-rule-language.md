@@ -382,6 +382,15 @@ them. The fixture now carries a select-and-assign rule with a literal of each va
 because the drift is in the serialization and every test that needed a database skipped
 without one.
 
+*A deterministic storage failure is still retried forever, and this slice does not fix it.*
+`postgres.ErrIntegrity` means a stored row no longer recompiles, which is deterministic;
+`worker.attempt` classifies every `GetPlan` error as abandoned and leaves the execution
+claimable. Removing the `Value` defect removes one CAUSE of that state, not the state: a
+hand-edited row or a future storage-format change reproduces it, and Inviolate 18 says a
+deterministic failure must not be retried indefinitely. Recorded as a deliberate non-fix
+because it is pre-existing and belongs to the worker's classification rather than to the rule
+language.
+
 *`proposedOperationCounts` has no arm for the new operator, and that is the answer rather than
 an omission.* Its premise is that the compiled operator fixes the patch's shape; for a
 selector-scoped rule the update count is a fact about the state. The default is correct

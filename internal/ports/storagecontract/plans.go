@@ -375,6 +375,41 @@ func PlanRecordFixture(t *testing.T, tenant ports.TenantID, version string) port
 	}
 }
 
+// corruptSelectAssign reaches every authored field of a selector-scoped payload, including the
+// expression trees and the literals inside them.
+func corruptSelectAssign(payload *semantic.SelectAssignDeclaration) {
+	if payload == nil {
+		return
+	}
+	corruptExpr := func(expr *semantic.Expr) {
+		if expr == nil {
+			return
+		}
+		var walk func(*semantic.Expr)
+		walk = func(node *semantic.Expr) {
+			node.Kind = semantic.ExprField
+			node.Field = "corrupted.corrupted"
+			if node.Literal != nil {
+				corrupted := semantic.NewInt64Value(-1)
+				*node.Literal = corrupted
+			}
+			for i := range node.Args {
+				walk(&node.Args[i])
+			}
+		}
+		walk(expr)
+	}
+	payload.Selector.Kind = "corrupted"
+	payload.Selector.Members = semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 99}
+	corruptExpr(payload.Selector.Where)
+	corruptExpr(payload.Selector.GroupBy)
+	corruptExpr(&payload.Guard)
+	for i := range payload.Assignments {
+		payload.Assignments[i].Target = "corrupted.corrupted"
+		corruptExpr(&payload.Assignments[i].Value)
+	}
+}
+
 // mutateEverythingReachable corrupts every part of a record an ordinary caller
 // can reach through its public accessors.
 func mutateEverythingReachable(record ports.PlanRecord) {
@@ -382,6 +417,14 @@ func mutateEverythingReachable(record ports.PlanRecord) {
 	request.CompilerSemanticsVersion = "corrupted"
 	for i := range request.Rules.Transformations {
 		request.Rules.Transformations[i].ID = "corrupted"
+		// THE PAYLOAD SUBTREE, not just the ID. The fixture gained a select-and-assign rule so
+		// that storage is tested against every declaration type, and a walker that reached
+		// only the ID would have left the whole new subtree -- selector, filter, grouping,
+		// guard, assignments, literals -- outside a function whose comment claims it corrupts
+		// everything an ordinary caller can reach. A store that returned the record by value
+		// while retaining the caller's SelectAssign pointer would then be invisible to the
+		// subtest that exists to catch exactly that.
+		corruptSelectAssign(request.Rules.Transformations[i].SelectAssign)
 	}
 	for i := range request.Rules.Checkpoints {
 		request.Rules.Checkpoints[i].Key = "corrupted"

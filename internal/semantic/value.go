@@ -123,10 +123,22 @@ type Value struct {
 // stored, every read recompiled to an UnsupportedOperator diagnostic, GetPlan became a
 // permanent 500, and the worker treated the storage error as transient and retried it forever.
 //
-// Marshal REFUSES a value with no kind rather than emitting a form that cannot be read back,
-// so a declaration that could not survive storage is rejected at write time instead of at
-// every read.
+// Marshal REFUSES an invalid value rather than emitting a form that cannot be read back, so a
+// declaration that could not survive storage is rejected at write time instead of at every
+// read.
+//
+// It consults Valid(), not the kind alone, and an earlier version consulted the kind while
+// this comment claimed otherwise. Value{kind: ValueString, text: "\xff"} would then marshal;
+// encoding/json substitutes U+FFFD for the invalid byte on the way out, and UnmarshalText
+// accepts what comes back -- so the value round-trips into a DIFFERENT value with no error at
+// any layer, which is worse than failing to read back. Unreachable from production, because
+// such a Value is constructible only inside this package, and fixed anyway: mapping a value
+// by its kind while ignoring its content is the precise defect the compiler and the evaluator
+// shipped once already, and this would have been a third mapping doing it.
 func (v Value) MarshalText() ([]byte, error) {
+	if !v.Valid() {
+		return nil, fmt.Errorf("value is invalid and cannot be serialized")
+	}
 	switch v.kind {
 	case ValueString:
 		return []byte("string:" + v.text), nil

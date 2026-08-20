@@ -322,17 +322,39 @@ func TestStoredDeclarationsRecompileToTheSamePlan(t *testing.T) {
 	if rule.SelectAssign == nil {
 		t.Fatal("the select-and-assign payload did not survive storage")
 	}
-	literals := 0
-	for _, assignment := range rule.SelectAssign.Assignments {
-		if assignment.Value.Kind != semantic.ExprLiteral {
-			continue
+	// EVERY VALUE KIND, not merely "some literal". The fixture claims one assignment per kind,
+	// and counting literals does not enforce that claim: deleting the atom assignment leaves a
+	// count of two, a green test, and the ValueAtom arms of the codec covered by nothing. The
+	// fixture's promise and the test's assertion have to be the same statement.
+	seen := make(map[semantic.ValueKind]struct{}, 3)
+	for _, assignment := range collectLiterals(rule.SelectAssign.Assignments) {
+		if !assignment.Valid() {
+			t.Fatal("a literal came back invalid")
 		}
-		literals++
-		if assignment.Value.Literal == nil || !assignment.Value.Literal.Valid() {
-			t.Fatalf("assignment to %s came back with an invalid literal", assignment.Target)
+		seen[assignment.Kind()] = struct{}{}
+	}
+	for _, kind := range []semantic.ValueKind{semantic.ValueString, semantic.ValueAtom, semantic.ValueInt64} {
+		if _, present := seen[kind]; !present {
+			t.Fatalf("the fixture carries no literal of kind %d, so storage never round-trips one", kind)
 		}
 	}
-	if literals == 0 {
-		t.Fatal("the fixture carries no literal, so this test cannot see the defect it exists for")
+}
+
+// collectLiterals gathers every literal an assignment tree carries, at any depth: the integer
+// literal in the fixture sits inside an add node rather than at the root.
+func collectLiterals(assignments []semantic.FieldAssignment) []semantic.Value {
+	found := make([]semantic.Value, 0)
+	var walk func(semantic.Expr)
+	walk = func(node semantic.Expr) {
+		if node.Literal != nil {
+			found = append(found, *node.Literal)
+		}
+		for _, argument := range node.Args {
+			walk(argument)
+		}
 	}
+	for _, assignment := range assignments {
+		walk(assignment.Value)
+	}
+	return found
 }
