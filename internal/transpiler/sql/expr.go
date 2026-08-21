@@ -13,7 +13,7 @@ type TranspileContext struct {
 	// Dialect is the SQL dialect to use.
 	Dialect Dialect
 
-	// EntityTableAlias is the table/CTE alias for member entity field access (e.g. "m" or "src").
+	// EntityTableAlias is the table/CTE alias for member entity field access (e.g. "m" or "s").
 	EntityTableAlias string
 
 	// GroupTableAlias is the table/CTE alias for group-level reduction access (e.g. "grp").
@@ -25,8 +25,23 @@ type TranspileContext struct {
 	// ToAlias is the table alias for relation "to" endpoint (e.g. "t").
 	ToAlias string
 
+	// FromKind is the entity kind of the "from" endpoint.
+	FromKind string
+
+	// ToKind is the entity kind of the "to" endpoint.
+	ToKind string
+
 	// IsGroupScope is true when compiling expressions inside a group reduction or group guard.
 	IsGroupScope bool
+
+	// IsAggregateGroupBy is true when inside a SQL GROUP BY aggregation (e.g. MergeEntities).
+	IsAggregateGroupBy bool
+
+	// GroupPartitionClause is the window function partition clause (e.g. "PARTITION BY m.\"assignment_key\"").
+	GroupPartitionClause string
+
+	// EntityFields maps entityKind to its declared field names.
+	EntityFields map[string][]string
 }
 
 // TranspileExpr transpiles a closed semantic.Expr AST node into a dialect-specific SQL expression string.
@@ -333,21 +348,26 @@ func TranspileExpr(ctx TranspileContext, expr semantic.Expr) (string, error) {
 		return "COALESCE(" + strings.Join(parts, ", ") + ")", nil
 
 	case semantic.ExprCount:
+		var arg string
 		if len(expr.Args) > 0 {
-			arg, err := TranspileExpr(ctx, expr.Args[0])
+			a, err := TranspileExpr(ctx, expr.Args[0])
 			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("COUNT(%s)", arg), nil
-		}
-		if expr.Field != "" {
-			arg, err := transpileFieldPath(ctx, expr.Field)
+			arg = a
+		} else if expr.Field != "" {
+			a, err := transpileFieldPath(ctx, expr.Field)
 			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("COUNT(%s)", arg), nil
+			arg = a
+		} else {
+			arg = "*"
 		}
-		return "COUNT(*)", nil
+		if !ctx.IsAggregateGroupBy && ctx.GroupPartitionClause != "" {
+			return fmt.Sprintf("COUNT(%s) OVER (%s)", arg, ctx.GroupPartitionClause), nil
+		}
+		return fmt.Sprintf("COUNT(%s)", arg), nil
 
 	case semantic.ExprSum:
 		var arg string
@@ -365,6 +385,9 @@ func TranspileExpr(ctx TranspileContext, expr semantic.Expr) (string, error) {
 			arg = a
 		} else {
 			return "", fmt.Errorf("sum expression requires argument or field")
+		}
+		if !ctx.IsAggregateGroupBy && ctx.GroupPartitionClause != "" {
+			return fmt.Sprintf("SUM(%s) OVER (%s)", arg, ctx.GroupPartitionClause), nil
 		}
 		return fmt.Sprintf("SUM(%s)", arg), nil
 
@@ -385,6 +408,9 @@ func TranspileExpr(ctx TranspileContext, expr semantic.Expr) (string, error) {
 		} else {
 			return "", fmt.Errorf("min expression requires argument or field")
 		}
+		if !ctx.IsAggregateGroupBy && ctx.GroupPartitionClause != "" {
+			return fmt.Sprintf("MIN(%s) OVER (%s)", arg, ctx.GroupPartitionClause), nil
+		}
 		return fmt.Sprintf("MIN(%s)", arg), nil
 
 	case semantic.ExprMax:
@@ -404,6 +430,9 @@ func TranspileExpr(ctx TranspileContext, expr semantic.Expr) (string, error) {
 		} else {
 			return "", fmt.Errorf("max expression requires argument or field")
 		}
+		if !ctx.IsAggregateGroupBy && ctx.GroupPartitionClause != "" {
+			return fmt.Sprintf("MAX(%s) OVER (%s)", arg, ctx.GroupPartitionClause), nil
+		}
 		return fmt.Sprintf("MAX(%s)", arg), nil
 
 	case semantic.ExprAllMembers:
@@ -414,6 +443,9 @@ func TranspileExpr(ctx TranspileContext, expr semantic.Expr) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if !ctx.IsAggregateGroupBy && ctx.GroupPartitionClause != "" {
+			return fmt.Sprintf("BOOL_AND(%s) OVER (%s)", arg, ctx.GroupPartitionClause), nil
+		}
 		return ctx.Dialect.BoolAnd(arg), nil
 
 	case semantic.ExprAnyMembers:
@@ -423,6 +455,9 @@ func TranspileExpr(ctx TranspileContext, expr semantic.Expr) (string, error) {
 		arg, err := TranspileExpr(ctx, expr.Args[0])
 		if err != nil {
 			return "", err
+		}
+		if !ctx.IsAggregateGroupBy && ctx.GroupPartitionClause != "" {
+			return fmt.Sprintf("BOOL_OR(%s) OVER (%s)", arg, ctx.GroupPartitionClause), nil
 		}
 		return ctx.Dialect.BoolOr(arg), nil
 
@@ -442,6 +477,9 @@ func TranspileExpr(ctx TranspileContext, expr semantic.Expr) (string, error) {
 			arg = a
 		} else {
 			return "", fmt.Errorf("all_equal expression requires argument or field")
+		}
+		if !ctx.IsAggregateGroupBy && ctx.GroupPartitionClause != "" {
+			return fmt.Sprintf("(MIN(%s) OVER (%s) = MAX(%s) OVER (%s))", arg, ctx.GroupPartitionClause, arg, ctx.GroupPartitionClause), nil
 		}
 		return fmt.Sprintf("(MIN(%s) = MAX(%s))", arg, arg), nil
 
@@ -480,9 +518,9 @@ func transpileFieldPath(ctx TranspileContext, path semantic.FieldPath) (string, 
 	colName := ctx.Dialect.QuoteIdentifier(fieldName)
 
 	switch {
-	case entityKind == "from" && ctx.FromAlias != "":
+	case (entityKind == "from" || (ctx.FromKind != "" && entityKind == ctx.FromKind)) && ctx.FromAlias != "":
 		return fmt.Sprintf("%s.%s", ctx.FromAlias, colName), nil
-	case entityKind == "to" && ctx.ToAlias != "":
+	case (entityKind == "to" || (ctx.ToKind != "" && entityKind == ctx.ToKind)) && ctx.ToAlias != "":
 		return fmt.Sprintf("%s.%s", ctx.ToAlias, colName), nil
 	case ctx.EntityTableAlias != "":
 		return fmt.Sprintf("%s.%s", ctx.EntityTableAlias, colName), nil

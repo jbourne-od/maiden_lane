@@ -2,6 +2,7 @@ package sql
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
@@ -10,6 +11,7 @@ import (
 // PipelineOptions configures SQL pipeline generation.
 type PipelineOptions struct {
 	Dialect Dialect
+	Schema  *semantic.Schema
 }
 
 // TranspiledPipeline is the output of compiling a Plan to SQL.
@@ -27,8 +29,38 @@ func TranspilePlan(plan semantic.Plan, opts PipelineOptions) (TranspiledPipeline
 		d = Postgres()
 	}
 
+	// Build entity fields map from schema if provided, otherwise discover from plan
+	entityFields := make(map[string][]string)
+	if opts.Schema != nil {
+		for _, ed := range opts.Schema.Declaration().EntityDeclarations() {
+			k := string(ed.Kind)
+			for _, fd := range ed.Fields {
+				entityFields[k] = append(entityFields[k], string(fd.Name))
+			}
+		}
+	}
+
+	transformations := plan.Transformations()
+
+	// Ensure all assigned/read fields are accounted for
+	for _, tx := range transformations {
+		for _, read := range tx.ReadSet() {
+			k, f := splitFieldPath(read)
+			if k != "" && f != "" && !slices.Contains(entityFields[k], f) {
+				entityFields[k] = append(entityFields[k], f)
+			}
+		}
+		for _, write := range tx.WriteSet() {
+			k, f := splitFieldPath(write)
+			if k != "" && f != "" && !slices.Contains(entityFields[k], f) {
+				entityFields[k] = append(entityFields[k], f)
+			}
+		}
+	}
+
 	ctx := TranspileContext{
-		Dialect: d,
+		Dialect:      d,
+		EntityFields: entityFields,
 	}
 
 	var allCTEs []NamedCTE
@@ -41,7 +73,6 @@ func TranspilePlan(plan semantic.Plan, opts PipelineOptions) (TranspiledPipeline
 		Query: `SELECT * FROM "raw_relations"`,
 	})
 
-	transformations := plan.Transformations()
 	checkpointViews := make(map[string]map[string]string)
 
 	// Collect all entity kinds present across transformations

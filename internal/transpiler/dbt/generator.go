@@ -8,6 +8,7 @@ package dbt
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
@@ -32,6 +33,7 @@ type Options struct {
 	ProjectName string
 	ProfileName string
 	Dialect     sql.Dialect
+	Schema      *semantic.Schema
 }
 
 // GenerateProject generates a complete, deterministic dbt project bundle from a compiled Plan.
@@ -72,9 +74,35 @@ models:
 		Content: dbtProjectYML,
 	})
 
-	// 2. Discover all entity kinds across transformations
-	seenKinds := make(map[string]bool)
+	// 2. Build entity fields map from schema or plan
+	entityFields := make(map[string][]string)
+	if opts.Schema != nil {
+		for _, ed := range opts.Schema.Declaration().EntityDeclarations() {
+			k := string(ed.Kind)
+			for _, fd := range ed.Fields {
+				entityFields[k] = append(entityFields[k], string(fd.Name))
+			}
+		}
+	}
+
 	transformations := plan.Transformations()
+	for _, tx := range transformations {
+		for _, read := range tx.ReadSet() {
+			k, f := splitFieldPath(read)
+			if k != "" && f != "" && !slices.Contains(entityFields[k], f) {
+				entityFields[k] = append(entityFields[k], f)
+			}
+		}
+		for _, write := range tx.WriteSet() {
+			k, f := splitFieldPath(write)
+			if k != "" && f != "" && !slices.Contains(entityFields[k], f) {
+				entityFields[k] = append(entityFields[k], f)
+			}
+		}
+	}
+
+	// 3. Discover all entity kinds across transformations
+	seenKinds := make(map[string]bool)
 	for _, tx := range transformations {
 		decl := tx.Declaration()
 		if decl.SelectAssign != nil {
@@ -113,7 +141,7 @@ models:
 
 	currentModels := make(map[string]string) // entity/relation kind -> current model name
 
-	// 3. Staging Models
+	// Staging Models
 	for kind := range seenKinds {
 		modelName := fmt.Sprintf("stg_entities_%s", kind)
 		currentModels[kind] = modelName
@@ -139,7 +167,8 @@ SELECT * FROM {{ source('maiden_lane', 'raw_relations') }}
 
 	// 4. Transformation Models
 	ctx := sql.TranspileContext{
-		Dialect: opts.Dialect,
+		Dialect:      opts.Dialect,
+		EntityFields: entityFields,
 	}
 
 	checkpointModels := make(map[string]string)
@@ -235,45 +264,46 @@ SELECT * FROM {{ source('maiden_lane', 'raw_relations') }}
 			return Project{}, err
 		}
 
-		// Assemble transformation model SQL
-		modelName := fmt.Sprintf("tx_%02d_%s_%s", i, sanitizedRule, step.TargetKind)
-		var modelSQL strings.Builder
-		modelSQL.WriteString("{{ config(materialized='table') }}\n\nWITH\n")
-		for idx, cte := range step.CTEs {
-			modelSQL.WriteString(cte.Name)
-			modelSQL.WriteString(" AS (\n")
-			lines := strings.Split(cte.Query, "\n")
-			for _, line := range lines {
-				modelSQL.WriteString("    ")
-				modelSQL.WriteString(line)
-				modelSQL.WriteString("\n")
+		// Generate a distinct dbt model for EACH modified table in OutputTables
+		for tableKind, outCTE := range step.OutputTables {
+			modelName := fmt.Sprintf("tx_%02d_%s_%s", i, sanitizedRule, tableKind)
+			var modelSQL strings.Builder
+			modelSQL.WriteString("{{ config(materialized='table') }}\n\nWITH\n")
+			for idx, cte := range step.CTEs {
+				modelSQL.WriteString(cte.Name)
+				modelSQL.WriteString(" AS (\n")
+				lines := strings.Split(cte.Query, "\n")
+				for _, line := range lines {
+					modelSQL.WriteString("    ")
+					modelSQL.WriteString(line)
+					modelSQL.WriteString("\n")
+				}
+				if idx < len(step.CTEs)-1 {
+					modelSQL.WriteString("),\n")
+				} else {
+					modelSQL.WriteString(")\n\n")
+				}
 			}
-			if idx < len(step.CTEs)-1 {
-				modelSQL.WriteString("),\n")
-			} else {
-				modelSQL.WriteString(")\n\n")
-			}
-		}
 
-		// Final select of the output table
-		outCTE := step.OutputTables[step.TargetKind]
-		fmt.Fprintf(&modelSQL, "SELECT * FROM %s\n", outCTE)
+			fmt.Fprintf(&modelSQL, "SELECT * FROM %s\n", outCTE)
 
-		files = append(files, ProjectFile{
-			Path:    fmt.Sprintf("models/transformations/%s.sql", modelName),
-			Content: modelSQL.String(),
-		})
+			files = append(files, ProjectFile{
+				Path:    fmt.Sprintf("models/transformations/%s.sql", modelName),
+				Content: modelSQL.String(),
+			})
 
-		// Update active current models
-		for k := range step.OutputTables {
-			currentModels[k] = modelName
+			// Update active current model for this specific table kind
+			currentModels[tableKind] = modelName
 		}
 
 		// Check if any declared checkpoints coincide with this step
 		for _, cp := range plan.Checkpoints() {
 			if cp.After == ruleID {
 				cpKey := string(cp.Key)
-				checkpointModels[cpKey] = modelName
+				// Target model for primary entity or target kind
+				if targetModel := currentModels[step.TargetKind]; targetModel != "" {
+					checkpointModels[cpKey] = targetModel
+				}
 			}
 		}
 	}
@@ -313,4 +343,13 @@ func sanitizeID(id string) string {
 		}
 	}
 	return sb.String()
+}
+
+func splitFieldPath(path semantic.FieldPath) (string, string) {
+	val := string(path)
+	idx := strings.IndexByte(val, '.')
+	if idx < 0 {
+		return "", val
+	}
+	return val[:idx], val[idx+1:]
 }

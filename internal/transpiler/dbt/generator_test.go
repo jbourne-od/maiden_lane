@@ -25,9 +25,11 @@ func TestGenerateDBTProject(t *testing.T) {
 		t.Fatalf("compilation did not produce a plan: %v", fail)
 	}
 
+	schema := fixture.InitialState.Schema()
 	project, err := GenerateProject(plan, Options{
 		ProjectName: "od_team_hos_pipeline",
 		ProfileName: "prod_warehouse",
+		Schema:      &schema,
 	})
 	if err != nil {
 		t.Fatalf("GenerateProject: %v", err)
@@ -83,5 +85,39 @@ func TestGenerateDBTProject(t *testing.T) {
 	}
 	if _, ok := filesByPath["models/checkpoints/chk_team_hos_aggregated_v1.sql"]; !ok {
 		t.Error("missing checkpoint model for team_hos_aggregated.v1")
+	}
+}
+
+func TestDBTMultiTableOperatorGeneration(t *testing.T) {
+	fixture, err := teamhos.New(teamhos.Passing)
+	if err != nil {
+		t.Fatalf("teamhos.New: %v", err)
+	}
+	compilation, err := semantic.Compile(fixture.Compilation)
+	if err != nil {
+		t.Fatalf("semantic.Compile: %v", err)
+	}
+	plan, ok := compilation.Plan()
+	if !ok {
+		t.Fatal("compilation produced no plan")
+	}
+
+	schema := fixture.InitialState.Schema()
+	project, err := GenerateProject(plan, Options{
+		ProjectName: "teamhos_dbt",
+		Schema:      &schema,
+	})
+	if err != nil {
+		t.Fatalf("GenerateProject: %v", err)
+	}
+
+	var modelPaths []string
+	for _, f := range project.Files {
+		if strings.HasPrefix(f.Path, "models/transformations/") {
+			modelPaths = append(modelPaths, f.Path)
+		}
+	}
+	if len(modelPaths) < 2 {
+		t.Errorf("expected at least 2 transformation models, got %d: %v", len(modelPaths), modelPaths)
 	}
 }

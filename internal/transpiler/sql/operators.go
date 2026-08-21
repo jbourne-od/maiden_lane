@@ -2,6 +2,7 @@ package sql
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
@@ -55,73 +56,92 @@ func TranspileSelectAssign(
 	selectQuery := fmt.Sprintf("SELECT m.* FROM %s m %s", prevEntityTable, whereClause)
 	ctes = append(ctes, NamedCTE{Name: selectCTEName, Query: selectQuery})
 
-	// 2. Grouping & Reductions CTE (if GroupBy is specified)
-	qualifiedCTEName := selectCTEName
+	// 2. Grouping & Reductions CTE with window functions
+	qualifiedCTEName := fmt.Sprintf("%s_qualified", stepName)
+	guardCtx := ctx
+	guardCtx.EntityTableAlias = "s"
+	guardCtx.IsGroupScope = true
+
+	var groupKeySQL string
 	if decl.Selector.GroupBy != nil {
-		groupCTEName := fmt.Sprintf("%s_grouped", stepName)
 		gCtx := ctx
 		gCtx.EntityTableAlias = "s"
-		groupKeyExpr, err := TranspileExpr(gCtx, *decl.Selector.GroupBy)
+		gk, err := TranspileExpr(gCtx, *decl.Selector.GroupBy)
 		if err != nil {
 			return TranspiledStep{}, fmt.Errorf("transpile group by in rule %s: %w", ruleID, err)
 		}
+		groupKeySQL = gk
+		guardCtx.GroupPartitionClause = fmt.Sprintf("PARTITION BY (%s)", gk)
+	} else {
+		groupKeySQL = "s.\"id\""
+		guardCtx.GroupPartitionClause = ""
+	}
 
-		guardCtx := ctx
-		guardCtx.EntityTableAlias = "s"
-		guardCtx.IsGroupScope = true
-		guardExpr, err := TranspileExpr(guardCtx, decl.Guard)
-		if err != nil {
-			return TranspiledStep{}, fmt.Errorf("transpile guard in rule %s: %w", ruleID, err)
-		}
+	guardExpr, err := TranspileExpr(guardCtx, decl.Guard)
+	if err != nil {
+		return TranspiledStep{}, fmt.Errorf("transpile guard in rule %s: %w", ruleID, err)
+	}
 
-		// Calculate group qualification
-		groupQuery := fmt.Sprintf(`SELECT s.*, 
+	guardQuery := fmt.Sprintf(`SELECT s.*, 
     (%s) AS _ml_group_key,
     (%s) AS _ml_guard_passed
-FROM %s s`, groupKeyExpr, guardExpr, selectCTEName)
-		ctes = append(ctes, NamedCTE{Name: groupCTEName, Query: groupQuery})
-		qualifiedCTEName = groupCTEName
+FROM %s s`, groupKeySQL, guardExpr, selectCTEName)
+	ctes = append(ctes, NamedCTE{Name: qualifiedCTEName, Query: guardQuery})
+
+	// 3. Project updated entity table via LEFT JOIN with prevEntityTable to preserve ALL columns
+	outputCTEName := fmt.Sprintf("%s_output_%s", stepName, entityKind)
+
+	// Determine fields to project
+	var fields []string
+	if ctx.EntityFields != nil && len(ctx.EntityFields[entityKind]) > 0 {
+		fields = slices.Clone(ctx.EntityFields[entityKind])
 	} else {
-		// Member-level guard
-		guardCTEName := fmt.Sprintf("%s_guarded", stepName)
-		gCtx := ctx
-		gCtx.EntityTableAlias = "s"
-		guardExpr, err := TranspileExpr(gCtx, decl.Guard)
-		if err != nil {
-			return TranspiledStep{}, fmt.Errorf("transpile guard in rule %s: %w", ruleID, err)
+		// Discover from assignments
+		for _, assign := range decl.Assignments {
+			_, fieldName := splitFieldPath(assign.Target)
+			if !slices.Contains(fields, fieldName) {
+				fields = append(fields, fieldName)
+			}
 		}
-		guardQuery := fmt.Sprintf(`SELECT s.*, (%s) AS _ml_guard_passed FROM %s s`, guardExpr, selectCTEName)
-		ctes = append(ctes, NamedCTE{Name: guardCTEName, Query: guardQuery})
-		qualifiedCTEName = guardCTEName
 	}
 
-	// 3. Apply field assignments for qualified entities
-	mutatedCTEName := fmt.Sprintf("%s_mutated", stepName)
-	var assignmentsSQL strings.Builder
+	assignedMap := make(map[string]semantic.Expr)
 	for _, assign := range decl.Assignments {
 		_, fieldName := splitFieldPath(assign.Target)
-		col := d.QuoteIdentifier(fieldName)
-
-		aCtx := ctx
-		aCtx.EntityTableAlias = "q"
-		valExpr, err := TranspileExpr(aCtx, assign.Value)
-		if err != nil {
-			return TranspiledStep{}, fmt.Errorf("transpile assignment %s in rule %s: %w", assign.Target, ruleID, err)
-		}
-		fmt.Fprintf(&assignmentsSQL, `,\n    CASE WHEN q."_ml_guard_passed" = TRUE THEN (%s) ELSE q.%s END AS %s`, valExpr, col, col)
+		assignedMap[fieldName] = assign.Value
 	}
 
-	mutatedQuery := fmt.Sprintf(`SELECT q."id", q."lineage_id", q."is_active"%s,
-    CASE WHEN q."_ml_guard_passed" = TRUE THEN %s ELSE q."updated_by_rule" END AS "updated_by_rule"
-FROM %s q`, assignmentsSQL.String(), d.QuoteString(string(ruleID)), qualifiedCTEName)
-	ctes = append(ctes, NamedCTE{Name: mutatedCTEName, Query: mutatedQuery})
+	var projectionSQL strings.Builder
+	for _, f := range fields {
+		col := d.QuoteIdentifier(f)
+		if valExpr, ok := assignedMap[f]; ok {
+			aCtx := ctx
+			aCtx.EntityTableAlias = "q"
+			if decl.Selector.GroupBy != nil {
+				aCtx.GroupPartitionClause = `PARTITION BY (q."_ml_group_key")`
+			}
+			valSQL, err := TranspileExpr(aCtx, valExpr)
+			if err != nil {
+				return TranspiledStep{}, fmt.Errorf("transpile assignment %s in rule %s: %w", f, ruleID, err)
+			}
+			fmt.Fprintf(&projectionSQL, `,\n    CASE WHEN q."_ml_guard_passed" = TRUE THEN (%s) ELSE m.%s END AS %s`, valSQL, col, col)
+		} else {
+			fmt.Fprintf(&projectionSQL, `,\n    m.%s AS %s`, col, col)
+		}
+	}
 
-	// 4. Project new entity state table by joining back untouched rows
-	outputCTEName := fmt.Sprintf("%s_output_%s", stepName, entityKind)
-	outputQuery := fmt.Sprintf(`SELECT m.* FROM %s m
-WHERE m."id" NOT IN (SELECT u."id" FROM %s u)
-UNION ALL
-SELECT u.* FROM %s u`, prevEntityTable, mutatedCTEName, mutatedCTEName)
+	outputQuery := fmt.Sprintf(`SELECT 
+    m."id",
+    m."lineage_id",
+    m."is_active"%s,
+    CASE WHEN q."_ml_guard_passed" = TRUE THEN %s ELSE m."updated_by_rule" END AS "updated_by_rule"
+FROM %s m
+LEFT JOIN %s q ON m."id" = q."id"`,
+		projectionSQL.String(),
+		d.QuoteString(string(ruleID)),
+		prevEntityTable,
+		qualifiedCTEName,
+	)
 	ctes = append(ctes, NamedCTE{Name: outputCTEName, Query: outputQuery})
 
 	return TranspiledStep{
@@ -202,8 +222,8 @@ FROM %s s %s`, discExpr, guardExpr, prevSourceTable, whereClause)
 		fmt.Fprintf(&assignmentsSQL, `,\n    (%s) AS %s`, valExpr, col)
 	}
 
-	// Compute synthetic ID from progenitor ID, ruleID, targetKind, and discriminator
-	idHashExpr := d.DigestSHA256(fmt.Sprintf(`%s || ':' || %s || ':' || src."id" || ':' || COALESCE(src."_ml_discriminator"::text, '')`,
+	// Canonical domain prefix derivation matching Go synthetic entity derivation
+	idHashExpr := d.DigestSHA256(fmt.Sprintf(`'ml:synthetic_entity:v1\x00' || COALESCE(src."lineage_id", '') || ':' || %s || ':' || %s || ':' || src."id" || ':' || COALESCE(src."_ml_discriminator"::text, '')`,
 		d.QuoteString(targetKind), d.QuoteString(string(ruleID))))
 
 	newEntitiesQuery := fmt.Sprintf(`SELECT 
@@ -315,6 +335,8 @@ func TranspileRelateEntities(
 	if decl.FromSelector.Where != nil {
 		fCtx := ctx
 		fCtx.EntityTableAlias = "f"
+		fCtx.FromAlias = "f"
+		fCtx.FromKind = fromKind
 		fSql, err := TranspileExpr(fCtx, *decl.FromSelector.Where)
 		if err != nil {
 			return TranspiledStep{}, err
@@ -324,6 +346,8 @@ func TranspileRelateEntities(
 	if decl.ToSelector.Where != nil {
 		tCtx := ctx
 		tCtx.EntityTableAlias = "t"
+		tCtx.ToAlias = "t"
+		tCtx.ToKind = toKind
 		tSql, err := TranspileExpr(tCtx, *decl.ToSelector.Where)
 		if err != nil {
 			return TranspiledStep{}, err
@@ -334,6 +358,8 @@ func TranspileRelateEntities(
 	guardCtx := ctx
 	guardCtx.FromAlias = "f"
 	guardCtx.ToAlias = "t"
+	guardCtx.FromKind = fromKind
+	guardCtx.ToKind = toKind
 	guardExpr, err := TranspileExpr(guardCtx, decl.Guard)
 	if err != nil {
 		return TranspiledStep{}, fmt.Errorf("transpile relation guard in rule %s: %w", ruleID, err)
@@ -406,6 +432,8 @@ func TranspileUnrelateEntities(
 	guardCtx := ctx
 	guardCtx.FromAlias = "f"
 	guardCtx.ToAlias = "t"
+	guardCtx.FromKind = fromKind
+	guardCtx.ToKind = toKind
 	guardExpr, err := TranspileExpr(guardCtx, decl.Guard)
 	if err != nil {
 		return TranspiledStep{}, fmt.Errorf("transpile unrelate guard in rule %s: %w", ruleID, err)
@@ -495,6 +523,7 @@ func TranspileMergeEntities(
 	guardCtx := ctx
 	guardCtx.EntityTableAlias = "s"
 	guardCtx.IsGroupScope = true
+	guardCtx.GroupPartitionClause = fmt.Sprintf("PARTITION BY (%s)", groupKeyExpr)
 	guardExpr, err := TranspileExpr(guardCtx, decl.Guard)
 	if err != nil {
 		return TranspiledStep{}, err
@@ -524,6 +553,7 @@ FROM %s s %s`, groupKeyExpr, discExpr, guardExpr, prevSourceTable, whereClause)
 		aCtx := ctx
 		aCtx.EntityTableAlias = "grp"
 		aCtx.IsGroupScope = true
+		aCtx.IsAggregateGroupBy = true
 		valExpr, err := TranspileExpr(aCtx, assign.Value)
 		if err != nil {
 			return TranspiledStep{}, err
@@ -531,7 +561,7 @@ FROM %s s %s`, groupKeyExpr, discExpr, guardExpr, prevSourceTable, whereClause)
 		fmt.Fprintf(&assignmentsSQL, `,\n    (%s) AS %s`, valExpr, col)
 	}
 
-	idHashExpr := d.DigestSHA256(fmt.Sprintf(`%s || ':' || %s || ':' || STRING_AGG(grp."id", ',' ORDER BY grp."id") || ':' || COALESCE(MAX(grp."_ml_discriminator"::text), '')`,
+	idHashExpr := d.DigestSHA256(fmt.Sprintf(`'ml:synthetic_entity:v1\x00' || COALESCE(MAX(grp."lineage_id"), '') || ':' || %s || ':' || %s || ':' || STRING_AGG(grp."id", ',' ORDER BY grp."id") || ':' || COALESCE(MAX(grp."_ml_discriminator"::text), '')`,
 		d.QuoteString(targetKind), d.QuoteString(string(ruleID))))
 
 	mergedQuery := fmt.Sprintf(`SELECT 
@@ -546,22 +576,36 @@ GROUP BY grp."_ml_group_key"`, idHashExpr, assignmentsSQL.String(), d.QuoteStrin
 
 	// 3. Target entity output
 	outTargetCTEName := fmt.Sprintf("%s_output_%s", stepName, targetKind)
-	outTargetQuery := fmt.Sprintf(`SELECT t.* FROM %s t
+	outputTables := make(map[string]string)
+
+	if sourceKind == targetKind {
+		if !decl.RetainSources {
+			outTargetQuery := fmt.Sprintf(`SELECT t.* FROM %s t
+WHERE t."id" NOT IN (SELECT sel."id" FROM %s sel WHERE sel."_ml_guard_passed" = TRUE)
+UNION ALL
+SELECT m.* FROM %s m`, prevSourceTable, selectCTEName, mergedCTEName)
+			ctes = append(ctes, NamedCTE{Name: outTargetCTEName, Query: outTargetQuery})
+		} else {
+			outTargetQuery := fmt.Sprintf(`SELECT t.* FROM %s t
 UNION ALL
 SELECT m.* FROM %s m`, prevTargetTable, mergedCTEName)
-	ctes = append(ctes, NamedCTE{Name: outTargetCTEName, Query: outTargetQuery})
+			ctes = append(ctes, NamedCTE{Name: outTargetCTEName, Query: outTargetQuery})
+		}
+		outputTables[targetKind] = outTargetCTEName
+	} else {
+		outTargetQuery := fmt.Sprintf(`SELECT t.* FROM %s t
+UNION ALL
+SELECT m.* FROM %s m`, prevTargetTable, mergedCTEName)
+		ctes = append(ctes, NamedCTE{Name: outTargetCTEName, Query: outTargetQuery})
+		outputTables[targetKind] = outTargetCTEName
 
-	outputTables := map[string]string{
-		targetKind: outTargetCTEName,
-	}
-
-	// 4. If !RetainSources: delete source members
-	if !decl.RetainSources && sourceKind != targetKind {
-		outSourceCTEName := fmt.Sprintf("%s_output_%s", stepName, sourceKind)
-		outSourceQuery := fmt.Sprintf(`SELECT s.* FROM %s s
+		if !decl.RetainSources {
+			outSourceCTEName := fmt.Sprintf("%s_output_%s", stepName, sourceKind)
+			outSourceQuery := fmt.Sprintf(`SELECT s.* FROM %s s
 WHERE s."id" NOT IN (SELECT sel."id" FROM %s sel WHERE sel."_ml_guard_passed" = TRUE)`, prevSourceTable, selectCTEName)
-		ctes = append(ctes, NamedCTE{Name: outSourceCTEName, Query: outSourceQuery})
-		outputTables[sourceKind] = outSourceCTEName
+			ctes = append(ctes, NamedCTE{Name: outSourceCTEName, Query: outSourceQuery})
+			outputTables[sourceKind] = outSourceCTEName
+		}
 	}
 
 	return TranspiledStep{
@@ -641,7 +685,7 @@ FROM %s s %s`, guardExpr, prevSourceTable, whereClause)
 			fmt.Fprintf(&assignmentsSQL, `,\n    (%s) AS %s`, valExpr, col)
 		}
 
-		idHashExpr := d.DigestSHA256(fmt.Sprintf(`%s || ':' || %s || ':' || src."id" || ':' || COALESCE((%s)::text, '')`,
+		idHashExpr := d.DigestSHA256(fmt.Sprintf(`'ml:synthetic_entity:v1\x00' || COALESCE(src."lineage_id", '') || ':' || %s || ':' || %s || ':' || src."id" || ':' || COALESCE((%s)::text, '')`,
 			d.QuoteString(targetKind), d.QuoteString(string(ruleID)), discExpr))
 
 		pQuery := fmt.Sprintf(`SELECT 
@@ -661,22 +705,36 @@ WHERE src."_ml_guard_passed" = TRUE`, idHashExpr, assignmentsSQL.String(), d.Quo
 
 	// 3. Target entity output
 	outTargetCTEName := fmt.Sprintf("%s_output_%s", stepName, targetKind)
-	outTargetQuery := fmt.Sprintf(`SELECT t.* FROM %s t
+	outputTables := make(map[string]string)
+
+	if sourceKind == targetKind {
+		if !decl.RetainSource {
+			outTargetQuery := fmt.Sprintf(`SELECT t.* FROM %s t
+WHERE t."id" NOT IN (SELECT sel."id" FROM %s sel WHERE sel."_ml_guard_passed" = TRUE)
+UNION ALL
+SELECT c.* FROM %s c`, prevSourceTable, selectCTEName, splitChildrenCTEName)
+			ctes = append(ctes, NamedCTE{Name: outTargetCTEName, Query: outTargetQuery})
+		} else {
+			outTargetQuery := fmt.Sprintf(`SELECT t.* FROM %s t
 UNION ALL
 SELECT c.* FROM %s c`, prevTargetTable, splitChildrenCTEName)
-	ctes = append(ctes, NamedCTE{Name: outTargetCTEName, Query: outTargetQuery})
+			ctes = append(ctes, NamedCTE{Name: outTargetCTEName, Query: outTargetQuery})
+		}
+		outputTables[targetKind] = outTargetCTEName
+	} else {
+		outTargetQuery := fmt.Sprintf(`SELECT t.* FROM %s t
+UNION ALL
+SELECT c.* FROM %s c`, prevTargetTable, splitChildrenCTEName)
+		ctes = append(ctes, NamedCTE{Name: outTargetCTEName, Query: outTargetQuery})
+		outputTables[targetKind] = outTargetCTEName
 
-	outputTables := map[string]string{
-		targetKind: outTargetCTEName,
-	}
-
-	// 4. Source deletion if !RetainSource
-	if !decl.RetainSource && sourceKind != targetKind {
-		outSourceCTEName := fmt.Sprintf("%s_output_%s", stepName, sourceKind)
-		outSourceQuery := fmt.Sprintf(`SELECT s.* FROM %s s
+		if !decl.RetainSource {
+			outSourceCTEName := fmt.Sprintf("%s_output_%s", stepName, sourceKind)
+			outSourceQuery := fmt.Sprintf(`SELECT s.* FROM %s s
 WHERE s."id" NOT IN (SELECT sel."id" FROM %s sel WHERE sel."_ml_guard_passed" = TRUE)`, prevSourceTable, selectCTEName)
-		ctes = append(ctes, NamedCTE{Name: outSourceCTEName, Query: outSourceQuery})
-		outputTables[sourceKind] = outSourceCTEName
+			ctes = append(ctes, NamedCTE{Name: outSourceCTEName, Query: outSourceQuery})
+			outputTables[sourceKind] = outSourceCTEName
+		}
 	}
 
 	return TranspiledStep{
