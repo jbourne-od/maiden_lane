@@ -245,9 +245,13 @@ func TranspileInsertEntity(
     (%s) AS _ml_group_key,
     (%s) AS _ml_discriminator,
     (%s) AS _ml_guard_passed,
-    ROW_NUMBER() OVER (PARTITION BY (%s) ORDER BY s."id") AS _ml_row_num,
+    ROW_NUMBER() OVER (PARTITION BY (%s) ORDER BY decode(SUBSTRING(s."id" FROM 8), 'hex')) AS _ml_row_num,
     COUNT(*) OVER (PARTITION BY (%s)) AS _ml_progenitor_count,
-    STRING_AGG(SUBSTRING(s."id" FROM 8), '' ORDER BY s."id") OVER (PARTITION BY (%s)) AS _ml_progenitor_hex%s
+    STRING_AGG(SUBSTRING(s."id" FROM 8), '') OVER (
+        PARTITION BY (%s)
+        ORDER BY decode(SUBSTRING(s."id" FROM 8), 'hex')
+        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+    ) AS _ml_progenitor_hex%s
 FROM %s s %s`, gk, discExpr, guardExpr, gk, gk, gk, windowedAssignmentsSQL.String(), prevSourceTable, whereClause)
 
 		progenitorExpr = `decode(LPAD(TO_HEX(src."_ml_progenitor_count"), 16, '0'), 'hex') || decode(src."_ml_progenitor_hex", 'hex')`
@@ -635,7 +639,7 @@ FROM %s s %s`, groupKeyExpr, discExpr, guardExpr, prevSourceTable, whereClause)
 		fmt.Fprintf(&assignmentsSQL, ",\n    (%s) AS %s", valExpr, col)
 	}
 
-	progenitorExpr := `decode(LPAD(TO_HEX(COUNT(*)), 16, '0'), 'hex') || decode(STRING_AGG(SUBSTRING(grp."id" FROM 8), '' ORDER BY grp."id"), 'hex')`
+	progenitorExpr := `decode(LPAD(TO_HEX(COUNT(*)), 16, '0'), 'hex') || decode(STRING_AGG(SUBSTRING(grp."id" FROM 8), '' ORDER BY decode(SUBSTRING(grp."id" FROM 8), 'hex')), 'hex')`
 	idHashExpr := d.SyntheticEntityID(targetKind, string(ruleID), `MAX(grp."lineage_id")`, progenitorExpr, `MAX(grp."_ml_discriminator"::text)`)
 
 	mergedQuery := fmt.Sprintf(`SELECT 

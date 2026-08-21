@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -81,24 +82,26 @@ func TestSyntheticEntityIDGoVsSQL(t *testing.T) {
 			// Lineage: 32 raw bytes
 			sqlBytea = append(sqlBytea, lineageRaw...)
 
-			// Kind: uint64 len + kind bytes
+			// Kind: uint64 len + kind UTF-8 bytes (OCTET_LENGTH(convert_to(kind, 'UTF8')))
 			var kindLen [8]byte
-			binary.BigEndian.PutUint64(kindLen[:], uint64(len(tc.kind)))
+			kindBytes := []byte(tc.kind)
+			binary.BigEndian.PutUint64(kindLen[:], uint64(len(kindBytes)))
 			sqlBytea = append(sqlBytea, kindLen[:]...)
-			sqlBytea = append(sqlBytea, []byte(tc.kind)...)
+			sqlBytea = append(sqlBytea, kindBytes...)
 
-			// Rule: uint64 len + rule bytes
+			// Rule: uint64 len + rule UTF-8 bytes (OCTET_LENGTH(convert_to(rule, 'UTF8')))
 			var ruleLen [8]byte
-			binary.BigEndian.PutUint64(ruleLen[:], uint64(len(tc.rule)))
+			ruleBytes := []byte(tc.rule)
+			binary.BigEndian.PutUint64(ruleLen[:], uint64(len(ruleBytes)))
 			sqlBytea = append(sqlBytea, ruleLen[:]...)
-			sqlBytea = append(sqlBytea, []byte(tc.rule)...)
+			sqlBytea = append(sqlBytea, ruleBytes...)
 
 			// Progenitors count: uint64 len
 			var progCount [8]byte
 			binary.BigEndian.PutUint64(progCount[:], uint64(len(tc.progenitorHex)))
 			sqlBytea = append(sqlBytea, progCount[:]...)
 
-			// Progenitor IDs: 32 raw bytes each
+			// Progenitor IDs: 32 raw bytes each, sorted by binary bytes
 			for _, h := range tc.progenitorHex {
 				rawID, err := hex.DecodeString(h)
 				if err != nil {
@@ -107,12 +110,13 @@ func TestSyntheticEntityIDGoVsSQL(t *testing.T) {
 				sqlBytea = append(sqlBytea, rawID...)
 			}
 
-			// Value: discriminator string -> kind byte 0x01 + uint64 len + string bytes
+			// Value: discriminator string -> kind byte 0x01 + uint64 len + UTF-8 string bytes
 			sqlBytea = append(sqlBytea, 0x01)
 			var discLen [8]byte
-			binary.BigEndian.PutUint64(discLen[:], uint64(len(tc.discriminator)))
+			discBytes := []byte(tc.discriminator)
+			binary.BigEndian.PutUint64(discLen[:], uint64(len(discBytes)))
 			sqlBytea = append(sqlBytea, discLen[:]...)
-			sqlBytea = append(sqlBytea, []byte(tc.discriminator)...)
+			sqlBytea = append(sqlBytea, discBytes...)
 
 			// Compute SHA-256 over SQL bytea
 			sqlDigestSum := sha256.Sum256(sqlBytea)
@@ -171,13 +175,15 @@ func TestMultiOrderGroupedInsertionAndPermutationInvariance(t *testing.T) {
 
 	// 3. Compute SQL Synthetic ID via Transpiler Formula for 3-order group
 	computeSQLGroupDigest := func(input []RawOrder) string {
-		// Sort by ID as SQL's `ORDER BY s."id"` does
+		// Sort by raw 32-byte digest as SQL's `ORDER BY decode(SUBSTRING(s."id" FROM 8), 'hex')` does
 		sorted := slices.Clone(input)
 		slices.SortFunc(sorted, func(a, b RawOrder) int {
-			return strings.Compare(a.ID, b.ID)
+			rawA, _ := hex.DecodeString(strings.TrimPrefix(a.ID, "sha256:"))
+			rawB, _ := hex.DecodeString(strings.TrimPrefix(b.ID, "sha256:"))
+			return bytes.Compare(rawA, rawB)
 		})
 
-		// Mimic `COUNT(*) OVER (PARTITION BY s."customer_id")` and `STRING_AGG(SUBSTRING(s."id" FROM 8), '' ORDER BY s."id")`
+		// Mimic `COUNT(*) OVER (PARTITION BY s."customer_id")` and `STRING_AGG(SUBSTRING(s."id" FROM 8), '' ...)`
 		var progHexBuilder strings.Builder
 		for _, o := range sorted {
 			progHexBuilder.WriteString(strings.TrimPrefix(o.ID, "sha256:"))
@@ -195,17 +201,19 @@ func TestMultiOrderGroupedInsertionAndPermutationInvariance(t *testing.T) {
 		// Lineage
 		sqlBytea = append(sqlBytea, lineageRaw...)
 
-		// Target Kind "dynamic_load"
+		// Target Kind "dynamic_load" (OCTET_LENGTH(convert_to('dynamic_load', 'UTF8')))
 		var kindLen [8]byte
-		binary.BigEndian.PutUint64(kindLen[:], uint64(len("dynamic_load")))
+		kindBytes := []byte("dynamic_load")
+		binary.BigEndian.PutUint64(kindLen[:], uint64(len(kindBytes)))
 		sqlBytea = append(sqlBytea, kindLen[:]...)
-		sqlBytea = append(sqlBytea, []byte("dynamic_load")...)
+		sqlBytea = append(sqlBytea, kindBytes...)
 
-		// Rule "create_dynamic_loads"
+		// Rule "create_dynamic_loads" (OCTET_LENGTH(convert_to('create_dynamic_loads', 'UTF8')))
 		var ruleLen [8]byte
-		binary.BigEndian.PutUint64(ruleLen[:], uint64(len("create_dynamic_loads")))
+		ruleBytes := []byte("create_dynamic_loads")
+		binary.BigEndian.PutUint64(ruleLen[:], uint64(len(ruleBytes)))
 		sqlBytea = append(sqlBytea, ruleLen[:]...)
-		sqlBytea = append(sqlBytea, []byte("create_dynamic_loads")...)
+		sqlBytea = append(sqlBytea, ruleBytes...)
 
 		// Progenitor count
 		var progCount [8]byte
@@ -215,12 +223,13 @@ func TestMultiOrderGroupedInsertionAndPermutationInvariance(t *testing.T) {
 		// Progenitor bytes
 		sqlBytea = append(sqlBytea, progRawBytes...)
 
-		// Discriminator ValueString (kind=0x01)
+		// Discriminator ValueString (kind=0x01) (OCTET_LENGTH(convert_to('TITAN_LOAD', 'UTF8')))
 		sqlBytea = append(sqlBytea, 0x01)
 		var discLen [8]byte
-		binary.BigEndian.PutUint64(discLen[:], uint64(len("TITAN_LOAD")))
+		discBytes := []byte("TITAN_LOAD")
+		binary.BigEndian.PutUint64(discLen[:], uint64(len(discBytes)))
 		sqlBytea = append(sqlBytea, discLen[:]...)
-		sqlBytea = append(sqlBytea, []byte("TITAN_LOAD")...)
+		sqlBytea = append(sqlBytea, discBytes...)
 
 		sum := sha256.Sum256(sqlBytea)
 		return "sha256:" + hex.EncodeToString(sum[:])

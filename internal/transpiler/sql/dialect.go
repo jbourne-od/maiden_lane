@@ -149,13 +149,13 @@ func (p postgresDialect) SyntheticEntityID(targetKind string, ruleID string, lin
     '\x000000000000001f'::bytea
     || convert_to('maiden-lane.synthetic-entity.v1', 'UTF8')
     || decode(SUBSTRING(COALESCE(%s, 'sha256:0000000000000000000000000000000000000000000000000000000000000000') FROM 8), 'hex')
-    || decode(LPAD(TO_HEX(OCTET_LENGTH(%s)), 16, '0'), 'hex')
+    || decode(LPAD(TO_HEX(OCTET_LENGTH(convert_to(%s, 'UTF8'))), 16, '0'), 'hex')
     || convert_to(%s, 'UTF8')
-    || decode(LPAD(TO_HEX(OCTET_LENGTH(%s)), 16, '0'), 'hex')
+    || decode(LPAD(TO_HEX(OCTET_LENGTH(convert_to(%s, 'UTF8'))), 16, '0'), 'hex')
     || convert_to(%s, 'UTF8')
     || (%s)
     || '\x01'::bytea
-    || decode(LPAD(TO_HEX(OCTET_LENGTH((%s)::text)), 16, '0'), 'hex')
+    || decode(LPAD(TO_HEX(OCTET_LENGTH(convert_to((%s)::text, 'UTF8'))), 16, '0'), 'hex')
     || convert_to((%s)::text, 'UTF8'),
     'sha256'
 ), 'hex'))`,

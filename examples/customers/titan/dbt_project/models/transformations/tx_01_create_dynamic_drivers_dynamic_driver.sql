@@ -6,9 +6,13 @@ step_1_create_dynamic_drivers_selected AS (
         (s."home_terminal_zip") AS _ml_group_key,
         ('TITAN_DRIVER') AS _ml_discriminator,
         ((NOT (COUNT(*) OVER (PARTITION BY (s."home_terminal_zip")) < 1))) AS _ml_guard_passed,
-        ROW_NUMBER() OVER (PARTITION BY (s."home_terminal_zip") ORDER BY s."id") AS _ml_row_num,
+        ROW_NUMBER() OVER (PARTITION BY (s."home_terminal_zip") ORDER BY decode(SUBSTRING(s."id" FROM 8), 'hex')) AS _ml_row_num,
         COUNT(*) OVER (PARTITION BY (s."home_terminal_zip")) AS _ml_progenitor_count,
-        STRING_AGG(SUBSTRING(s."id" FROM 8), '' ORDER BY s."id") OVER (PARTITION BY (s."home_terminal_zip")) AS _ml_progenitor_hex,
+        STRING_AGG(SUBSTRING(s."id" FROM 8), '') OVER (
+            PARTITION BY (s."home_terminal_zip")
+            ORDER BY decode(SUBSTRING(s."id" FROM 8), 'hex')
+            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+        ) AS _ml_progenitor_hex,
         ('DRIVER_TITAN_01') AS "_ml_assign_driver_id",
         ('17601') AS "_ml_assign_home_zip",
         (SUM(s."avl_drive_hours") OVER (PARTITION BY (s."home_terminal_zip"))) AS "_ml_assign_remaining_drive_hours",
@@ -21,13 +25,13 @@ step_1_create_dynamic_drivers_new_entities AS (
         '\x000000000000001f'::bytea
         || convert_to('maiden-lane.synthetic-entity.v1', 'UTF8')
         || decode(SUBSTRING(COALESCE(src."lineage_id", 'sha256:0000000000000000000000000000000000000000000000000000000000000000') FROM 8), 'hex')
-        || decode(LPAD(TO_HEX(OCTET_LENGTH('dynamic_driver')), 16, '0'), 'hex')
+        || decode(LPAD(TO_HEX(OCTET_LENGTH(convert_to('dynamic_driver', 'UTF8'))), 16, '0'), 'hex')
         || convert_to('dynamic_driver', 'UTF8')
-        || decode(LPAD(TO_HEX(OCTET_LENGTH('create_dynamic_drivers')), 16, '0'), 'hex')
+        || decode(LPAD(TO_HEX(OCTET_LENGTH(convert_to('create_dynamic_drivers', 'UTF8'))), 16, '0'), 'hex')
         || convert_to('create_dynamic_drivers', 'UTF8')
         || (decode(LPAD(TO_HEX(src."_ml_progenitor_count"), 16, '0'), 'hex') || decode(src."_ml_progenitor_hex", 'hex'))
         || '\x01'::bytea
-        || decode(LPAD(TO_HEX(OCTET_LENGTH((src."_ml_discriminator")::text)), 16, '0'), 'hex')
+        || decode(LPAD(TO_HEX(OCTET_LENGTH(convert_to((src."_ml_discriminator")::text, 'UTF8'))), 16, '0'), 'hex')
         || convert_to((src."_ml_discriminator")::text, 'UTF8'),
         'sha256'
     ), 'hex')) AS "id",
