@@ -1,0 +1,16 @@
+name: 'maiden_lane_pipeline'
+version: '1.0.0'
+config-version: 2
+profile: 'default'
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+
+models:
+  maiden_lane_pipeline:
+    staging:
+      +materialized: view
+    transformations:
+      +materialized: table
+    checkpoints:
+      +materialized: view

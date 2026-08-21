@@ -238,4 +238,57 @@ rule form_team_v1 {
 			t.Errorf("gate stderr missing promotion gate refused error: %s", stderr.String())
 		}
 	})
+
+	// 10. Titan real-world customer showcase pipeline
+	t.Run("titan_customer_showcase", func(t *testing.T) {
+		titanML := filepath.Join("..", "..", "examples", "customers", "titan", "titan_orders.ml")
+		titanState := filepath.Join("..", "..", "examples", "customers", "titan", "titan_input.json")
+		if _, err := os.Stat(titanML); os.IsNotExist(err) {
+			t.Skip("titan showcase files not in expected relative path")
+		}
+
+		// Compile
+		var stdout, stderr bytes.Buffer
+		code := processMain([]string{"compile", titanML}, &stdout, &stderr, deps)
+		if code != 0 {
+			t.Fatalf("titan compile exit code = %d, stderr: %s", code, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "Plan compiled successfully!") {
+			t.Errorf("titan compile missing success message: %s", stdout.String())
+		}
+
+		// Run with state
+		stdout.Reset()
+		stderr.Reset()
+		code = processMain([]string{"run", titanML, "--state", titanState}, &stdout, &stderr, deps)
+		if code != 0 {
+			t.Fatalf("titan run exit code = %d, stderr: %s", code, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "Execution completed successfully!") {
+			t.Errorf("titan run missing success message: %s", stdout.String())
+		}
+
+		// Transpile SQL
+		stdout.Reset()
+		stderr.Reset()
+		code = processMain([]string{"transpile", "sql", titanML}, &stdout, &stderr, deps)
+		if code != 0 {
+			t.Fatalf("titan transpile sql exit code = %d, stderr: %s", code, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "WITH\n") {
+			t.Errorf("titan transpile sql missing WITH: %s", stdout.String())
+		}
+
+		// Transpile dbt
+		dbtDir := filepath.Join(tempDir, "titan_dbt")
+		stdout.Reset()
+		stderr.Reset()
+		code = processMain([]string{"transpile", "dbt", titanML, "--out", dbtDir}, &stdout, &stderr, deps)
+		if code != 0 {
+			t.Fatalf("titan transpile dbt exit code = %d, stderr: %s", code, stderr.String())
+		}
+		if !strings.Contains(stdout.String(), "Generated dbt project") {
+			t.Errorf("titan transpile dbt missing success: %s", stdout.String())
+		}
+	})
 }
