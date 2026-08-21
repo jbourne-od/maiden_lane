@@ -548,18 +548,139 @@ func TestTransformationProjectionRefusesADeclarationTheContractCannotExpress(t *
 	// And every operator the contract DOES express still projects, or this test would pass
 	// against a projection that had simply stopped working.
 	groupBy := semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"}
+	trueLit := semantic.Expr{Kind: semantic.ExprLiteral, Literal: &semantic.Value{}}
+	vTrue := semantic.NewInt64Value(1)
+	trueLit.Literal = &vTrue
+
 	for _, expressible := range []semantic.TransformationDeclaration{
-		{ID: "certify_depot.v1", Operator: semantic.OperatorSelectAndAssign,
+		{
+			ID:       "certify_depot.v1",
+			Operator: semantic.OperatorSelectAndAssign,
 			SelectAssign: &semantic.SelectAssignDeclaration{
-				Selector: semantic.Selector{Kind: "driver", GroupBy: &groupBy,
-					Members: semantic.Cardinality{Kind: semantic.CardinalityAtLeast, Count: 1}},
+				Selector: semantic.Selector{
+					Kind:    "driver",
+					GroupBy: &groupBy,
+					Members: semantic.Cardinality{Kind: semantic.CardinalityAtLeast, Count: 1},
+				},
 				Guard: semantic.Expr{Kind: semantic.ExprAllEqual, Field: "driver.depot"},
-				Assignments: []semantic.FieldAssignment{{Target: "driver.status",
-					Value: semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"}}},
-			}},
+				Assignments: []semantic.FieldAssignment{{
+					Target: "driver.status",
+					Value:  semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"},
+				}},
+			},
+		},
+		{
+			ID:       "insert_team.v1",
+			Operator: semantic.OperatorInsertEntity,
+			InsertEntity: &semantic.InsertEntityDeclaration{
+				Selector: semantic.Selector{
+					Kind:    "driver",
+					GroupBy: &groupBy,
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 2},
+				},
+				TargetKind:    "team",
+				Discriminator: trueLit,
+				Guard:         trueLit,
+				Assignments: []semantic.FieldAssignment{{
+					Target: "team.depot",
+					Value:  semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"},
+				}},
+			},
+		},
+		{
+			ID:       "delete_driver.v1",
+			Operator: semantic.OperatorDeleteEntity,
+			DeleteEntity: &semantic.DeleteEntityDeclaration{
+				Selector: semantic.Selector{
+					Kind:    "driver",
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 1},
+				},
+				Guard: trueLit,
+			},
+		},
+		{
+			ID:       "relate_driver_truck.v1",
+			Operator: semantic.OperatorRelateEntities,
+			RelateEntities: &semantic.RelateEntitiesDeclaration{
+				FromSelector: semantic.Selector{
+					Kind:    "driver",
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 1},
+				},
+				ToSelector: semantic.Selector{
+					Kind:    "truck",
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 1},
+				},
+				RelationKind: "assigned_truck",
+				Guard:        trueLit,
+			},
+		},
+		{
+			ID:       "unrelate_driver_truck.v1",
+			Operator: semantic.OperatorUnrelateEntities,
+			UnrelateEntities: &semantic.UnrelateEntitiesDeclaration{
+				FromSelector: semantic.Selector{
+					Kind:    "driver",
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 1},
+				},
+				ToSelector: semantic.Selector{
+					Kind:    "truck",
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 1},
+				},
+				RelationKind: "assigned_truck",
+				Guard:        trueLit,
+			},
+		},
+		{
+			ID:       "merge_drivers.v1",
+			Operator: semantic.OperatorMergeEntities,
+			MergeEntities: &semantic.MergeEntitiesDeclaration{
+				Selector: semantic.Selector{
+					Kind:    "driver",
+					GroupBy: &groupBy,
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 2},
+				},
+				TargetKind:        "driver",
+				Discriminator:     trueLit,
+				Guard:             trueLit,
+				RetainSources:     false,
+				ReanchorRelations: true,
+				Assignments: []semantic.FieldAssignment{{
+					Target: "driver.depot",
+					Value:  semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"},
+				}},
+			},
+		},
+		{
+			ID:       "split_driver.v1",
+			Operator: semantic.OperatorSplitEntity,
+			SplitEntity: &semantic.SplitEntityDeclaration{
+				Selector: semantic.Selector{
+					Kind:    "driver",
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 1},
+				},
+				TargetKind:   "driver_part",
+				Guard:        trueLit,
+				RetainSource: false,
+				Partitions: []semantic.PartitionDeclaration{{
+					Discriminator: trueLit,
+					Assignments: []semantic.FieldAssignment{{
+						Target: "driver_part.depot",
+						Value:  semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"},
+					}},
+				}},
+			},
+		},
 	} {
-		if _, err := transformationToWire(expressible); err != nil {
-			t.Fatalf("%s: %v", expressible.ID, err)
+		wire, err := transformationToWire(expressible)
+		if err != nil {
+			t.Fatalf("%s to wire: %v", expressible.ID, err)
+		}
+		back, err := transformationFromWire(wire)
+		if err != nil {
+			t.Fatalf("%s from wire: %v", expressible.ID, err)
+		}
+		if back.ID != expressible.ID || back.Operator != expressible.Operator {
+			t.Fatalf("%s roundtrip mismatch: got ID %s, Operator %v", expressible.ID, back.ID, back.Operator)
 		}
 	}
 }

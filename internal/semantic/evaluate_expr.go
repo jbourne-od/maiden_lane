@@ -27,8 +27,8 @@ type evaluated struct {
 }
 
 // evaluateBool evaluates an expression that must be bool.
-func evaluateBool(schema Schema, expr Expr, entity Entity) (bool, error) {
-	result, err := evaluateExpr(schema, expr, entity)
+func evaluateBool(schema Schema, expr Expr, entities ...Entity) (bool, error) {
+	result, err := evaluateExpr(schema, expr, entities...)
 	if err != nil {
 		return false, err
 	}
@@ -41,8 +41,8 @@ func evaluateBool(schema Schema, expr Expr, entity Entity) (bool, error) {
 }
 
 // evaluateValue evaluates an expression that must yield a Value.
-func evaluateValue(schema Schema, expr Expr, entity Entity) (Value, error) {
-	result, err := evaluateExpr(schema, expr, entity)
+func evaluateValue(schema Schema, expr Expr, entities ...Entity) (Value, error) {
+	result, err := evaluateExpr(schema, expr, entities...)
 	if err != nil {
 		return Value{}, err
 	}
@@ -56,8 +56,8 @@ func evaluateValue(schema Schema, expr Expr, entity Entity) (Value, error) {
 	return result.value, nil
 }
 
-// evaluateExpr walks one expression against the bound entity.
-func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
+// evaluateExpr walks one expression against the bound entities.
+func evaluateExpr(schema Schema, expr Expr, entities ...Entity) (evaluated, error) {
 	// TOTALITY, enforced rather than claimed. The header says this function is total, and an
 	// earlier version was not: Expr{Kind: ExprNot} indexed Args[0] and panicked, as did every
 	// binary kind, while the sibling arms all guarded exactly this class of un-compiled input.
@@ -85,7 +85,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: kind, value: *expr.Literal}, nil
 
 	case ExprField:
-		value, declared, present, err := boundField(schema, expr.Field, entity)
+		value, declared, present, err := boundField(schema, expr.Field, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -119,14 +119,14 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: kind, value: value}, nil
 
 	case ExprExists:
-		_, _, present, err := boundField(schema, expr.Field, entity)
+		_, _, present, err := boundField(schema, expr.Field, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
 		return evaluated{kind: TypeBool, boolean: present}, nil
 
 	case ExprNot:
-		operand, err := evaluateBool(schema, expr.Args[0], entity)
+		operand, err := evaluateBool(schema, expr.Args[0], entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -146,7 +146,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		// selection. Real inputs are sparse, so a language that cannot say "present and
 		// below" is not a language for them.
 		for i := range expr.Args {
-			operand, err := evaluateBool(schema, expr.Args[i], entity)
+			operand, err := evaluateBool(schema, expr.Args[i], entities...)
 			if err != nil {
 				return evaluated{}, err
 			}
@@ -158,7 +158,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 
 	case ExprAny:
 		for i := range expr.Args {
-			operand, err := evaluateBool(schema, expr.Args[i], entity)
+			operand, err := evaluateBool(schema, expr.Args[i], entities...)
 			if err != nil {
 				return evaluated{}, err
 			}
@@ -169,7 +169,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: TypeBool, boolean: false}, nil
 
 	case ExprEqual:
-		left, right, err := evaluatePair(schema, expr, entity)
+		left, right, err := evaluatePair(schema, expr, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -182,7 +182,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: TypeBool, boolean: left.value.Equal(right.value)}, nil
 
 	case ExprLess:
-		left, right, err := evaluatePair(schema, expr, entity)
+		left, right, err := evaluatePair(schema, expr, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -201,7 +201,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		}
 
 	case ExprAdd:
-		left, right, err := evaluatePair(schema, expr, entity)
+		left, right, err := evaluatePair(schema, expr, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -250,7 +250,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{}, fmt.Errorf("add unsupported on %s and %s", left.kind, right.kind)
 
 	case ExprSubtract:
-		left, right, err := evaluatePair(schema, expr, entity)
+		left, right, err := evaluatePair(schema, expr, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -303,7 +303,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{}, fmt.Errorf("subtract unsupported on %s and %s", left.kind, right.kind)
 
 	case ExprMultiply:
-		left, right, err := evaluatePair(schema, expr, entity)
+		left, right, err := evaluatePair(schema, expr, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -341,7 +341,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{}, fmt.Errorf("multiply unsupported on %s and %s", left.kind, right.kind)
 
 	case ExprDivide:
-		left, right, err := evaluatePair(schema, expr, entity)
+		left, right, err := evaluatePair(schema, expr, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -367,7 +367,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{}, fmt.Errorf("divide unsupported on %s and %s", left.kind, right.kind)
 
 	case ExprModulo:
-		left, right, err := evaluatePair(schema, expr, entity)
+		left, right, err := evaluatePair(schema, expr, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -383,7 +383,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{}, fmt.Errorf("modulo requires int64")
 
 	case ExprAbs:
-		arg, err := evaluateExpr(schema, expr.Args[0], entity)
+		arg, err := evaluateExpr(schema, expr.Args[0], entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -416,15 +416,15 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		}
 
 	case ExprClamp:
-		val, err := evaluateExpr(schema, expr.Args[0], entity)
+		val, err := evaluateExpr(schema, expr.Args[0], entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
-		minVal, err := evaluateExpr(schema, expr.Args[1], entity)
+		minVal, err := evaluateExpr(schema, expr.Args[1], entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
-		maxVal, err := evaluateExpr(schema, expr.Args[2], entity)
+		maxVal, err := evaluateExpr(schema, expr.Args[2], entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -459,7 +459,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		}
 
 	case ExprTimestampAdd:
-		left, right, err := evaluatePair(schema, expr, entity)
+		left, right, err := evaluatePair(schema, expr, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -484,7 +484,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{}, fmt.Errorf("timestamp_add requires timestamp and duration")
 
 	case ExprTimestampDiff:
-		left, right, err := evaluatePair(schema, expr, entity)
+		left, right, err := evaluatePair(schema, expr, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -500,7 +500,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{}, fmt.Errorf("timestamp_diff requires timestamps")
 
 	case ExprDateExtract:
-		arg, err := evaluateExpr(schema, expr.Args[0], entity)
+		arg, err := evaluateExpr(schema, expr.Args[0], entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -526,7 +526,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 	case ExprConcat:
 		var buf strings.Builder
 		for _, arg := range expr.Args {
-			res, err := evaluateExpr(schema, arg, entity)
+			res, err := evaluateExpr(schema, arg, entities...)
 			if err != nil {
 				return evaluated{}, err
 			}
@@ -542,15 +542,15 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: TypeString, value: val}, nil
 
 	case ExprSubstring:
-		strRes, err := evaluateExpr(schema, expr.Args[0], entity)
+		strRes, err := evaluateExpr(schema, expr.Args[0], entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
-		startRes, err := evaluateExpr(schema, expr.Args[1], entity)
+		startRes, err := evaluateExpr(schema, expr.Args[1], entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
-		lenRes, err := evaluateExpr(schema, expr.Args[2], entity)
+		lenRes, err := evaluateExpr(schema, expr.Args[2], entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -576,7 +576,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: TypeString, value: val}, nil
 
 	case ExprTrim:
-		strRes, err := evaluateExpr(schema, expr.Args[0], entity)
+		strRes, err := evaluateExpr(schema, expr.Args[0], entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -587,19 +587,19 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: TypeString, value: val}, nil
 
 	case ExprIf:
-		cond, err := evaluateBool(schema, expr.Args[0], entity)
+		cond, err := evaluateBool(schema, expr.Args[0], entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
 		if cond {
-			return evaluateExpr(schema, expr.Args[1], entity)
+			return evaluateExpr(schema, expr.Args[1], entities...)
 		}
-		return evaluateExpr(schema, expr.Args[2], entity)
+		return evaluateExpr(schema, expr.Args[2], entities...)
 
 	case ExprCoalesce:
 		var lastErr error
 		for _, arg := range expr.Args {
-			res, err := evaluateExpr(schema, arg, entity)
+			res, err := evaluateExpr(schema, arg, entities...)
 			if err == nil {
 				return res, nil
 			}
@@ -640,43 +640,86 @@ func mulInt64(a, b int64) (int64, error) {
 }
 
 // evaluatePair evaluates both operands of a binary node.
-func evaluatePair(schema Schema, expr Expr, entity Entity) (evaluated, evaluated, error) {
-	left, err := evaluateExpr(schema, expr.Args[0], entity)
+func evaluatePair(schema Schema, expr Expr, entities ...Entity) (evaluated, evaluated, error) {
+	left, err := evaluateExpr(schema, expr.Args[0], entities...)
 	if err != nil {
 		return evaluated{}, evaluated{}, err
 	}
-	right, err := evaluateExpr(schema, expr.Args[1], entity)
+	right, err := evaluateExpr(schema, expr.Args[1], entities...)
 	if err != nil {
 		return evaluated{}, evaluated{}, err
 	}
 	return left, right, nil
 }
 
-// boundField reads a field from the bound entity, refusing a path that names another kind.
-//
-// A compiled selector has already established that every path names the selected kind, so
-// this cannot fire through that route. It is checked anyway because the evaluator is reachable
-// without one and must not read a field off an entity the path does not describe.
+// boundField reads a field from the bound entities, disambiguating endpoints and kinds.
 func boundField(
-	schema Schema, path FieldPath, entity Entity,
+	schema Schema, path FieldPath, entities ...Entity,
 ) (value Value, declared ValueKind, present bool, err error) {
+	if len(entities) == 0 {
+		return Value{}, 0, false, fmt.Errorf("no entity bound in scope")
+	}
 	kind, name := splitFieldPath(path)
 	if kind == "" || name == "" {
 		return Value{}, 0, false, fmt.Errorf("malformed field path %q", path)
 	}
-	// DECLAREDNESS, re-established rather than relied on. Without this, exists() over a path
-	// no schema declares answered false rather than refusing -- absence of a DECLARATION
-	// collapsed into absence of a VALUE, so not(exists(driver.typo)) was true for every
-	// entity while the compiler refused the identical node. The kind half of this guard was
-	// added a round earlier; this is the other half of the same sentence.
+
+	if len(entities) == 2 {
+		fromEntity, toEntity := entities[0], entities[1]
+		fromKind, toKind := fromEntity.Ref().Kind, toEntity.Ref().Kind
+
+		if kind == "from" {
+			realPath := FieldPath(string(fromKind) + "." + string(name))
+			declaredKind, isDeclared := schema.fieldKind(realPath)
+			if !isDeclared {
+				return Value{}, 0, false, fmt.Errorf("from endpoint reads undeclared field %q", realPath)
+			}
+			stored, found := fromEntity.Field(name)
+			return stored, declaredKind, found, nil
+		}
+		if kind == "to" {
+			realPath := FieldPath(string(toKind) + "." + string(name))
+			declaredKind, isDeclared := schema.fieldKind(realPath)
+			if !isDeclared {
+				return Value{}, 0, false, fmt.Errorf("to endpoint reads undeclared field %q", realPath)
+			}
+			stored, found := toEntity.Field(name)
+			return stored, declaredKind, found, nil
+		}
+		if fromKind == toKind && kind == fromKind {
+			return Value{}, 0, false, fmt.Errorf(
+				"field %q is ambiguous for same-kind relation endpoints (%s -> %s); use from.%s or to.%s",
+				path, fromKind, toKind, name, name)
+		}
+		if fromKind != toKind {
+			if kind == fromKind {
+				declaredKind, isDeclared := schema.fieldKind(path)
+				if !isDeclared {
+					return Value{}, 0, false, fmt.Errorf("from endpoint reads undeclared field %q", path)
+				}
+				stored, found := fromEntity.Field(name)
+				return stored, declaredKind, found, nil
+			}
+			if kind == toKind {
+				declaredKind, isDeclared := schema.fieldKind(path)
+				if !isDeclared {
+					return Value{}, 0, false, fmt.Errorf("to endpoint reads undeclared field %q", path)
+				}
+				stored, found := toEntity.Field(name)
+				return stored, declaredKind, found, nil
+			}
+		}
+		return Value{}, 0, false, fmt.Errorf("path %q does not match relation endpoints %s or %s", path, fromKind, toKind)
+	}
+
 	declaredKind, isDeclared := schema.fieldKind(path)
 	if !isDeclared {
 		return Value{}, 0, false, fmt.Errorf("field %q is not declared by this schema", path)
 	}
-	if kind != entity.Ref().Kind {
+	if entities[0].Ref().Kind != kind {
 		return Value{}, 0, false, fmt.Errorf(
-			"path %q does not name the bound entity kind %q", path, entity.Ref().Kind)
+			"path %q does not name the bound entity kind %q", path, entities[0].Ref().Kind)
 	}
-	stored, found := entity.Field(name)
+	stored, found := entities[0].Field(name)
 	return stored, declaredKind, found, nil
 }

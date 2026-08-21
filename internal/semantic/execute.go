@@ -72,6 +72,18 @@ func ExecuteTransition(binding RunBinding, rule RuleID, state State, journal Jou
 	switch transformation.Operator() {
 	case OperatorSelectAndAssign:
 		return executeSelectAndAssign(binding, transformation, state, journal)
+	case OperatorInsertEntity:
+		return executeInsertEntity(binding, transformation, state, journal)
+	case OperatorDeleteEntity:
+		return executeDeleteEntity(binding, transformation, state, journal)
+	case OperatorRelateEntities:
+		return executeRelateEntities(binding, transformation, state, journal)
+	case OperatorUnrelateEntities:
+		return executeUnrelateEntities(binding, transformation, state, journal)
+	case OperatorMergeEntities:
+		return executeMergeEntities(binding, transformation, state, journal)
+	case OperatorSplitEntity:
+		return executeSplitEntity(binding, transformation, state, journal)
 	default:
 		return base, fmt.Errorf("execute transition: unsupported compiled operator %d", transformation.Operator())
 	}

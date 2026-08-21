@@ -435,13 +435,31 @@ func (e SemanticFailureKind) Valid() bool {
 
 // Defines values for TransformationDeclarationOperator.
 const (
-	TransformationDeclarationOperatorSelectAndAssign TransformationDeclarationOperator = "select_and_assign"
+	TransformationDeclarationOperatorDeleteEntity     TransformationDeclarationOperator = "delete_entity"
+	TransformationDeclarationOperatorInsertEntity     TransformationDeclarationOperator = "insert_entity"
+	TransformationDeclarationOperatorMergeEntities    TransformationDeclarationOperator = "merge_entities"
+	TransformationDeclarationOperatorRelateEntities   TransformationDeclarationOperator = "relate_entities"
+	TransformationDeclarationOperatorSelectAndAssign  TransformationDeclarationOperator = "select_and_assign"
+	TransformationDeclarationOperatorSplitEntity      TransformationDeclarationOperator = "split_entity"
+	TransformationDeclarationOperatorUnrelateEntities TransformationDeclarationOperator = "unrelate_entities"
 )
 
 // Valid indicates whether the value is a known member of the TransformationDeclarationOperator enum.
 func (e TransformationDeclarationOperator) Valid() bool {
 	switch e {
+	case TransformationDeclarationOperatorDeleteEntity:
+		return true
+	case TransformationDeclarationOperatorInsertEntity:
+		return true
+	case TransformationDeclarationOperatorMergeEntities:
+		return true
+	case TransformationDeclarationOperatorRelateEntities:
+		return true
 	case TransformationDeclarationOperatorSelectAndAssign:
+		return true
+	case TransformationDeclarationOperatorSplitEntity:
+		return true
+	case TransformationDeclarationOperatorUnrelateEntities:
 		return true
 	default:
 		return false
@@ -701,6 +719,24 @@ type CreatePublicationRequest struct {
 	Target string `json:"target"`
 }
 
+// DeleteEntityDeclaration Deletes selected entities that satisfy the guard.
+type DeleteEntityDeclaration struct {
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard Expr `json:"guard"`
+
+	// Selector What a rule applies to.
+	Selector Selector `json:"selector"`
+}
+
 // Digest A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
 type Digest = string
 
@@ -903,6 +939,91 @@ type InputLineage struct {
 	RootKey   string `json:"rootKey"`
 }
 
+// InsertEntityDeclaration Inserts a new entity synthesised from a selected population or group.
+type InsertEntityDeclaration struct {
+	Assignments []FieldAssignment `json:"assignments"`
+
+	// Discriminator One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Discriminator Expr `json:"discriminator"`
+
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard Expr `json:"guard"`
+
+	// Selector What a rule applies to.
+	Selector   Selector `json:"selector"`
+	TargetKind string   `json:"targetKind"`
+}
+
+// MergeEntitiesDeclaration Merges a group of source entities into a single target entity.
+type MergeEntitiesDeclaration struct {
+	Assignments []FieldAssignment `json:"assignments"`
+
+	// Discriminator One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Discriminator Expr `json:"discriminator"`
+
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard             Expr `json:"guard"`
+	ReanchorRelations bool `json:"reanchorRelations"`
+	RetainSources     bool `json:"retainSources"`
+
+	// Selector What a rule applies to.
+	Selector   Selector `json:"selector"`
+	TargetKind string   `json:"targetKind"`
+}
+
+// PartitionDeclaration One partition specification within a split entity operator.
+type PartitionDeclaration struct {
+	Assignments []FieldAssignment `json:"assignments"`
+
+	// Discriminator One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Discriminator Expr `json:"discriminator"`
+}
+
 // Plan defines model for Plan.
 type Plan struct {
 	Checkpoints []CheckpointDeclaration `json:"checkpoints"`
@@ -1064,6 +1185,28 @@ type PublicationStatus string
 // ReadinessVerdict A readiness answer. `needs_input` is a successful assessment, not a failure.
 type ReadinessVerdict string
 
+// RelateEntitiesDeclaration Creates a relation between pairs of entities matching the endpoints and guard.
+type RelateEntitiesDeclaration struct {
+	// FromSelector What a rule applies to.
+	FromSelector Selector `json:"fromSelector"`
+
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard        Expr   `json:"guard"`
+	RelationKind string `json:"relationKind"`
+
+	// ToSelector What a rule applies to.
+	ToSelector Selector `json:"toSelector"`
+}
+
 // RelationDeclaration defines model for RelationDeclaration.
 type RelationDeclaration struct {
 	FromKind string `json:"fromKind"`
@@ -1151,6 +1294,27 @@ type SemanticFailure struct {
 // SemanticFailureKind defines model for SemanticFailure.Kind.
 type SemanticFailureKind string
 
+// SplitEntityDeclaration Splits each selected entity into multiple partitioned target entities.
+type SplitEntityDeclaration struct {
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard        Expr                   `json:"guard"`
+	Partitions   []PartitionDeclaration `json:"partitions"`
+	RetainSource bool                   `json:"retainSource"`
+
+	// Selector What a rule applies to.
+	Selector   Selector `json:"selector"`
+	TargetKind string   `json:"targetKind"`
+}
+
 // StateInput defines model for StateInput.
 type StateInput struct {
 	Entities []EntityInput `json:"entities"`
@@ -1162,19 +1326,59 @@ type StateInput struct {
 
 // TransformationDeclaration A closed tagged union. Exactly one payload must be present and must agree with `operator`.
 type TransformationDeclaration struct {
-	After          *[]string                         `json:"after,omitempty"`
-	DeclaredReads  *[]string                         `json:"declaredReads,omitempty"`
-	DeclaredWrites *[]string                         `json:"declaredWrites,omitempty"`
-	Id             string                            `json:"id"`
-	Operator       TransformationDeclarationOperator `json:"operator"`
+	After          *[]string `json:"after,omitempty"`
+	DeclaredReads  *[]string `json:"declaredReads,omitempty"`
+	DeclaredWrites *[]string `json:"declaredWrites,omitempty"`
+
+	// DeleteEntity Deletes selected entities that satisfy the guard.
+	DeleteEntity *DeleteEntityDeclaration `json:"deleteEntity,omitempty"`
+	Id           string                   `json:"id"`
+
+	// InsertEntity Inserts a new entity synthesised from a selected population or group.
+	InsertEntity *InsertEntityDeclaration `json:"insertEntity,omitempty"`
+
+	// MergeEntities Merges a group of source entities into a single target entity.
+	MergeEntities *MergeEntitiesDeclaration         `json:"mergeEntities,omitempty"`
+	Operator      TransformationDeclarationOperator `json:"operator"`
+
+	// RelateEntities Creates a relation between pairs of entities matching the endpoints and guard.
+	RelateEntities *RelateEntitiesDeclaration `json:"relateEntities,omitempty"`
 
 	// SelectAssign The selector-scoped transformation payload: a rule applied to a
 	// population rather than to entities named one by one.
 	SelectAssign *SelectAndAssign `json:"selectAssign,omitempty"`
+
+	// SplitEntity Splits each selected entity into multiple partitioned target entities.
+	SplitEntity *SplitEntityDeclaration `json:"splitEntity,omitempty"`
+
+	// UnrelateEntities Removes an existing relation between pairs of entities matching the endpoints and guard.
+	UnrelateEntities *UnrelateEntitiesDeclaration `json:"unrelateEntities,omitempty"`
 }
 
 // TransformationDeclarationOperator defines model for TransformationDeclaration.Operator.
 type TransformationDeclarationOperator string
+
+// UnrelateEntitiesDeclaration Removes an existing relation between pairs of entities matching the endpoints and guard.
+type UnrelateEntitiesDeclaration struct {
+	// FromSelector What a rule applies to.
+	FromSelector Selector `json:"fromSelector"`
+
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard        Expr   `json:"guard"`
+	RelationKind string `json:"relationKind"`
+
+	// ToSelector What a rule applies to.
+	ToSelector Selector `json:"toSelector"`
+}
 
 // Value One typed scalar value. Exactly one of the payload fields must match `kind`.
 type Value struct {

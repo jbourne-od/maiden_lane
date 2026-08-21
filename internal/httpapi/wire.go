@@ -407,6 +407,66 @@ func transformationFromWire(declaration openapiv1.TransformationDeclaration) (se
 			return semantic.TransformationDeclaration{}, err
 		}
 		translated.SelectAssign = &payload
+	case openapiv1.TransformationDeclarationOperatorInsertEntity:
+		if declaration.InsertEntity == nil {
+			return semantic.TransformationDeclaration{}, translationError("insert-entity operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorInsertEntity
+		payload, err := insertEntityFromWire(*declaration.InsertEntity)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.InsertEntity = &payload
+	case openapiv1.TransformationDeclarationOperatorDeleteEntity:
+		if declaration.DeleteEntity == nil {
+			return semantic.TransformationDeclaration{}, translationError("delete-entity operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorDeleteEntity
+		payload, err := deleteEntityFromWire(*declaration.DeleteEntity)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.DeleteEntity = &payload
+	case openapiv1.TransformationDeclarationOperatorRelateEntities:
+		if declaration.RelateEntities == nil {
+			return semantic.TransformationDeclaration{}, translationError("relate-entities operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorRelateEntities
+		payload, err := relateEntitiesFromWire(*declaration.RelateEntities)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.RelateEntities = &payload
+	case openapiv1.TransformationDeclarationOperatorUnrelateEntities:
+		if declaration.UnrelateEntities == nil {
+			return semantic.TransformationDeclaration{}, translationError("unrelate-entities operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorUnrelateEntities
+		payload, err := unrelateEntitiesFromWire(*declaration.UnrelateEntities)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.UnrelateEntities = &payload
+	case openapiv1.TransformationDeclarationOperatorMergeEntities:
+		if declaration.MergeEntities == nil {
+			return semantic.TransformationDeclaration{}, translationError("merge-entities operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorMergeEntities
+		payload, err := mergeEntitiesFromWire(*declaration.MergeEntities)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.MergeEntities = &payload
+	case openapiv1.TransformationDeclarationOperatorSplitEntity:
+		if declaration.SplitEntity == nil {
+			return semantic.TransformationDeclaration{}, translationError("split-entity operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorSplitEntity
+		payload, err := splitEntityFromWire(*declaration.SplitEntity)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.SplitEntity = &payload
 	default:
 		return semantic.TransformationDeclaration{}, translationError("unknown operator")
 	}
@@ -618,6 +678,48 @@ func transformationToWire(declaration semantic.TransformationDeclaration) (opena
 			return openapiv1.TransformationDeclaration{}, err
 		}
 		projected.SelectAssign = &payload
+	case declaration.InsertEntity != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorInsertEntity
+		payload, err := insertEntityToWire(*declaration.InsertEntity)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.InsertEntity = &payload
+	case declaration.DeleteEntity != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorDeleteEntity
+		payload, err := deleteEntityToWire(*declaration.DeleteEntity)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.DeleteEntity = &payload
+	case declaration.RelateEntities != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorRelateEntities
+		payload, err := relateEntitiesToWire(*declaration.RelateEntities)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.RelateEntities = &payload
+	case declaration.UnrelateEntities != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorUnrelateEntities
+		payload, err := unrelateEntitiesToWire(*declaration.UnrelateEntities)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.UnrelateEntities = &payload
+	case declaration.MergeEntities != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorMergeEntities
+		payload, err := mergeEntitiesToWire(*declaration.MergeEntities)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.MergeEntities = &payload
+	case declaration.SplitEntity != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorSplitEntity
+		payload, err := splitEntityToWire(*declaration.SplitEntity)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.SplitEntity = &payload
 	default:
 		return openapiv1.TransformationDeclaration{}, translationError(
 			"compiled operator has no representation in this contract version")

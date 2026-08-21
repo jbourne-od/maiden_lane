@@ -948,3 +948,145 @@ func TestFailedCompilationStillCarriesItsInput(t *testing.T) {
 		t.Fatal("failed compilation retained no input")
 	}
 }
+
+func TestCompileRejectsBareFieldInMergeEntities(t *testing.T) {
+	schema := compileFixtureSchema(t, false)
+	groupBy := Expr{Kind: ExprField, Field: "driver.depot"}
+	trueLit := Expr{Kind: ExprLiteral, Literal: &Value{}}
+	v1 := NewInt64Value(1)
+	trueLit.Literal = &v1
+
+	request := CompileRequest{
+		CompilerSemanticsVersion: testCompilerVersion,
+		Schema:                   schema.Declaration(),
+		Rules: RulesetDeclaration{
+			Transformations: []TransformationDeclaration{
+				{
+					ID:             "merge_bare_field.v1",
+					Operator:       OperatorMergeEntities,
+					DeclaredReads:  []FieldPath{"driver.depot", "driver.hos_driving_hours"},
+					DeclaredWrites: []FieldPath{"driver.hos_driving_hours"},
+					MergeEntities: &MergeEntitiesDeclaration{
+						Selector: Selector{
+							Kind:    "driver",
+							GroupBy: &groupBy,
+							Members: Cardinality{Kind: CardinalityExactly, Count: 2},
+						},
+						TargetKind:    "driver",
+						Discriminator: trueLit,
+						Guard:         trueLit,
+						Assignments: []FieldAssignment{{
+							Target: "driver.hos_driving_hours",
+							Value:  Expr{Kind: ExprField, Field: "driver.hos_driving_hours"}, // bare field path in MergeEntities
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	compilation, err := Compile(request)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	failure, ok := compilation.Failure()
+	if !ok {
+		t.Fatal("expected compilation failure for bare field in MergeEntities, got success")
+	}
+	if len(failure.Diagnostics()) == 0 {
+		t.Fatal("expected diagnostic for bare field in MergeEntities")
+	}
+}
+
+func TestCompileRejectsAmbiguousSameKindRelationField(t *testing.T) {
+	entities := []EntityDeclaration{
+		{
+			Kind: "driver",
+			Fields: []FieldDeclaration{
+				{Name: "driver_id", Kind: ValueString},
+				{Name: "hours", Kind: ValueInt64},
+			},
+		},
+	}
+	relations := []RelationDeclaration{
+		{Kind: "mentor", FromKind: "driver", ToKind: "driver"},
+	}
+	schema, err := NewSchema(entities, relations)
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+
+	request := CompileRequest{
+		CompilerSemanticsVersion: testCompilerVersion,
+		Schema:                   schema.Declaration(),
+		Rules: RulesetDeclaration{
+			Transformations: []TransformationDeclaration{
+				{
+					ID:             "mentor_ambiguous.v1",
+					Operator:       OperatorRelateEntities,
+					DeclaredReads:  []FieldPath{"driver.hours"},
+					DeclaredWrites: []FieldPath{},
+					RelateEntities: &RelateEntitiesDeclaration{
+						RelationKind: "mentor",
+						FromSelector: Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityAny}},
+						ToSelector:   Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityAny}},
+						Guard: Expr{
+							Kind: ExprEqual,
+							Args: []Expr{
+								{Kind: ExprField, Field: "driver.hours"}, // ambiguous: both endpoints are driver
+								{Kind: ExprField, Field: "driver.hours"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	compilation, err := Compile(request)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	failure, ok := compilation.Failure()
+	if !ok {
+		t.Fatal("expected compilation failure for ambiguous same-kind relation field, got success")
+	}
+	if len(failure.Diagnostics()) == 0 {
+		t.Fatal("expected diagnostic for ambiguous same-kind relation field")
+	}
+}
+
+func TestCompileRejectsDeeplyNestedStructuralExpression(t *testing.T) {
+	schema := buildStructuralTestSchema(t)
+
+	// Build an expression nested beyond maxExprDepth (16)
+	expr := Expr{Kind: ExprField, Field: "driver.hours"}
+	for i := 0; i < maxExprDepth+5; i++ {
+		expr = Expr{
+			Kind: ExprNot,
+			Args: []Expr{expr},
+		}
+	}
+
+	request := CompileRequest{
+		CompilerSemanticsVersion: testCompilerVersion,
+		Schema:                   schema.Declaration(),
+		Rules: RulesetDeclaration{
+			Transformations: []TransformationDeclaration{
+				{
+					ID:       "deep_structural.v1",
+					Operator: OperatorDeleteEntity,
+					DeleteEntity: &DeleteEntityDeclaration{
+						Selector: Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityAny}},
+						Guard:    expr,
+					},
+				},
+			},
+		},
+	}
+
+	_, err := Compile(request)
+	if err == nil {
+		t.Fatal("expected error from checkAuthoredPayloadBounds for deeply nested structural expression")
+	}
+}

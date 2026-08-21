@@ -699,6 +699,96 @@ components:
           items: { $ref: "#/components/schemas/FieldAssignment" }
       additionalProperties: false
 
+    InsertEntityDeclaration:
+      type: object
+      description: Inserts a new entity synthesised from a selected population or group.
+      required: [selector, targetKind, discriminator, guard, assignments]
+      properties:
+        selector: { $ref: "#/components/schemas/Selector" }
+        targetKind: { type: string }
+        discriminator: { $ref: "#/components/schemas/Expr" }
+        guard: { $ref: "#/components/schemas/Expr" }
+        assignments:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/FieldAssignment" }
+      additionalProperties: false
+
+    DeleteEntityDeclaration:
+      type: object
+      description: Deletes selected entities that satisfy the guard.
+      required: [selector, guard]
+      properties:
+        selector: { $ref: "#/components/schemas/Selector" }
+        guard: { $ref: "#/components/schemas/Expr" }
+      additionalProperties: false
+
+    RelateEntitiesDeclaration:
+      type: object
+      description: Creates a relation between pairs of entities matching the endpoints and guard.
+      required: [fromSelector, toSelector, relationKind, guard]
+      properties:
+        fromSelector: { $ref: "#/components/schemas/Selector" }
+        toSelector: { $ref: "#/components/schemas/Selector" }
+        relationKind: { type: string }
+        guard: { $ref: "#/components/schemas/Expr" }
+      additionalProperties: false
+
+    UnrelateEntitiesDeclaration:
+      type: object
+      description: Removes an existing relation between pairs of entities matching the endpoints and guard.
+      required: [fromSelector, toSelector, relationKind, guard]
+      properties:
+        fromSelector: { $ref: "#/components/schemas/Selector" }
+        toSelector: { $ref: "#/components/schemas/Selector" }
+        relationKind: { type: string }
+        guard: { $ref: "#/components/schemas/Expr" }
+      additionalProperties: false
+
+    MergeEntitiesDeclaration:
+      type: object
+      description: Merges a group of source entities into a single target entity.
+      required: [selector, targetKind, discriminator, guard, retainSources, reanchorRelations, assignments]
+      properties:
+        selector: { $ref: "#/components/schemas/Selector" }
+        targetKind: { type: string }
+        discriminator: { $ref: "#/components/schemas/Expr" }
+        guard: { $ref: "#/components/schemas/Expr" }
+        retainSources: { type: boolean }
+        reanchorRelations: { type: boolean }
+        assignments:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/FieldAssignment" }
+      additionalProperties: false
+
+    PartitionDeclaration:
+      type: object
+      description: One partition specification within a split entity operator.
+      required: [discriminator, assignments]
+      properties:
+        discriminator: { $ref: "#/components/schemas/Expr" }
+        assignments:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/FieldAssignment" }
+      additionalProperties: false
+
+    SplitEntityDeclaration:
+      type: object
+      description: Splits each selected entity into multiple partitioned target entities.
+      required: [selector, targetKind, guard, retainSource, partitions]
+      properties:
+        selector: { $ref: "#/components/schemas/Selector" }
+        targetKind: { type: string }
+        guard: { $ref: "#/components/schemas/Expr" }
+        retainSource: { type: boolean }
+        partitions:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/PartitionDeclaration" }
+      additionalProperties: false
+
     FieldDeclaration:
       type: object
       required: [name, kind]
@@ -755,7 +845,14 @@ components:
         id: { type: string }
         operator:
           type: string
-          enum: [select_and_assign]
+          enum:
+            - select_and_assign
+            - insert_entity
+            - delete_entity
+            - relate_entities
+            - unrelate_entities
+            - merge_entities
+            - split_entity
         declaredReads:
           type: array
           items: { type: string }
@@ -766,6 +863,12 @@ components:
           type: array
           items: { type: string }
         selectAssign: { $ref: "#/components/schemas/SelectAndAssign" }
+        insertEntity: { $ref: "#/components/schemas/InsertEntityDeclaration" }
+        deleteEntity: { $ref: "#/components/schemas/DeleteEntityDeclaration" }
+        relateEntities: { $ref: "#/components/schemas/RelateEntitiesDeclaration" }
+        unrelateEntities: { $ref: "#/components/schemas/UnrelateEntitiesDeclaration" }
+        mergeEntities: { $ref: "#/components/schemas/MergeEntitiesDeclaration" }
+        splitEntity: { $ref: "#/components/schemas/SplitEntityDeclaration" }
       additionalProperties: false
 
     CheckpointDeclaration:

@@ -380,6 +380,8 @@ func TestPatchCanonicalGoldenVectors(t *testing.T) {
 		wantT1Digest PatchDigest = "sha256:7a5562086adb2fb8aa1eb83cf98145def294f57997ce78023287bca70989afa5"
 		wantT2Hex                = "00000000000000146d616964656e2d6c616e652e70617463682e7631daa9e09c5060542711a13d06bb64a6fe6f84b93664e1698245e5a3e06eab628d00000000000000010300000000000000047465616d3333333333333333333333333333333333333333333333333333333333333333000000000000000300000000000000126167677265676174696f6e5f616e63686f72000200000000000000025430000000000000001664726976696e675f6475726174696f6e5f686f757273000300000000000000080000000000000016656c61707365645f6475726174696f6e5f686f7572730003000000000000000a"
 		wantT2Digest PatchDigest = "sha256:0a69a112e4d4b10d8902c3f9336146b614fad91b3e8a989912eb3e47263c01f2"
+		wantT3Hex                = "00000000000000146d616964656e2d6c616e652e70617463682e7631daa9e09c5060542711a13d06bb64a6fe6f84b93664e1698245e5a3e06eab628d00000000000000020400000000000000066d656d62657200000000000000047465616d3333333333333333333333333333333333333333333333333333333333333333000000000000000664726976657211111111111111111111111111111111111111111111111111111111111111110500000000000000047465616d33333333333333333333333333333333333333333333333333333333333333330000000000000001000000000000000e61737369676e6d656e745f6b657901000000000000000158"
+		wantT3Digest PatchDigest = "sha256:b881bd8bbc4f76b06c1c9d47b4ddddbbc72529ecb68f86fa35788f675f03022b"
 	)
 
 	_, team, drivers := formTeamPatchFixture(t)
@@ -393,9 +395,14 @@ func TestPatchCanonicalGoldenVectors(t *testing.T) {
 		{Name: "aggregation_anchor", Before: AbsentField(), After: mustAtom(t, "T0")},
 		{Name: "driving_duration_hours", Before: AbsentField(), After: NewInt64Value(8)},
 	}))
+	t3 := mustPatch(t,
+		UnrelateOperation(memberRelation(team.Ref(), drivers[0].Ref())),
+		DeleteOperation(team),
+	)
 
 	assertPatchVector(t, "T1", t1, wantT1Hex, wantT1Digest)
 	assertPatchVector(t, "T2", t2, wantT2Hex, wantT2Digest)
+	assertPatchVector(t, "T3", t3, wantT3Hex, wantT3Digest)
 }
 
 // Production break caught: undoing in forward order would try to remove the
@@ -556,6 +563,108 @@ func TestUndoPatchRejectsMismatchedPatchReceipt(t *testing.T) {
 	if !bytes.Equal(outcome.State().CanonicalBytes(), applyOutcome.State().CanonicalBytes()) || outcome.State().Digest() != applyOutcome.State().Digest() {
 		t.Fatal("mismatched receipt changed current state")
 	}
+}
+
+func TestApplyAndUndoStructuralDeleteAndUnrelate(t *testing.T) {
+	before, team, drivers := formTeamPatchFixture(t)
+	rel := memberRelation(team.Ref(), drivers[0].Ref())
+	initialState := stateWithTeam(t, before, team, []Relation{rel})
+
+	// Patch: Unrelate the team from driver, then Delete the team
+	patch := mustPatch(t,
+		UnrelateOperation(rel),
+		DeleteOperation(team),
+	)
+
+	// Apply
+	applyOutcome, err := ApplyPatch(initialState, patch)
+	if err != nil {
+		t.Fatalf("ApplyPatch: %v", err)
+	}
+	if applyOutcome.Failure() != nil {
+		t.Fatalf("ApplyPatch failure: %s", applyOutcome.Failure().Code())
+	}
+	appliedState := applyOutcome.State()
+	receipt, ok := applyOutcome.Receipt()
+	if !ok {
+		t.Fatal("accepted patch returned no receipt")
+	}
+
+	// Verify team is deleted and relation is removed
+	if _, exists := appliedState.Entity(team.Ref()); exists {
+		t.Fatal("deleted team still exists in applied state")
+	}
+	if stateHasRelation(appliedState, rel) {
+		t.Fatal("unrelated relation still exists in applied state")
+	}
+
+	// Undo
+	undoOutcome, err := UndoPatch(appliedState, patch, receipt)
+	if err != nil {
+		t.Fatalf("UndoPatch: %v", err)
+	}
+	if undoOutcome.Failure() != nil {
+		t.Fatalf("UndoPatch failure: %s", undoOutcome.Failure().Code())
+	}
+	undoneState := undoOutcome.State()
+
+	if !bytes.Equal(undoneState.CanonicalBytes(), initialState.CanonicalBytes()) || undoneState.Digest() != initialState.Digest() {
+		t.Fatal("UndoPatch did not reconstruct exact byte-identical initial state")
+	}
+}
+
+func TestApplyStructuralPatchInvariants(t *testing.T) {
+	before, team, drivers := formTeamPatchFixture(t)
+	rel := memberRelation(team.Ref(), drivers[0].Ref())
+	stateWithRel := stateWithTeam(t, before, team, []Relation{rel})
+
+	t.Run("delete target not found", func(t *testing.T) {
+		missingTeam := mustEntity(t, "team", EntityID("sha256:9999999999999999999999999999999999999999999999999999999999999999"), map[FieldName]Value{"assignment_key": mustString(t, "X")})
+		patch := mustPatch(t, DeleteOperation(missingTeam))
+		outcome, err := ApplyPatch(before, patch)
+		if err != nil {
+			t.Fatalf("ApplyPatch: %v", err)
+		}
+		if outcome.Failure() == nil || outcome.Failure().Code() != OperationDeleteTargetNotFound {
+			t.Fatalf("expected OperationDeleteTargetNotFound, got %v", outcome.Failure())
+		}
+	})
+
+	t.Run("delete before image mismatch", func(t *testing.T) {
+		modifiedTeam := mustEntity(t, "team", testTeamID, map[FieldName]Value{"assignment_key": mustString(t, "OTHER")})
+		patch := mustPatch(t, DeleteOperation(modifiedTeam))
+		outcome, err := ApplyPatch(stateWithRel, patch)
+		if err != nil {
+			t.Fatalf("ApplyPatch: %v", err)
+		}
+		if outcome.Failure() == nil || outcome.Failure().Code() != OperationBeforeImageMismatch {
+			t.Fatalf("expected OperationBeforeImageMismatch, got %v", outcome.Failure())
+		}
+	})
+
+	t.Run("delete leaves dangling relation", func(t *testing.T) {
+		// Deleting team without unrelating first leaves dangling relation
+		patch := mustPatch(t, DeleteOperation(team))
+		outcome, err := ApplyPatch(stateWithRel, patch)
+		if err != nil {
+			t.Fatalf("ApplyPatch: %v", err)
+		}
+		if outcome.Failure() == nil || outcome.Failure().Code() != OperationDanglingRelation {
+			t.Fatalf("expected OperationDanglingRelation, got %v", outcome.Failure())
+		}
+	})
+
+	t.Run("unrelate relation not found", func(t *testing.T) {
+		missingRel := memberRelation(team.Ref(), drivers[1].Ref())
+		patch := mustPatch(t, UnrelateOperation(missingRel))
+		outcome, err := ApplyPatch(stateWithRel, patch)
+		if err != nil {
+			t.Fatalf("ApplyPatch: %v", err)
+		}
+		if outcome.Failure() == nil || outcome.Failure().Code() != OperationRelationNotFound {
+			t.Fatalf("expected OperationRelationNotFound, got %v", outcome.Failure())
+		}
+	})
 }
 
 func formTeamPatchFixture(t *testing.T) (State, Entity, [2]Entity) {

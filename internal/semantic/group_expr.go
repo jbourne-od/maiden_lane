@@ -534,6 +534,21 @@ func evaluateAssignmentValue(schema Schema, expr Expr, members []Entity, member 
 	return result.value, nil
 }
 
+// evaluateGroupValue evaluates a group-scoped value expression (e.g. reductions, literals) over a group's members.
+func evaluateGroupValue(schema Schema, expr Expr, members []Entity) (Value, error) {
+	result, err := evaluateGroupNode(schema, expr, members, nil)
+	if err != nil {
+		return Value{}, err
+	}
+	if result.kind == TypeBool {
+		return Value{}, fmt.Errorf("group value expression is bool, not a value")
+	}
+	if !result.value.Valid() {
+		return Value{}, fmt.Errorf("group value expression yielded no value")
+	}
+	return result.value, nil
+}
+
 func evaluateGroupNode(
 	schema Schema, expr Expr, members []Entity, boundMember *Entity,
 ) (evaluated, error) {
@@ -1249,4 +1264,76 @@ func valueLess(a, b Value, t ExprType) (bool, error) {
 	default:
 		return false, fmt.Errorf("type %s is not ordered", t)
 	}
+}
+
+// checkRelationGuard type-checks relation guard expressions over (fromKind, toKind) endpoints.
+func checkRelationGuard(
+	schema Schema, fromKind, toKind EntityKind, expr Expr, depth int,
+) (ExprType, error) {
+	if depth > maxExprDepth {
+		return TypeInvalid, fmt.Errorf("expression nests deeper than %d", maxExprDepth)
+	}
+
+	// Validate and rewrite from. and to. aliases into concrete entity kinds
+	var mapFieldPaths func(e Expr) (Expr, error)
+	mapFieldPaths = func(e Expr) (Expr, error) {
+		cloned := e
+		if e.Field != "" {
+			k, name := splitFieldPath(e.Field)
+			if k == "" || name == "" {
+				return Expr{}, fmt.Errorf("malformed field path %q", e.Field)
+			}
+			if k == "from" {
+				realPath := FieldPath(string(fromKind) + "." + string(name))
+				if _, isDeclared := schema.fieldKind(realPath); !isDeclared {
+					return Expr{}, fmt.Errorf("from endpoint reads undeclared field %q", realPath)
+				}
+				cloned.Field = realPath
+			} else if k == "to" {
+				realPath := FieldPath(string(toKind) + "." + string(name))
+				if _, isDeclared := schema.fieldKind(realPath); !isDeclared {
+					return Expr{}, fmt.Errorf("to endpoint reads undeclared field %q", realPath)
+				}
+				cloned.Field = realPath
+			} else if fromKind == toKind && k == fromKind {
+				return Expr{}, fmt.Errorf(
+					"field %q is ambiguous for same-kind relation endpoints (%s -> %s); use from.%s or to.%s",
+					e.Field, fromKind, toKind, name, name)
+			} else if fromKind != toKind {
+				if k == fromKind {
+					if _, isDeclared := schema.fieldKind(e.Field); !isDeclared {
+						return Expr{}, fmt.Errorf("from endpoint reads undeclared field %q", e.Field)
+					}
+				} else if k == toKind {
+					if _, isDeclared := schema.fieldKind(e.Field); !isDeclared {
+						return Expr{}, fmt.Errorf("to endpoint reads undeclared field %q", e.Field)
+					}
+				} else {
+					return Expr{}, fmt.Errorf("field %q does not match relation endpoints %s or %s", e.Field, fromKind, toKind)
+				}
+			} else {
+				return Expr{}, fmt.Errorf("field %q does not match relation endpoints %s or %s", e.Field, fromKind, toKind)
+			}
+		}
+
+		if len(e.Args) > 0 {
+			newArgs := make([]Expr, len(e.Args))
+			for i, arg := range e.Args {
+				mapped, err := mapFieldPaths(arg)
+				if err != nil {
+					return Expr{}, err
+				}
+				newArgs[i] = mapped
+			}
+			cloned.Args = newArgs
+		}
+		return cloned, nil
+	}
+
+	mappedExpr, err := mapFieldPaths(expr)
+	if err != nil {
+		return TypeInvalid, err
+	}
+
+	return checkExprInScope(schema, "", mappedExpr, memberScope, depth)
 }

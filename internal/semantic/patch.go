@@ -15,6 +15,8 @@ const (
 	OperationInsert OperationKind = iota + 1
 	OperationRelate
 	OperationUpdate
+	OperationUnrelate
+	OperationDelete
 )
 
 // OperationInvariantCode is the closed patch-legality vocabulary ratified for
@@ -24,9 +26,12 @@ type OperationInvariantCode string
 const (
 	OperationEntityIdentityCollision OperationInvariantCode = "OP_ENTITY_IDENTITY_COLLISION"
 	OperationUpdateTargetNotFound    OperationInvariantCode = "OP_UPDATE_TARGET_NOT_FOUND"
+	OperationDeleteTargetNotFound    OperationInvariantCode = "OP_DELETE_TARGET_NOT_FOUND"
 	OperationBeforeImageMismatch     OperationInvariantCode = "OP_BEFORE_IMAGE_MISMATCH"
 	OperationRelationAlreadyPresent  OperationInvariantCode = "OP_RELATION_ALREADY_PRESENT"
 	OperationRelationEndpointMissing OperationInvariantCode = "OP_RELATION_ENDPOINT_MISSING"
+	OperationRelationNotFound        OperationInvariantCode = "OP_RELATION_NOT_FOUND"
+	OperationDanglingRelation        OperationInvariantCode = "OP_DANGLING_RELATION"
 )
 
 // OperationFailure is a deterministic rejection of one operation in an
@@ -93,12 +98,30 @@ func (u Update) Target() EntityRef { return u.target }
 // Fields returns a defensive copy of the exact field changes.
 func (u Update) Fields() []FieldUpdate { return slices.Clone(u.fields) }
 
-// Operation is the closed tagged union of Insert, Relate, and Update.
+// Delete is the immutable payload of a delete operation.
+type Delete struct {
+	entity Entity
+}
+
+// Entity returns a defensive copy of the entity being deleted.
+func (d Delete) Entity() Entity { return cloneEntity(d.entity) }
+
+// Unrelate is the immutable payload of an unrelate operation.
+type Unrelate struct {
+	relation Relation
+}
+
+// Relation returns the complete directed relation value being removed.
+func (u Unrelate) Relation() Relation { return u.relation }
+
+// Operation is the closed tagged union of structural operations.
 type Operation struct {
-	kind   OperationKind
-	insert *Insert
-	relate *Relate
-	update *Update
+	kind     OperationKind
+	insert   *Insert
+	relate   *Relate
+	update   *Update
+	delete   *Delete
+	unrelate *Unrelate
 }
 
 // InsertOperation constructs an insert operation. NewPatch performs complete
@@ -116,6 +139,16 @@ func RelateOperation(relation Relation) Operation {
 // present after-values. NewPatch clones and validates the supplied slice.
 func UpdateOperation(target EntityRef, fields []FieldUpdate) Operation {
 	return Operation{kind: OperationUpdate, update: &Update{target: target, fields: slices.Clone(fields)}}
+}
+
+// DeleteOperation constructs a delete operation with complete entity before-image.
+func DeleteOperation(entity Entity) Operation {
+	return Operation{kind: OperationDelete, delete: &Delete{entity: cloneEntity(entity)}}
+}
+
+// UnrelateOperation constructs an unrelate operation.
+func UnrelateOperation(relation Relation) Operation {
+	return Operation{kind: OperationUnrelate, unrelate: &Unrelate{relation: relation}}
 }
 
 // Kind returns the closed operation variant.
@@ -145,6 +178,23 @@ func (o Operation) Update() (Update, bool) {
 		return Update{}, false
 	}
 	return Update{target: o.update.target, fields: slices.Clone(o.update.fields)}, true
+}
+
+// Delete returns a defensive copy of the delete payload when this is a
+// delete operation.
+func (o Operation) Delete() (Delete, bool) {
+	if o.kind != OperationDelete || o.delete == nil {
+		return Delete{}, false
+	}
+	return Delete{entity: cloneEntity(o.delete.entity)}, true
+}
+
+// Unrelate returns the relation payload when this is an unrelate operation.
+func (o Operation) Unrelate() (Unrelate, bool) {
+	if o.kind != OperationUnrelate || o.unrelate == nil {
+		return Unrelate{}, false
+	}
+	return *o.unrelate, true
 }
 
 // Patch is an immutable, content-addressed atomic structural proposal.
@@ -298,8 +348,31 @@ func ApplyPatch(predecessor State, patch Patch) (PatchOutcome, error) {
 				fields[change.Name] = change.After
 			}
 			entities[index] = Entity{ref: entities[index].ref, fields: fields}
+		case OperationDelete:
+			deleted := operation.delete.entity
+			index := findEntityIndex(entities, deleted.ref)
+			if index < 0 {
+				return rejectedPatchOutcome(predecessor, OperationDeleteTargetNotFound), nil
+			}
+			if !entitiesEqual(entities[index], deleted) {
+				return rejectedPatchOutcome(predecessor, OperationBeforeImageMismatch), nil
+			}
+			entities = slices.Delete(entities, index, index+1)
+		case OperationUnrelate:
+			relation := operation.unrelate.relation
+			index := slices.Index(relations, relation)
+			if index < 0 {
+				return rejectedPatchOutcome(predecessor, OperationRelationNotFound), nil
+			}
+			relations = slices.Delete(relations, index, index+1)
 		default:
 			return base, fmt.Errorf("apply patch: unknown operation kind %d", operation.kind)
+		}
+	}
+
+	for _, rel := range relations {
+		if findEntityIndex(entities, rel.From) < 0 || findEntityIndex(entities, rel.To) < 0 {
+			return rejectedPatchOutcome(predecessor, OperationDanglingRelation), nil
 		}
 	}
 
@@ -367,6 +440,21 @@ func UndoPatch(current State, patch Patch, receipt AcceptedPatchReceipt) (PatchO
 				}
 			}
 			entities = slices.Delete(entities, index, index+1)
+		case OperationDelete:
+			deleted := operation.delete.entity
+			if findEntityIndex(entities, deleted.ref) >= 0 {
+				return rejectedPatchOutcome(current, OperationBeforeImageMismatch), nil
+			}
+			entities = append(entities, cloneEntity(deleted))
+		case OperationUnrelate:
+			relation := operation.unrelate.relation
+			if slices.Contains(relations, relation) {
+				return rejectedPatchOutcome(current, OperationBeforeImageMismatch), nil
+			}
+			if findEntityIndex(entities, relation.From) < 0 || findEntityIndex(entities, relation.To) < 0 {
+				return rejectedPatchOutcome(current, OperationBeforeImageMismatch), nil
+			}
+			relations = append(relations, relation)
 		default:
 			return base, fmt.Errorf("undo patch: unknown operation kind %d", operation.kind)
 		}
@@ -465,6 +553,13 @@ func cloneOperations(input []Operation) []Operation {
 		if operation.update != nil {
 			result[index].update = &Update{target: operation.update.target, fields: slices.Clone(operation.update.fields)}
 		}
+		if operation.delete != nil {
+			result[index].delete = &Delete{entity: cloneEntity(operation.delete.entity)}
+		}
+		if operation.unrelate != nil {
+			unrelate := *operation.unrelate
+			result[index].unrelate = &unrelate
+		}
 	}
 	return result
 }
@@ -472,7 +567,7 @@ func cloneOperations(input []Operation) []Operation {
 func validateOperation(operation Operation) error {
 	switch operation.kind {
 	case OperationInsert:
-		if operation.insert == nil || operation.relate != nil || operation.update != nil {
+		if operation.insert == nil || operation.relate != nil || operation.update != nil || operation.delete != nil || operation.unrelate != nil {
 			return fmt.Errorf("insert operation has invalid union payload")
 		}
 		entity := operation.insert.entity
@@ -480,7 +575,7 @@ func validateOperation(operation Operation) error {
 			return fmt.Errorf("insert entity: %w", err)
 		}
 	case OperationRelate:
-		if operation.insert != nil || operation.relate == nil || operation.update != nil {
+		if operation.insert != nil || operation.relate == nil || operation.update != nil || operation.delete != nil || operation.unrelate != nil {
 			return fmt.Errorf("relate operation has invalid union payload")
 		}
 		relation := operation.relate.relation
@@ -494,7 +589,7 @@ func validateOperation(operation Operation) error {
 			return fmt.Errorf("relation to: %w", err)
 		}
 	case OperationUpdate:
-		if operation.insert != nil || operation.relate != nil || operation.update == nil {
+		if operation.insert != nil || operation.relate != nil || operation.update == nil || operation.delete != nil || operation.unrelate != nil {
 			return fmt.Errorf("update operation has invalid union payload")
 		}
 		if err := validateEntityRef(operation.update.target); err != nil {
@@ -518,6 +613,28 @@ func validateOperation(operation Operation) error {
 			if !change.After.Valid() {
 				return fmt.Errorf("update field %q has invalid after-image", change.Name)
 			}
+		}
+	case OperationDelete:
+		if operation.insert != nil || operation.relate != nil || operation.update != nil || operation.delete == nil || operation.unrelate != nil {
+			return fmt.Errorf("delete operation has invalid union payload")
+		}
+		entity := operation.delete.entity
+		if _, err := NewEntity(entity.ref, entity.fields); err != nil {
+			return fmt.Errorf("delete entity: %w", err)
+		}
+	case OperationUnrelate:
+		if operation.insert != nil || operation.relate != nil || operation.update != nil || operation.delete != nil || operation.unrelate == nil {
+			return fmt.Errorf("unrelate operation has invalid union payload")
+		}
+		relation := operation.unrelate.relation
+		if !validSemanticName(string(relation.Kind)) {
+			return fmt.Errorf("relation kind is empty or invalid UTF-8")
+		}
+		if err := validateEntityRef(relation.From); err != nil {
+			return fmt.Errorf("unrelate relation from: %w", err)
+		}
+		if err := validateEntityRef(relation.To); err != nil {
+			return fmt.Errorf("unrelate relation to: %w", err)
 		}
 	default:
 		return fmt.Errorf("unknown operation kind %d", operation.kind)
@@ -560,6 +677,23 @@ func validateOperationAgainstSchema(schema Schema, operation Operation) error {
 			if change.After.Kind() != field.Kind {
 				return fmt.Errorf("update field %q after-image kind does not match patch schema", change.Name)
 			}
+		}
+	case OperationDelete:
+		declaration, ok := schema.entityDeclaration(operation.delete.entity.ref.Kind)
+		if !ok {
+			return fmt.Errorf("delete entity kind is not declared by patch schema")
+		}
+		if err := validateEntityFields(operation.delete.entity, declaration); err != nil {
+			return fmt.Errorf("delete entity is incompatible with patch schema: %w", err)
+		}
+	case OperationUnrelate:
+		relation := operation.unrelate.relation
+		declaration, ok := schema.relationDeclaration(relation.Kind)
+		if !ok {
+			return fmt.Errorf("unrelate relation kind is not declared by patch schema")
+		}
+		if relation.From.Kind != declaration.FromKind || relation.To.Kind != declaration.ToKind {
+			return fmt.Errorf("unrelate relation endpoint kinds do not match patch schema")
 		}
 	default:
 		return fmt.Errorf("unknown operation kind %d", operation.kind)

@@ -17,36 +17,101 @@ type (
 type OperatorKind uint8
 
 const (
-	OperatorSelectAndAssign OperatorKind = 1
+	OperatorSelectAndAssign  OperatorKind = 1
+	OperatorInsertEntity     OperatorKind = 2
+	OperatorDeleteEntity     OperatorKind = 3
+	OperatorRelateEntities   OperatorKind = 4
+	OperatorUnrelateEntities OperatorKind = 5
+	OperatorMergeEntities    OperatorKind = 6
+	OperatorSplitEntity      OperatorKind = 7
 )
 
-// FieldAssignment is one field written on every member of a qualifying group.
-//
-// Value is evaluated in MEMBER scope -- once per member, with that member bound -- so two
-// members of one group may receive different values. Target names a field on the selector's
-// own kind, because a member is the only entity the assignment binds.
+// FieldAssignment is one field written on an entity.
+// Target names a field on the target entity kind.
 type FieldAssignment struct {
 	Target FieldPath
 	Value  Expr
 }
 
-// SelectAssignDeclaration is a rule that applies to a selected population rather than to
-// entities named one by one.
+// SelectAssignDeclaration is a rule that applies field updates to a selected population.
 type SelectAssignDeclaration struct {
 	Selector    Selector
 	Guard       Expr
 	Assignments []FieldAssignment
 }
 
+// InsertEntityDeclaration creates and inserts new entities from selected source groups/members.
+type InsertEntityDeclaration struct {
+	Selector      Selector
+	TargetKind    EntityKind
+	Discriminator Expr
+	Guard         Expr
+	Assignments   []FieldAssignment
+}
+
+// DeleteEntityDeclaration deletes selected entities.
+type DeleteEntityDeclaration struct {
+	Selector Selector
+	Guard    Expr
+}
+
+// RelateEntitiesDeclaration creates directed relations between selected source and target entities.
+type RelateEntitiesDeclaration struct {
+	RelationKind RelationKind
+	FromSelector Selector
+	ToSelector   Selector
+	Guard        Expr
+}
+
+// UnrelateEntitiesDeclaration removes directed relations between selected source and target entities.
+type UnrelateEntitiesDeclaration struct {
+	RelationKind RelationKind
+	FromSelector Selector
+	ToSelector   Selector
+	Guard        Expr
+}
+
+// MergeEntitiesDeclaration merges N source member entities into 1 target entity.
+type MergeEntitiesDeclaration struct {
+	Selector          Selector
+	TargetKind        EntityKind
+	Discriminator     Expr
+	Guard             Expr
+	Assignments       []FieldAssignment
+	RetainSources     bool
+	ReanchorRelations bool
+}
+
+// PartitionDeclaration defines one child entity partition in a split operator.
+type PartitionDeclaration struct {
+	Discriminator Expr
+	Assignments   []FieldAssignment
+}
+
+// SplitEntityDeclaration splits 1 source entity into M child entities.
+type SplitEntityDeclaration struct {
+	Selector     Selector
+	TargetKind   EntityKind
+	Guard        Expr
+	Partitions   []PartitionDeclaration
+	RetainSource bool
+}
+
 // TransformationDeclaration is a closed tagged union. Exactly one payload
 // must be present and it must agree with Operator.
 type TransformationDeclaration struct {
-	ID             RuleID
-	Operator       OperatorKind
-	DeclaredReads  []FieldPath
-	DeclaredWrites []FieldPath
-	After          []RuleID
-	SelectAssign   *SelectAssignDeclaration
+	ID               RuleID
+	Operator         OperatorKind
+	DeclaredReads    []FieldPath
+	DeclaredWrites   []FieldPath
+	After            []RuleID
+	SelectAssign     *SelectAssignDeclaration
+	InsertEntity     *InsertEntityDeclaration
+	DeleteEntity     *DeleteEntityDeclaration
+	RelateEntities   *RelateEntitiesDeclaration
+	UnrelateEntities *UnrelateEntitiesDeclaration
+	MergeEntities    *MergeEntitiesDeclaration
+	SplitEntity      *SplitEntityDeclaration
 }
 
 // CheckpointDeclaration names a complete transformation prefix.
@@ -227,11 +292,100 @@ func cloneSelectAssign(input *SelectAssignDeclaration) *SelectAssignDeclaration 
 	return &clone
 }
 
+func cloneInsertEntity(input *InsertEntityDeclaration) *InsertEntityDeclaration {
+	if input == nil {
+		return nil
+	}
+	clone := *input
+	clone.Selector = cloneSelector(input.Selector)
+	clone.Discriminator = cloneExpr(input.Discriminator)
+	clone.Guard = cloneExpr(input.Guard)
+	clone.Assignments = make([]FieldAssignment, len(input.Assignments))
+	for i, assignment := range input.Assignments {
+		clone.Assignments[i] = FieldAssignment{Target: assignment.Target, Value: cloneExpr(assignment.Value)}
+	}
+	return &clone
+}
+
+func cloneDeleteEntity(input *DeleteEntityDeclaration) *DeleteEntityDeclaration {
+	if input == nil {
+		return nil
+	}
+	clone := *input
+	clone.Selector = cloneSelector(input.Selector)
+	clone.Guard = cloneExpr(input.Guard)
+	return &clone
+}
+
+func cloneRelateEntities(input *RelateEntitiesDeclaration) *RelateEntitiesDeclaration {
+	if input == nil {
+		return nil
+	}
+	clone := *input
+	clone.FromSelector = cloneSelector(input.FromSelector)
+	clone.ToSelector = cloneSelector(input.ToSelector)
+	clone.Guard = cloneExpr(input.Guard)
+	return &clone
+}
+
+func cloneUnrelateEntities(input *UnrelateEntitiesDeclaration) *UnrelateEntitiesDeclaration {
+	if input == nil {
+		return nil
+	}
+	clone := *input
+	clone.FromSelector = cloneSelector(input.FromSelector)
+	clone.ToSelector = cloneSelector(input.ToSelector)
+	clone.Guard = cloneExpr(input.Guard)
+	return &clone
+}
+
+func cloneMergeEntities(input *MergeEntitiesDeclaration) *MergeEntitiesDeclaration {
+	if input == nil {
+		return nil
+	}
+	clone := *input
+	clone.Selector = cloneSelector(input.Selector)
+	clone.Discriminator = cloneExpr(input.Discriminator)
+	clone.Guard = cloneExpr(input.Guard)
+	clone.Assignments = make([]FieldAssignment, len(input.Assignments))
+	for i, assignment := range input.Assignments {
+		clone.Assignments[i] = FieldAssignment{Target: assignment.Target, Value: cloneExpr(assignment.Value)}
+	}
+	return &clone
+}
+
+func cloneSplitEntity(input *SplitEntityDeclaration) *SplitEntityDeclaration {
+	if input == nil {
+		return nil
+	}
+	clone := *input
+	clone.Selector = cloneSelector(input.Selector)
+	clone.Guard = cloneExpr(input.Guard)
+	clone.Partitions = make([]PartitionDeclaration, len(input.Partitions))
+	for i, p := range input.Partitions {
+		assignments := make([]FieldAssignment, len(p.Assignments))
+		for j, a := range p.Assignments {
+			assignments[j] = FieldAssignment{Target: a.Target, Value: cloneExpr(a.Value)}
+		}
+		clone.Partitions[i] = PartitionDeclaration{
+			Discriminator: cloneExpr(p.Discriminator),
+			Assignments:   assignments,
+		}
+	}
+	return &clone
+}
+
 func cloneTransformation(input TransformationDeclaration) TransformationDeclaration {
 	return TransformationDeclaration{
 		ID: input.ID, Operator: input.Operator, DeclaredReads: slices.Clone(input.DeclaredReads),
 		DeclaredWrites: slices.Clone(input.DeclaredWrites), After: slices.Clone(input.After),
-		SelectAssign: cloneSelectAssign(input.SelectAssign),
+		SelectAssign:     cloneSelectAssign(input.SelectAssign),
+		InsertEntity:     cloneInsertEntity(input.InsertEntity),
+		DeleteEntity:     cloneDeleteEntity(input.DeleteEntity),
+		RelateEntities:   cloneRelateEntities(input.RelateEntities),
+		UnrelateEntities: cloneUnrelateEntities(input.UnrelateEntities),
+		MergeEntities:    cloneMergeEntities(input.MergeEntities),
+		SplitEntity:      cloneSplitEntity(input.SplitEntity),
 	}
 }
 

@@ -146,6 +146,12 @@ const (
 	// the only two values encoder.optional writes, so the payload's presence is decidable at
 	// one byte without consulting anything around it. See encodeTransformationDeclaration.
 	selectAssignPresent         byte = 0x02
+	insertEntityPresent         byte = 0x03
+	deleteEntityPresent         byte = 0x04
+	relateEntitiesPresent       byte = 0x05
+	unrelateEntitiesPresent     byte = 0x06
+	mergeEntitiesPresent        byte = 0x07
+	splitEntityPresent          byte = 0x08
 	compilationInputDomainTag        = "maiden-lane.compilation-input.v1"
 	planDomainTag                    = "maiden-lane.plan.v1"
 	compiledProfileDomainTag         = "maiden-lane.compiled-profile.v1"
@@ -272,6 +278,14 @@ func (e *canonicalEncoder) byte(value byte) {
 	}
 }
 
+func (e *canonicalEncoder) bool(value bool) {
+	if value {
+		e.byte(0x01)
+	} else {
+		e.byte(0x00)
+	}
+}
+
 func (e *canonicalEncoder) value(value Value) {
 	if !value.Valid() {
 		if e.err == nil {
@@ -364,6 +378,16 @@ func lineageRootCanonicalBytes(namespace, rootKey string) ([]byte, error) {
 // malformed named values; NewEntity also rejects that zero at its boundary.
 func SourceEntityID(lineage InputLineageID, kind EntityKind, canonicalSourceKey string) EntityID {
 	canonical, err := sourceEntityIDCanonicalBytes(lineage, kind, canonicalSourceKey)
+	if err != nil {
+		return ""
+	}
+	return EntityID(canonicalDigest(canonical))
+}
+
+// SyntheticEntityID deterministically derives a content-addressed entity identity
+// for an entity created during rule execution.
+func SyntheticEntityID(lineage InputLineageID, kind EntityKind, rule RuleID, progenitors []EntityRef, discriminator Value) EntityID {
+	canonical, err := encodeSyntheticEntityIdentity(lineage, kind, rule, canonicalEntityRefs(progenitors), discriminator)
 	if err != nil {
 		return ""
 	}
@@ -576,6 +600,10 @@ func encodeOperationPayload(encoder *canonicalEncoder, operation Operation) {
 			})
 			encoder.value(change.After)
 		}
+	case OperationDelete:
+		encodeEntity(encoder, operation.delete.entity)
+	case OperationUnrelate:
+		encodeRelation(encoder, operation.unrelate.relation)
 	default:
 		if encoder.err == nil {
 			encoder.err = fmt.Errorf("unknown operation kind %d", operation.kind)
@@ -645,8 +673,21 @@ func encodeRuleset(rules normalizedRuleset) ([]byte, error) {
 	}
 	invariants := make([]InvariantDeclaration, 0)
 	for _, transformation := range rules.transformations {
-		if transformation.SelectAssign != nil {
+		switch {
+		case transformation.SelectAssign != nil:
 			invariants = append(invariants, selectAssignInvariants(transformation.ID, transformation.SelectAssign)...)
+		case transformation.InsertEntity != nil:
+			invariants = append(invariants, insertEntityInvariants(transformation.ID, transformation.InsertEntity)...)
+		case transformation.DeleteEntity != nil:
+			invariants = append(invariants, deleteEntityInvariants(transformation.ID, transformation.DeleteEntity)...)
+		case transformation.RelateEntities != nil:
+			invariants = append(invariants, relationInvariants(transformation.ID, transformation.RelateEntities.FromSelector, transformation.RelateEntities.ToSelector, transformation.RelateEntities.Guard)...)
+		case transformation.UnrelateEntities != nil:
+			invariants = append(invariants, relationInvariants(transformation.ID, transformation.UnrelateEntities.FromSelector, transformation.UnrelateEntities.ToSelector, transformation.UnrelateEntities.Guard)...)
+		case transformation.MergeEntities != nil:
+			invariants = append(invariants, mergeEntityInvariants(transformation.ID, transformation.MergeEntities)...)
+		case transformation.SplitEntity != nil:
+			invariants = append(invariants, splitEntityInvariants(transformation.ID, transformation.SplitEntity)...)
 		}
 	}
 	sort.Slice(invariants, func(i, j int) bool { return invariants[i].key < invariants[j].key })
@@ -741,6 +782,22 @@ func encodeCompilationFailure(input CompilationInputDigest, diagnostics []Compil
 	return encoder.bytes()
 }
 
+func encodeSelectorPayload(encoder *canonicalEncoder, selector Selector) {
+	encoder.string(string(selector.Kind))
+	encoder.byte(byte(selector.Members.Kind))
+	encoder.uint64(selector.Members.Count)
+	encoder.optional(selector.Where != nil, func() { encodeExpr(encoder, *selector.Where) })
+	encoder.optional(selector.GroupBy != nil, func() { encodeExpr(encoder, *selector.GroupBy) })
+}
+
+func encodeFieldAssignments(encoder *canonicalEncoder, assignments []FieldAssignment) {
+	encoder.uint64(uint64(len(assignments)))
+	for _, assignment := range assignments {
+		encoder.string(string(assignment.Target))
+		encodeExpr(encoder, assignment.Value)
+	}
+}
+
 func encodeTransformationDeclaration(encoder *canonicalEncoder, transformation TransformationDeclaration) {
 	encoder.string(string(transformation.ID))
 	encoder.byte(byte(transformation.Operator))
@@ -750,20 +807,60 @@ func encodeTransformationDeclaration(encoder *canonicalEncoder, transformation T
 	for _, dependency := range transformation.After {
 		encoder.string(string(dependency))
 	}
-	if transformation.SelectAssign != nil {
-		payload := transformation.SelectAssign
-		selector := payload.Selector
+	switch {
+	case transformation.SelectAssign != nil:
 		encoder.byte(selectAssignPresent)
-		encoder.string(string(selector.Kind))
-		encoder.byte(byte(selector.Members.Kind))
-		encoder.uint64(selector.Members.Count)
-		encoder.optional(selector.Where != nil, func() { encodeExpr(encoder, *selector.Where) })
-		encoder.optional(selector.GroupBy != nil, func() { encodeExpr(encoder, *selector.GroupBy) })
-		encodeExpr(encoder, payload.Guard)
-		encoder.uint64(uint64(len(payload.Assignments)))
-		for _, assignment := range payload.Assignments {
-			encoder.string(string(assignment.Target))
-			encodeExpr(encoder, assignment.Value)
+		encodeSelectorPayload(encoder, transformation.SelectAssign.Selector)
+		encodeExpr(encoder, transformation.SelectAssign.Guard)
+		encodeFieldAssignments(encoder, transformation.SelectAssign.Assignments)
+
+	case transformation.InsertEntity != nil:
+		encoder.byte(insertEntityPresent)
+		encodeSelectorPayload(encoder, transformation.InsertEntity.Selector)
+		encoder.string(string(transformation.InsertEntity.TargetKind))
+		encodeExpr(encoder, transformation.InsertEntity.Discriminator)
+		encodeExpr(encoder, transformation.InsertEntity.Guard)
+		encodeFieldAssignments(encoder, transformation.InsertEntity.Assignments)
+
+	case transformation.DeleteEntity != nil:
+		encoder.byte(deleteEntityPresent)
+		encodeSelectorPayload(encoder, transformation.DeleteEntity.Selector)
+		encodeExpr(encoder, transformation.DeleteEntity.Guard)
+
+	case transformation.RelateEntities != nil:
+		encoder.byte(relateEntitiesPresent)
+		encodeSelectorPayload(encoder, transformation.RelateEntities.FromSelector)
+		encodeSelectorPayload(encoder, transformation.RelateEntities.ToSelector)
+		encoder.string(string(transformation.RelateEntities.RelationKind))
+		encodeExpr(encoder, transformation.RelateEntities.Guard)
+
+	case transformation.UnrelateEntities != nil:
+		encoder.byte(unrelateEntitiesPresent)
+		encodeSelectorPayload(encoder, transformation.UnrelateEntities.FromSelector)
+		encodeSelectorPayload(encoder, transformation.UnrelateEntities.ToSelector)
+		encoder.string(string(transformation.UnrelateEntities.RelationKind))
+		encodeExpr(encoder, transformation.UnrelateEntities.Guard)
+
+	case transformation.MergeEntities != nil:
+		encoder.byte(mergeEntitiesPresent)
+		encodeSelectorPayload(encoder, transformation.MergeEntities.Selector)
+		encoder.string(string(transformation.MergeEntities.TargetKind))
+		encodeExpr(encoder, transformation.MergeEntities.Discriminator)
+		encodeExpr(encoder, transformation.MergeEntities.Guard)
+		encoder.bool(transformation.MergeEntities.RetainSources)
+		encoder.bool(transformation.MergeEntities.ReanchorRelations)
+		encodeFieldAssignments(encoder, transformation.MergeEntities.Assignments)
+
+	case transformation.SplitEntity != nil:
+		encoder.byte(splitEntityPresent)
+		encodeSelectorPayload(encoder, transformation.SplitEntity.Selector)
+		encoder.string(string(transformation.SplitEntity.TargetKind))
+		encodeExpr(encoder, transformation.SplitEntity.Guard)
+		encoder.bool(transformation.SplitEntity.RetainSource)
+		encoder.uint64(uint64(len(transformation.SplitEntity.Partitions)))
+		for _, p := range transformation.SplitEntity.Partitions {
+			encodeExpr(encoder, p.Discriminator)
+			encodeFieldAssignments(encoder, p.Assignments)
 		}
 	}
 }
