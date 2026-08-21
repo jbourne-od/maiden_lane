@@ -74,7 +74,7 @@ func TranspileSelectAssign(
 		guardCtx.GroupPartitionClause = fmt.Sprintf("PARTITION BY (%s)", gk)
 	} else {
 		groupKeySQL = "s.\"id\""
-		guardCtx.GroupPartitionClause = ""
+		guardCtx.GroupPartitionClause = "PARTITION BY (s.\"id\")"
 	}
 
 	guardExpr, err := TranspileExpr(guardCtx, decl.Guard)
@@ -120,14 +120,16 @@ FROM %s s`, groupKeySQL, guardExpr, selectCTEName)
 			aCtx.EntityTableAlias = "q"
 			if decl.Selector.GroupBy != nil {
 				aCtx.GroupPartitionClause = `PARTITION BY (q."_ml_group_key")`
+			} else {
+				aCtx.GroupPartitionClause = `PARTITION BY (q."id")`
 			}
 			valSQL, err := TranspileExpr(aCtx, valExpr)
 			if err != nil {
 				return TranspiledStep{}, fmt.Errorf("transpile assignment %s in rule %s: %w", f, ruleID, err)
 			}
-			fmt.Fprintf(&projectionSQL, `,\n    CASE WHEN q."_ml_guard_passed" = TRUE THEN (%s) ELSE m.%s END AS %s`, valSQL, col, col)
+			fmt.Fprintf(&projectionSQL, ",\n    CASE WHEN q.\"_ml_guard_passed\" = TRUE THEN (%s) ELSE m.%s END AS %s", valSQL, col, col)
 		} else {
-			fmt.Fprintf(&projectionSQL, `,\n    m.%s AS %s`, col, col)
+			fmt.Fprintf(&projectionSQL, ",\n    m.%s AS %s", col, col)
 		}
 	}
 
@@ -187,24 +189,67 @@ func TranspileInsertEntity(
 		whereClause = `WHERE s."is_active" = TRUE`
 	}
 
-	discCtx := ctx
-	discCtx.EntityTableAlias = "s"
-	discExpr, err := TranspileExpr(discCtx, decl.Discriminator)
-	if err != nil {
-		return TranspiledStep{}, fmt.Errorf("transpile discriminator in rule %s: %w", ruleID, err)
-	}
-
 	guardCtx := ctx
 	guardCtx.EntityTableAlias = "s"
-	guardExpr, err := TranspileExpr(guardCtx, decl.Guard)
-	if err != nil {
-		return TranspiledStep{}, fmt.Errorf("transpile guard in rule %s: %w", ruleID, err)
-	}
+	discCtx := ctx
+	discCtx.EntityTableAlias = "s"
 
-	selectQuery := fmt.Sprintf(`SELECT s.*, 
+	var selectQuery string
+	var aCtx TranspileContext = ctx
+	aCtx.EntityTableAlias = "src"
+
+	if decl.Selector.GroupBy != nil {
+		gCtx := ctx
+		gCtx.EntityTableAlias = "s"
+		gk, err := TranspileExpr(gCtx, *decl.Selector.GroupBy)
+		if err != nil {
+			return TranspiledStep{}, fmt.Errorf("transpile group by in rule %s: %w", ruleID, err)
+		}
+		partitionClause := fmt.Sprintf("PARTITION BY (%s)", gk)
+		guardCtx.GroupPartitionClause = partitionClause
+		guardCtx.IsGroupScope = true
+		discCtx.GroupPartitionClause = partitionClause
+		discCtx.IsGroupScope = true
+
+		discExpr, err := TranspileExpr(discCtx, decl.Discriminator)
+		if err != nil {
+			return TranspiledStep{}, fmt.Errorf("transpile discriminator in rule %s: %w", ruleID, err)
+		}
+
+		guardExpr, err := TranspileExpr(guardCtx, decl.Guard)
+		if err != nil {
+			return TranspiledStep{}, fmt.Errorf("transpile guard in rule %s: %w", ruleID, err)
+		}
+
+		selectQuery = fmt.Sprintf(`SELECT s.*, 
+    (%s) AS _ml_group_key,
+    (%s) AS _ml_discriminator,
+    (%s) AS _ml_guard_passed,
+    ROW_NUMBER() OVER (PARTITION BY (%s) ORDER BY s."id") AS _ml_row_num
+FROM %s s %s`, gk, discExpr, guardExpr, gk, prevSourceTable, whereClause)
+
+		aCtx.IsGroupScope = true
+		aCtx.GroupPartitionClause = `PARTITION BY (src."_ml_group_key")`
+	} else {
+		guardCtx.GroupPartitionClause = "PARTITION BY (s.\"id\")"
+		discCtx.GroupPartitionClause = "PARTITION BY (s.\"id\")"
+
+		discExpr, err := TranspileExpr(discCtx, decl.Discriminator)
+		if err != nil {
+			return TranspiledStep{}, fmt.Errorf("transpile discriminator in rule %s: %w", ruleID, err)
+		}
+
+		guardExpr, err := TranspileExpr(guardCtx, decl.Guard)
+		if err != nil {
+			return TranspiledStep{}, fmt.Errorf("transpile guard in rule %s: %w", ruleID, err)
+		}
+
+		selectQuery = fmt.Sprintf(`SELECT s.*, 
     (%s) AS _ml_discriminator,
     (%s) AS _ml_guard_passed
 FROM %s s %s`, discExpr, guardExpr, prevSourceTable, whereClause)
+	}
+
 	ctes = append(ctes, NamedCTE{Name: selectCTEName, Query: selectQuery})
 
 	// 2. Synthesize new entities
@@ -214,18 +259,23 @@ FROM %s s %s`, discExpr, guardExpr, prevSourceTable, whereClause)
 		_, fieldName := splitFieldPath(assign.Target)
 		col := d.QuoteIdentifier(fieldName)
 
-		aCtx := ctx
-		aCtx.EntityTableAlias = "src"
 		valExpr, err := TranspileExpr(aCtx, assign.Value)
 		if err != nil {
 			return TranspiledStep{}, fmt.Errorf("transpile assignment %s in rule %s: %w", assign.Target, ruleID, err)
 		}
-		fmt.Fprintf(&assignmentsSQL, `,\n    (%s) AS %s`, valExpr, col)
+		fmt.Fprintf(&assignmentsSQL, ",\n    (%s) AS %s", valExpr, col)
 	}
 
 	// Canonical domain tag prefix derivation in SQL
 	idHashExpr := d.DigestSHA256(fmt.Sprintf(`'maiden-lane.synthetic-entity.v1\x00' || COALESCE(src."lineage_id", '') || ':' || %s || ':' || %s || ':' || src."id" || ':' || COALESCE(src."_ml_discriminator"::text, '')`,
 		d.QuoteString(targetKind), d.QuoteString(string(ruleID))))
+
+	var whereFilter string
+	if decl.Selector.GroupBy != nil {
+		whereFilter = `WHERE src."_ml_guard_passed" = TRUE AND src."_ml_row_num" = 1`
+	} else {
+		whereFilter = `WHERE src."_ml_guard_passed" = TRUE`
+	}
 
 	newEntitiesQuery := fmt.Sprintf(`SELECT 
     %s AS "id",
@@ -233,7 +283,7 @@ FROM %s s %s`, discExpr, guardExpr, prevSourceTable, whereClause)
     TRUE AS "is_active"%s,
     %s AS "updated_by_rule"
 FROM %s src
-WHERE src."_ml_guard_passed" = TRUE`, idHashExpr, assignmentsSQL.String(), d.QuoteString(string(ruleID)), selectCTEName)
+%s`, idHashExpr, assignmentsSQL.String(), d.QuoteString(string(ruleID)), selectCTEName, whereFilter)
 	ctes = append(ctes, NamedCTE{Name: newEntitiesCTEName, Query: newEntitiesQuery})
 
 	// 3. Union with previous target entity table
@@ -559,7 +609,7 @@ FROM %s s %s`, groupKeyExpr, discExpr, guardExpr, prevSourceTable, whereClause)
 		if err != nil {
 			return TranspiledStep{}, err
 		}
-		fmt.Fprintf(&assignmentsSQL, `,\n    (%s) AS %s`, valExpr, col)
+		fmt.Fprintf(&assignmentsSQL, ",\n    (%s) AS %s", valExpr, col)
 	}
 
 	idHashExpr := d.DigestSHA256(fmt.Sprintf(`'maiden-lane.synthetic-entity.v1\x00' || COALESCE(MAX(grp."lineage_id"), '') || ':' || %s || ':' || %s || ':' || STRING_AGG(grp."id", ',' ORDER BY grp."id") || ':' || COALESCE(MAX(grp."_ml_discriminator"::text), '')`,
@@ -683,7 +733,7 @@ FROM %s s %s`, guardExpr, prevSourceTable, whereClause)
 			if err != nil {
 				return TranspiledStep{}, err
 			}
-			fmt.Fprintf(&assignmentsSQL, `,\n    (%s) AS %s`, valExpr, col)
+			fmt.Fprintf(&assignmentsSQL, ",\n    (%s) AS %s", valExpr, col)
 		}
 
 		idHashExpr := d.DigestSHA256(fmt.Sprintf(`'maiden-lane.synthetic-entity.v1\x00' || COALESCE(src."lineage_id", '') || ':' || %s || ':' || %s || ':' || src."id" || ':' || COALESCE((%s)::text, '')`,

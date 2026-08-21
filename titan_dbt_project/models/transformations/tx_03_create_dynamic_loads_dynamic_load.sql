@@ -3,26 +3,18 @@
 WITH
 step_3_create_dynamic_loads_selected AS (
     SELECT s.*, 
-        (s."customer_id") AS _ml_group_key,
         ('TITAN_LOAD') AS _ml_discriminator,
-        ((NOT (COUNT(*) OVER (PARTITION BY (s."customer_id")) < 1))) AS _ml_guard_passed,
-        ROW_NUMBER() OVER (PARTITION BY (s."customer_id") ORDER BY s."id") AS _ml_row_num
+        ((NOT (COUNT(*) < 1))) AS _ml_guard_passed
     FROM {{ ref('tx_02_enrich_titan_orders_raw_order') }} s WHERE ((s."operational_status" = 'CLIN')) AND s."is_active" = TRUE
 ),
 step_3_create_dynamic_loads_new_entities AS (
     SELECT 
         ('sha256:' || ENCODE(DIGEST('maiden-lane.synthetic-entity.v1\x00' || COALESCE(src."lineage_id", '') || ':' || 'dynamic_load' || ':' || 'create_dynamic_loads' || ':' || src."id" || ':' || COALESCE(src."_ml_discriminator"::text, ''), 'sha256'), 'hex')) AS "id",
         src."lineage_id" AS "lineage_id",
-        TRUE AS "is_active",
-        ('LOAD_TITAN_01') AS "load_id",
-        ('SIAC') AS "shipper_id",
-        ('STANDARD') AS "freight_class",
-        (SUM(src."total_charge_cents") OVER (PARTITION BY (src."_ml_group_key"))) AS "total_revenue_cents",
-        ('NO') AS "requires_permits",
-        ('UNASSIGNED') AS "status",
+        TRUE AS "is_active",\n    ('LOAD_TITAN_01') AS "load_id",\n    ('SIAC') AS "shipper_id",\n    ('STANDARD') AS "freight_class",\n    (SUM(src."total_charge_cents")) AS "total_revenue_cents",\n    ('NO') AS "requires_permits",\n    ('UNASSIGNED') AS "status",
         'create_dynamic_loads' AS "updated_by_rule"
     FROM step_3_create_dynamic_loads_selected src
-    WHERE src."_ml_guard_passed" = TRUE AND src."_ml_row_num" = 1
+    WHERE src."_ml_guard_passed" = TRUE
 ),
 step_3_create_dynamic_loads_output_dynamic_load AS (
     SELECT t.* FROM {{ ref('stg_entities_dynamic_load') }} t
