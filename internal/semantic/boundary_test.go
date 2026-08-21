@@ -23,6 +23,13 @@ var productionImportAllowlist = []string{
 	"fmt",
 	"slices",
 	"sort",
+	// strconv was admitted deliberately, which is what this allowlist is for. Value
+	// implements encoding.TextMarshaler so a declaration containing a literal can survive
+	// the plan store, and rebuilding an int64 from text needs a parser. strconv is pure and
+	// deterministic: an identical input produces an identical output on every machine, which
+	// is the property Inviolate 12 protects. The alternative was encoding/json in the kernel,
+	// which is the coupling this list exists to refuse.
+	"strconv",
 	"strings",
 	"unicode/utf8",
 }

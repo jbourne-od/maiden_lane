@@ -354,6 +354,16 @@ func transformationFromWire(declaration openapiv1.TransformationDeclaration) (se
 			return semantic.TransformationDeclaration{}, err
 		}
 		translated.Aggregate = &aggregate
+	case openapiv1.TransformationDeclarationOperatorSelectAndAssign:
+		if declaration.SelectAssign == nil || declaration.Form != nil || declaration.Aggregate != nil {
+			return semantic.TransformationDeclaration{}, translationError("select-and-assign operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorSelectAndAssign
+		payload, err := selectAssignFromWire(*declaration.SelectAssign)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.SelectAssign = &payload
 	default:
 		return semantic.TransformationDeclaration{}, translationError("unknown operator")
 	}
@@ -666,10 +676,9 @@ func schemaToWire(schema semantic.Schema) openapiv1.SchemaDeclaration {
 // and no payload at all. That is a boundary inventing a declaration nobody holds, and it
 // fails open: the response looks well-formed and describes a rule that does not exist.
 //
-// OperatorSelectAndAssign is exactly that case today. rulesetFromWire refuses it inbound
-// (its default arm errors), so no such plan can currently be stored through the API and this
-// path is unreachable -- but "unreachable" was also true of the group node kinds until a
-// consumer arrived, and the contract gaining the operator is what makes this live.
+// The contract has since gained OperatorSelectAndAssign, so the arm that would have been the
+// silent one is now written. The default remains, and remains load-bearing: the next operator
+// added to the kernel and not to this contract lands there rather than in a response.
 func transformationToWire(declaration semantic.TransformationDeclaration) (openapiv1.TransformationDeclaration, error) {
 	reads := fieldPathsToWire(declaration.DeclaredReads)
 	writes := fieldPathsToWire(declaration.DeclaredWrites)
@@ -693,6 +702,13 @@ func transformationToWire(declaration semantic.TransformationDeclaration) (opena
 		projected.Operator = openapiv1.TransformationDeclarationOperatorAggregateRelatedFields
 		aggregate := aggregateToWire(*declaration.Aggregate)
 		projected.Aggregate = &aggregate
+	case declaration.SelectAssign != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorSelectAndAssign
+		payload, err := selectAssignToWire(*declaration.SelectAssign)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.SelectAssign = &payload
 	default:
 		return openapiv1.TransformationDeclaration{}, translationError(
 			"compiled operator has no representation in this contract version")

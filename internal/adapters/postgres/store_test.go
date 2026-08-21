@@ -11,6 +11,7 @@ import (
 
 	"github.com/optimaldynamics/maiden-lane/internal/ports"
 	"github.com/optimaldynamics/maiden-lane/internal/ports/storagecontract"
+	"github.com/optimaldynamics/maiden-lane/internal/semantic"
 )
 
 // databaseURLVariable names the database these tests run against. `make
@@ -281,4 +282,79 @@ func otherDeclarations(t *testing.T) []byte {
 		t.Fatalf("encode substitute declarations: %v", err)
 	}
 	return encoded
+}
+
+// A stored declaration must recompile to the plan that was stored.
+//
+// THIS NEEDS NO DATABASE, and that is the point: the drift it catches is in the serialization,
+// not in SQL, and every test that did need a database skipped without one. encodeDeclarations
+// and rebuild are the two halves of the round trip, so calling them directly exercises exactly
+// the property a stored plan depends on.
+//
+// Production break caught: semantic.Value's fields are unexported and it had no marshaller, so
+// encoding/json wrote `{}` and returned no error. Neither frozen operator carries a Value, so
+// the first authored rule with a literal -- which is any select-and-assign rule that assigns a
+// constant -- was writable and unreadable. PutPlan returned 201, every GetPlan afterwards
+// recompiled to an UnsupportedOperator diagnostic and answered 500, and the worker treated the
+// storage error as transient and retried the execution forever.
+func TestStoredDeclarationsRecompileToTheSamePlan(t *testing.T) {
+	record := storagecontract.PlanRecordFixture(t, "acme", "semantics.v1")
+
+	encoded, err := encodeDeclarations(record)
+	if err != nil {
+		t.Fatalf("encodeDeclarations: %v", err)
+	}
+	rebuilt, err := rebuild(record.TenantID, record.PlanID, record.Input.Digest(), encoded)
+	if err != nil {
+		t.Fatalf("rebuild: %v", err)
+	}
+	if rebuilt.PlanID != record.PlanID {
+		t.Fatalf("rebuilt plan %s, want %s", rebuilt.PlanID, record.PlanID)
+	}
+	if rebuilt.Input.Digest() != record.Input.Digest() {
+		t.Fatalf("rebuilt compilation input %s, want %s", rebuilt.Input.Digest(), record.Input.Digest())
+	}
+
+	// And the literals came back as literals rather than as the zero Value, which is the
+	// specific way this failed. Asserting only the identity would catch it too, but would not
+	// say what broke.
+	rule := rebuilt.Input.Request().Rules.Transformations[0]
+	if rule.SelectAssign == nil {
+		t.Fatal("the select-and-assign payload did not survive storage")
+	}
+	// EVERY VALUE KIND, not merely "some literal". The fixture claims one assignment per kind,
+	// and counting literals does not enforce that claim: deleting the atom assignment leaves a
+	// count of two, a green test, and the ValueAtom arms of the codec covered by nothing. The
+	// fixture's promise and the test's assertion have to be the same statement.
+	seen := make(map[semantic.ValueKind]struct{}, 3)
+	for _, assignment := range collectLiterals(rule.SelectAssign.Assignments) {
+		if !assignment.Valid() {
+			t.Fatal("a literal came back invalid")
+		}
+		seen[assignment.Kind()] = struct{}{}
+	}
+	for _, kind := range []semantic.ValueKind{semantic.ValueString, semantic.ValueAtom, semantic.ValueInt64} {
+		if _, present := seen[kind]; !present {
+			t.Fatalf("the fixture carries no literal of kind %d, so storage never round-trips one", kind)
+		}
+	}
+}
+
+// collectLiterals gathers every literal an assignment tree carries, at any depth: the integer
+// literal in the fixture sits inside an add node rather than at the root.
+func collectLiterals(assignments []semantic.FieldAssignment) []semantic.Value {
+	found := make([]semantic.Value, 0)
+	var walk func(semantic.Expr)
+	walk = func(node semantic.Expr) {
+		if node.Literal != nil {
+			found = append(found, *node.Literal)
+		}
+		for _, argument := range node.Args {
+			walk(argument)
+		}
+	}
+	for _, assignment := range assignments {
+		walk(assignment.Value)
+	}
+	return found
 }

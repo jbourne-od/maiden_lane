@@ -284,9 +284,22 @@ const unknownPlanID semantic.PlanID = "sha256:" +
 // identical plans, since plan identity is derived from the declarations and the
 // pinned compiler semantics version.
 //
-// The compilation is deliberately minimal and domain-free: storage behaviour has
-// nothing to do with any particular rule, and a storage test that failed because
-// a domain fixture changed would be reporting the wrong thing.
+// The compilation is deliberately domain-free -- storage behaviour has nothing to do with any
+// particular rule, and a storage test that failed because a domain fixture changed would be
+// reporting the wrong thing.
+//
+// IT IS NO LONGER EMPTY, and the difference matters. It previously compiled a request with NO
+// TRANSFORMATIONS, so every store passed a contract that never asked whether a declaration
+// survives being stored. It does not follow from "domain-free" that the fixture should carry
+// no rule: what a store must round-trip is every declaration TYPE, and a ruleset with none
+// exercises none of them. A Value reached a stored declaration for the first time with the
+// select-and-assign operator, serialized to `{}` with no error, and made the plan unreadable
+// after a successful write -- past a contract whose whole purpose is to keep the memory and
+// SQL stores from drifting, and which could not see it.
+//
+// So the rule below is chosen to be shapeless and total rather than realistic: it reaches an
+// expression tree, a literal of each value kind, a selector, a cardinality and an assignment,
+// because those are the types storage has to carry.
 func PlanRecordFixture(t *testing.T, tenant ports.TenantID, version string) ports.PlanRecord {
 	t.Helper()
 
@@ -302,9 +315,47 @@ func PlanRecordFixture(t *testing.T, tenant ports.TenantID, version string) port
 		t.Fatalf("NewSchema: %v", err)
 	}
 
+	anchor, err := semantic.NewAtomValue("T0")
+	if err != nil {
+		t.Fatalf("NewAtomValue: %v", err)
+	}
+	marker, err := semantic.NewStringValue("stored")
+	if err != nil {
+		t.Fatalf("NewStringValue: %v", err)
+	}
+	groupBy := semantic.Expr{Kind: semantic.ExprField, Field: "driver.assignment_key"}
+	hours := semantic.NewInt64Value(1)
 	compilation, err := semantic.Compile(semantic.CompileRequest{
 		Schema:                   schema.Declaration(),
 		CompilerSemanticsVersion: semantic.CompilerSemanticsVersion(version),
+		Rules: semantic.RulesetDeclaration{
+			Transformations: []semantic.TransformationDeclaration{{
+				ID:       "storage_contract.v1",
+				Operator: semantic.OperatorSelectAndAssign,
+				DeclaredReads: []semantic.FieldPath{
+					"driver.assignment_key", "driver.hos_anchor", "driver.hos_elapsed_hours",
+				},
+				DeclaredWrites: []semantic.FieldPath{"driver.assignment_key", "driver.hos_anchor", "driver.hos_elapsed_hours"},
+				SelectAssign: &semantic.SelectAssignDeclaration{
+					Selector: semantic.Selector{
+						Kind:    "driver",
+						Where:   &semantic.Expr{Kind: semantic.ExprExists, Field: "driver.hos_anchor"},
+						GroupBy: &groupBy,
+						Members: semantic.Cardinality{Kind: semantic.CardinalityAtLeast, Count: 1},
+					},
+					Guard: semantic.Expr{Kind: semantic.ExprAllEqual, Field: "driver.assignment_key"},
+					// One assignment per value kind, so no kind's text form is untested.
+					Assignments: []semantic.FieldAssignment{
+						{Target: "driver.assignment_key", Value: semantic.Expr{Kind: semantic.ExprLiteral, Literal: &marker}},
+						{Target: "driver.hos_anchor", Value: semantic.Expr{Kind: semantic.ExprLiteral, Literal: &anchor}},
+						{Target: "driver.hos_elapsed_hours", Value: semantic.Expr{Kind: semantic.ExprAdd, Args: []semantic.Expr{
+							{Kind: semantic.ExprField, Field: "driver.hos_elapsed_hours"},
+							{Kind: semantic.ExprLiteral, Literal: &hours},
+						}}},
+					},
+				},
+			}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
@@ -324,6 +375,41 @@ func PlanRecordFixture(t *testing.T, tenant ports.TenantID, version string) port
 	}
 }
 
+// corruptSelectAssign reaches every authored field of a selector-scoped payload, including the
+// expression trees and the literals inside them.
+func corruptSelectAssign(payload *semantic.SelectAssignDeclaration) {
+	if payload == nil {
+		return
+	}
+	corruptExpr := func(expr *semantic.Expr) {
+		if expr == nil {
+			return
+		}
+		var walk func(*semantic.Expr)
+		walk = func(node *semantic.Expr) {
+			node.Kind = semantic.ExprField
+			node.Field = "corrupted.corrupted"
+			if node.Literal != nil {
+				corrupted := semantic.NewInt64Value(-1)
+				*node.Literal = corrupted
+			}
+			for i := range node.Args {
+				walk(&node.Args[i])
+			}
+		}
+		walk(expr)
+	}
+	payload.Selector.Kind = "corrupted"
+	payload.Selector.Members = semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 99}
+	corruptExpr(payload.Selector.Where)
+	corruptExpr(payload.Selector.GroupBy)
+	corruptExpr(&payload.Guard)
+	for i := range payload.Assignments {
+		payload.Assignments[i].Target = "corrupted.corrupted"
+		corruptExpr(&payload.Assignments[i].Value)
+	}
+}
+
 // mutateEverythingReachable corrupts every part of a record an ordinary caller
 // can reach through its public accessors.
 func mutateEverythingReachable(record ports.PlanRecord) {
@@ -331,6 +417,14 @@ func mutateEverythingReachable(record ports.PlanRecord) {
 	request.CompilerSemanticsVersion = "corrupted"
 	for i := range request.Rules.Transformations {
 		request.Rules.Transformations[i].ID = "corrupted"
+		// THE PAYLOAD SUBTREE, not just the ID. The fixture gained a select-and-assign rule so
+		// that storage is tested against every declaration type, and a walker that reached
+		// only the ID would have left the whole new subtree -- selector, filter, grouping,
+		// guard, assignments, literals -- outside a function whose comment claims it corrupts
+		// everything an ordinary caller can reach. A store that returned the record by value
+		// while retaining the caller's SelectAssign pointer would then be invisible to the
+		// subtest that exists to catch exactly that.
+		corruptSelectAssign(request.Rules.Transformations[i].SelectAssign)
 	}
 	for i := range request.Rules.Checkpoints {
 		request.Rules.Checkpoints[i].Key = "corrupted"

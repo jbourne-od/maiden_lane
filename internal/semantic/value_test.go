@@ -95,3 +95,119 @@ func TestZeroValueIsNotValid(t *testing.T) {
 		t.Fatal("zero Value reported valid")
 	}
 }
+
+// The text codec is the plan store's dependency, so it is tested as one.
+//
+// Nothing exercised MarshalText or UnmarshalText directly: the only coverage was three
+// literals inside a storage fixture -- the string "stored", the atom "T0" and the integer 1 --
+// and a fixture whose integer is 1 cannot distinguish base ten from base sixteen, cannot
+// distinguish int64 from int32, and cannot see a sign. Each of those is a mutant that
+// compiles, runs, and survives, and each turns a stored plan unreadable after a successful
+// write.
+//
+// The values below are chosen for the dimensions the codec can get wrong, not for realism.
+func TestValueTextFormRoundTripsEveryDimension(t *testing.T) {
+	cases := map[string]Value{
+		"empty string": mustString(t, ""),
+		"plain string": mustString(t, "certified"),
+		// The separator is the first colon only, so a payload full of them must survive.
+		"string of colons":        mustString(t, "a:b:c::"),
+		"string spelling a value": mustString(t, "int64:5"),
+		"string with a newline":   mustString(t, "two\nlines"),
+		"unicode string":          mustString(t, "dépôt é中"),
+		"empty atom":              mustAtom(t, ""),
+		"atom":                    mustAtom(t, "T0"),
+		// Byte-identical to a string, so only the kind separates them.
+		"atom spelling a string": mustAtom(t, "certified"),
+		"zero":                   NewInt64Value(0),
+		"one":                    NewInt64Value(1),
+		"negative":               NewInt64Value(-1),
+		// Past int32, so a bitSize of 32 fails here and nowhere in any other fixture.
+		"past int32":          NewInt64Value(3000000000),
+		"past negative int32": NewInt64Value(-3000000000),
+		// Base ten and base sixteen differ from ten upward.
+		"two digits": NewInt64Value(16),
+		"maximum":    NewInt64Value(1<<63 - 1),
+		"minimum":    NewInt64Value(-1 << 63),
+	}
+	encoded := make(map[string]string, len(cases))
+	for name, value := range cases {
+		t.Run(name, func(t *testing.T) {
+			text, err := value.MarshalText()
+			if err != nil {
+				t.Fatalf("MarshalText: %v", err)
+			}
+			var returned Value
+			if err := returned.UnmarshalText(text); err != nil {
+				t.Fatalf("UnmarshalText(%q): %v", text, err)
+			}
+			if !returned.Equal(value) || returned.Kind() != value.Kind() {
+				t.Fatalf("round trip produced %v (kind %d), want %v (kind %d)",
+					returned, returned.Kind(), value, value.Kind())
+			}
+			encoded[name] = string(text)
+		})
+	}
+	// And no two distinct values share a text form -- the property that makes the codec a
+	// codec rather than a rendering. An atom and a string with the same bytes are the pair
+	// that would collide if the kind stopped participating.
+	seen := make(map[string]string, len(encoded))
+	for name, text := range encoded {
+		if previous, collision := seen[text]; collision {
+			t.Fatalf("%q and %q both encode as %q", previous, name, text)
+		}
+		seen[text] = name
+	}
+}
+
+// Refusals, each of which is a way a stored value could come back as something else.
+//
+// "int64:+5" is deliberately absent: strconv.ParseInt accepts a leading plus, so the decoder
+// admits a form the encoder never writes. That is harmless rather than overlooked -- it maps
+// to the same Value, MarshalText emits only the canonical spelling, and rebuild recompiles and
+// compares identities, so a hand-edited row spelling five that way still reproduces the plan
+// it claims to be. A strictness check here would refuse a text that means exactly what it
+// says.
+func TestValueTextFormRefusesWhatItCannotRebuild(t *testing.T) {
+	for name, text := range map[string]string{
+		"no separator":            "certified",
+		"unknown kind":            "decimal:1.5",
+		"empty kind":              ":5",
+		"integer with spaces":     "int64: 5",
+		"integer in hexadecimal":  "int64:0x10",
+		"integer that is not one": "int64:many",
+		"integer past the range":  "int64:9223372036854775808",
+		"invalid utf8 string":     "string:\xff",
+		"invalid utf8 atom":       "atom:\xff",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var value Value
+			if err := value.UnmarshalText([]byte(text)); err == nil {
+				t.Fatalf("accepted %q as %v", text, value)
+			}
+			if value.Valid() {
+				t.Fatal("a refused text produced a usable value")
+			}
+		})
+	}
+}
+
+// A value the kernel would refuse must not be written, and the check is Valid rather than
+// the kind. See MarshalText's comment: consulting the kind alone let an invalid string
+// serialize, get its bad byte replaced by encoding/json, and read back as a DIFFERENT value
+// with no error anywhere.
+func TestValueTextFormRefusesAnInvalidValue(t *testing.T) {
+	if _, err := (Value{}).MarshalText(); err == nil {
+		t.Fatal("the zero value serialized")
+	}
+	invalid := Value{kind: ValueString, text: "\xff"}
+	if invalid.Valid() {
+		t.Fatal("the fixture is not invalid, so this test asserts nothing")
+	}
+	if text, err := invalid.MarshalText(); err == nil {
+		t.Fatalf("an invalid string serialized as %q", text)
+	}
+	if text, err := (Value{kind: ValueAtom, text: "\xff"}).MarshalText(); err == nil {
+		t.Fatalf("an invalid atom serialized as %q", text)
+	}
+}
