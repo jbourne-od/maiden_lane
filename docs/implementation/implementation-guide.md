@@ -66,10 +66,15 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
   registered semantic instruments in `METRICS.md`.
 - Stable typed application machinery errors with fixed safe text and preserved
   cause chains, registered in `ERRORS.md`.
-- A tenant-scoped HTTP surface over the spine: plan compilation, plan
-  retrieval including the declarations the compiler accepted, asynchronous
-  execution submission, and execution reads. `api/openapi.yaml` is the authoritative contract; Go server and
-  client code are generated from it and a drift gate runs inside `make verify`.
+- A tenant-scoped HTTP surface: plan compilation, plan retrieval including
+  declarations the compiler accepted, asynchronous execution submission,
+  execution reads, comparison contract creation (`POST /v1/comparisons`),
+  comparison contract retrieval (`GET /v1/comparisons/{comparisonID}`), and
+  promotion gate evaluation (`POST /v1/publications`). `api/openapi.yaml` is the
+  authoritative contract; Go server and client code are generated from it and a
+  drift gate runs inside `make verify`.
+- Replay corpus identity, comparison policy and comparison identity in the
+  kernel, with immutable persistence and rehydration.
 - Durable executions and a work queue. The executions table *is* the queue;
   a worker claims with `SELECT … FOR UPDATE SKIP LOCKED`, runs the spine, and
   stores the result.
@@ -81,8 +86,7 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
   behavioural contract in `internal/ports/storagecontract`, which is what makes
   substitutability a tested property rather than a claim.
 
-There is no promotion gate, publication path, comparison, authentication, AWS
-Batch dispatch, or production team-HOS policy.
+There is no AWS Batch dispatch or production team-HOS policy.
 
 ## Current repository map
 

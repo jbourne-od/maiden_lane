@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	openapiv1 "github.com/optimaldynamics/maiden-lane/internal/httpapi/openapiv1"
+	"github.com/optimaldynamics/maiden-lane/internal/ports"
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
 )
 
@@ -842,6 +843,45 @@ func fieldCopiesToWire(copies []semantic.FieldCopy) []openapiv1.FieldCopy {
 		})
 	}
 	return projected
+}
+
+func comparisonToWire(record ports.ComparisonRecord) openapiv1.Comparison {
+	correspondences := make([]openapiv1.ComparisonCorrespondence, 0, len(record.Correspondences))
+	for _, c := range record.Correspondences {
+		correspondences = append(correspondences, openapiv1.ComparisonCorrespondence{
+			Baseline:  string(c.Baseline),
+			Candidate: string(c.Candidate),
+		})
+	}
+	return openapiv1.Comparison{
+		ComparisonID:          string(record.ComparisonID),
+		BaselinePlanID:        string(record.BaselinePlan),
+		CandidatePlanID:       string(record.CandidatePlan),
+		BaselineCheckpointID:  string(record.Baseline),
+		CandidateCheckpointID: string(record.Candidate),
+		ProfileID:             string(record.Profile),
+		WorldID:               string(record.World),
+		CorpusID:              string(record.Corpus),
+		PolicyID:              string(record.PolicyID),
+		Correspondences:       correspondences,
+	}
+}
+
+func checkpointPairsFromWire(pairs []openapiv1.CheckpointPair) ([]semantic.CheckpointPair, error) {
+	if len(pairs) == 0 {
+		return nil, translationError("comparison request has no checkpoint correspondences")
+	}
+	out := make([]semantic.CheckpointPair, 0, len(pairs))
+	for _, p := range pairs {
+		if p.Baseline == "" || p.Candidate == "" {
+			return nil, translationError("checkpoint pair carries empty key")
+		}
+		out = append(out, semantic.CheckpointPair{
+			Baseline:  semantic.CheckpointKey(p.Baseline),
+			Candidate: semantic.CheckpointKey(p.Candidate),
+		})
+	}
+	return out, nil
 }
 
 // decodeJSON reads exactly one JSON document of type T from a request body.
