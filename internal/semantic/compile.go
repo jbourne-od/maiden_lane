@@ -785,7 +785,7 @@ func deriveTransformation(
 				writes = append(writes, assignment.Target)
 				reads = append(reads, readFieldPaths(assignment.Value)...)
 				targetKind := validateFieldPath(schema, assignment.Target, kind, 0, declaration.ID, &diagnostics)
-				valueType, valueErr := checkExprInScope(schema, kind, assignment.Value, memberScope, 0)
+				valueType, valueErr := checkExprInScope(schema, kind, assignment.Value, memberInGroupScope, 0)
 				if valueErr != nil {
 					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
 				} else if pathErr := checkPathsBindKind(assignment.Value, kind); pathErr != nil {

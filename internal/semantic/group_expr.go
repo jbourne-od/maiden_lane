@@ -22,9 +22,9 @@ import "fmt"
 // members AGREE -- so it cannot be a quantifier over a member-scoped predicate and gets its
 // own node.
 //
-// Reductions (max, sum, count) are deliberately absent. They produce values rather than
-// predicates, and nothing consumes a value from a group until a Transform exists. Recorded
-// rather than assumed: adding them later is an append-only kind, which costs no identity.
+// Group reductions (count, sum, min, max) compute aggregate values across the members of a group.
+// They can appear in group guards (e.g. comparing sum or max against a threshold or count against
+// group size) or in field assignment value expressions under select-and-assign.
 
 // scope distinguishes where an expression is being checked.
 //
@@ -45,6 +45,9 @@ const (
 	// groupScope is a whole group, where no single entity is bound and a bare field path
 	// therefore has no referent.
 	groupScope
+	// memberInGroupScope is a bound entity inside a qualifying group: used for assignment
+	// value expressions, where both the member's own fields and group reductions are in scope.
+	memberInGroupScope
 )
 
 func (s scope) String() string {
@@ -53,6 +56,8 @@ func (s scope) String() string {
 		return "member"
 	case groupScope:
 		return "group"
+	case memberInGroupScope:
+		return "member-in-group"
 	default:
 		return "invalid"
 	}
@@ -74,7 +79,7 @@ func checkExprInScope(
 	if depth > maxExprDepth {
 		return TypeInvalid, fmt.Errorf("expression nests deeper than %d", maxExprDepth)
 	}
-	if in != memberScope && in != groupScope {
+	if in != memberScope && in != groupScope && in != memberInGroupScope {
 		return TypeInvalid, fmt.Errorf("expression checked in %s scope", in)
 	}
 	if err := checkOperandShape(expr); err != nil {
@@ -82,11 +87,42 @@ func checkExprInScope(
 	}
 
 	switch expr.Kind {
+	case ExprLiteral:
+		return literalType(*expr.Literal)
+
+	case ExprField:
+		if in == groupScope {
+			return TypeInvalid, fmt.Errorf(
+				"field %q reads a single entity and cannot appear in group scope", expr.Field)
+		}
+		declared, isDeclared := schema.fieldKind(expr.Field)
+		if !isDeclared {
+			return TypeInvalid, fmt.Errorf("expression reads undeclared field %q", expr.Field)
+		}
+		if in == memberInGroupScope {
+			if err := checkPathsBindKind(expr, kind); err != nil {
+				return TypeInvalid, err
+			}
+		}
+		return valueKindType(declared)
+
+	case ExprExists:
+		if in == groupScope {
+			return TypeInvalid, fmt.Errorf(
+				"exists reads a single entity and cannot appear in group scope")
+		}
+		if _, isDeclared := schema.fieldKind(expr.Field); !isDeclared {
+			return TypeInvalid, fmt.Errorf("expression asks about undeclared field %q", expr.Field)
+		}
+		if in == memberInGroupScope {
+			if err := checkPathsBindKind(expr, kind); err != nil {
+				return TypeInvalid, err
+			}
+		}
+		return TypeBool, nil
+
 	case ExprAllMembers, ExprAnyMembers:
 		if in != groupScope {
-			// Nesting falls out of this rather than needing its own rule: the argument of a
-			// group predicate is checked in member scope, so all_members(all_members(x)) is
-			// refused here on the inner node.
 			return TypeInvalid, fmt.Errorf(
 				"%s is a group predicate and cannot appear in %s scope", expr.Kind, in)
 		}
@@ -94,12 +130,6 @@ func checkExprInScope(
 		if err != nil {
 			return TypeInvalid, err
 		}
-		// The inner predicate reads the MEMBERS, which are entities of the group's kind, so
-		// it is bound by the same rule all_equal is. An earlier version threaded `kind`
-		// through every recursion and consulted it only in the all_equal arm, so
-		// all_members(exists("team.x")) under a driver group type-checked and then failed at
-		// evaluation inside boundField -- the checker blessing a tree the evaluator can never
-		// answer, which is the disagreement four of this branch's five wrong answers were.
 		if err := checkPathsBindKind(expr.Args[0], kind); err != nil {
 			return TypeInvalid, err
 		}
@@ -126,8 +156,42 @@ func checkExprInScope(
 		}
 		return TypeBool, nil
 
-	case ExprNot, ExprAll, ExprAny:
-		// Legal in both scopes, and its arguments stay in the scope it was found in.
+	case ExprCount:
+		if in == memberScope {
+			return TypeInvalid, fmt.Errorf(
+				"count is a group reduction and cannot appear in member scope")
+		}
+		return TypeInt64, nil
+
+	case ExprSum, ExprMin, ExprMax:
+		if in == memberScope {
+			return TypeInvalid, fmt.Errorf(
+				"%s is a group reduction and cannot appear in member scope", expr.Kind)
+		}
+		declared, isDeclared := schema.fieldKind(expr.Field)
+		if !isDeclared {
+			return TypeInvalid, fmt.Errorf("%s reads undeclared field %q", expr.Kind, expr.Field)
+		}
+		if err := checkPathsBindKind(expr, kind); err != nil {
+			return TypeInvalid, err
+		}
+		if declared != ValueInt64 {
+			return TypeInvalid, fmt.Errorf(
+				"%s requires int64 field, got declared kind %d", expr.Kind, declared)
+		}
+		return TypeInt64, nil
+
+	case ExprNot:
+		argument, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if argument != TypeBool {
+			return TypeInvalid, fmt.Errorf("not requires bool, got %s", argument)
+		}
+		return TypeBool, nil
+
+	case ExprAll, ExprAny:
 		for i := range expr.Args {
 			argument, err := checkExprInScope(schema, kind, expr.Args[i], in, depth+1)
 			if err != nil {
@@ -140,134 +204,333 @@ func checkExprInScope(
 		}
 		return TypeBool, nil
 
-	default:
-		if in == groupScope {
-			// Everything else reads a bound entity, and in group scope there is none. This is
-			// the no-ambient-scope decision applied one level up: a bare path here would have
-			// to mean "some member", and picking one silently is exactly what slice 1 refused
-			// to let a later change do.
-			return TypeInvalid, fmt.Errorf(
-				"%s reads a single entity and cannot appear in group scope", expr.Kind)
+	case ExprEqual:
+		left, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
 		}
-		return checkExpr(schema, expr, depth)
+		right, err := checkExprInScope(schema, kind, expr.Args[1], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if left != right {
+			return TypeInvalid, fmt.Errorf("equal compares %s with %s", left, right)
+		}
+		return TypeBool, nil
+
+	case ExprLess:
+		left, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		right, err := checkExprInScope(schema, kind, expr.Args[1], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if left != TypeInt64 || right != TypeInt64 {
+			return TypeInvalid, fmt.Errorf("less requires int64 on both sides, got %s and %s", left, right)
+		}
+		return TypeBool, nil
+
+	case ExprAdd:
+		left, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		right, err := checkExprInScope(schema, kind, expr.Args[1], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if left != TypeInt64 || right != TypeInt64 {
+			return TypeInvalid, fmt.Errorf("add requires int64 on both sides, got %s and %s", left, right)
+		}
+		return TypeInt64, nil
+
+	default:
+		return TypeInvalid, fmt.Errorf("unknown expression kind %d", expr.Kind)
 	}
 }
 
 // evaluateGroupExpr evaluates a group-scoped expression over a group's members.
 func evaluateGroupExpr(schema Schema, expr Expr, members []Entity) (bool, error) {
+	result, err := evaluateGroupNode(schema, expr, members, nil)
+	if err != nil {
+		return false, err
+	}
+	if result.kind != TypeBool {
+		return false, fmt.Errorf("expression is %s, not bool", result.kind)
+	}
+	return result.boolean, nil
+}
+
+// evaluateAssignmentValue evaluates an assignment expression for a member within a group.
+func evaluateAssignmentValue(schema Schema, expr Expr, members []Entity, member Entity) (Value, error) {
+	result, err := evaluateGroupNode(schema, expr, members, &member)
+	if err != nil {
+		return Value{}, err
+	}
+	if result.kind == TypeBool {
+		return Value{}, fmt.Errorf("assignment expression is bool, not a value")
+	}
+	if !result.value.Valid() {
+		return Value{}, fmt.Errorf("assignment expression yielded no value")
+	}
+	return result.value, nil
+}
+
+func evaluateGroupNode(
+	schema Schema, expr Expr, members []Entity, boundMember *Entity,
+) (evaluated, error) {
 	if len(members) == 0 {
-		// A GROUP IS NEVER EMPTY by construction: an accumulator exists because a member was
-		// added to it. Refused rather than answered, because the vacuous answer is the
-		// dangerous one -- `evaluateProfileOverState` already returns Ready for an empty
-		// selection, justified by a fixture property that author rulesets will not have, and
-		// this is the same trap one layer down. A quantifier over nothing is not true here;
-		// it is a caller error.
-		return false, fmt.Errorf("group predicate evaluated over an empty group")
+		return evaluated{}, fmt.Errorf("group predicate evaluated over an empty group")
 	}
 	if err := checkOperandShape(expr); err != nil {
-		return false, err
+		return evaluated{}, err
 	}
 
 	switch expr.Kind {
+	case ExprLiteral:
+		if expr.Literal == nil {
+			return evaluated{}, fmt.Errorf("literal carries no value")
+		}
+		kind, err := literalType(*expr.Literal)
+		if err != nil {
+			return evaluated{}, fmt.Errorf("literal: %w", err)
+		}
+		return evaluated{kind: kind, value: *expr.Literal}, nil
+
+	case ExprField:
+		if boundMember == nil {
+			return evaluated{}, fmt.Errorf("field %q reads a single entity and cannot appear in group scope", expr.Field)
+		}
+		return evaluateExpr(schema, expr, *boundMember)
+
+	case ExprExists:
+		if boundMember == nil {
+			return evaluated{}, fmt.Errorf("exists reads a single entity and cannot appear in group scope")
+		}
+		return evaluateExpr(schema, expr, *boundMember)
+
 	case ExprAllMembers:
 		for _, member := range members {
 			held, err := evaluateBool(schema, expr.Args[0], member)
 			if err != nil {
-				return false, err
+				return evaluated{}, err
 			}
 			if !held {
-				return false, nil
+				return evaluated{kind: TypeBool, boolean: false}, nil
 			}
 		}
-		return true, nil
+		return evaluated{kind: TypeBool, boolean: true}, nil
 
 	case ExprAnyMembers:
 		for _, member := range members {
 			held, err := evaluateBool(schema, expr.Args[0], member)
 			if err != nil {
-				return false, err
+				return evaluated{}, err
 			}
 			if held {
-				return true, nil
+				return evaluated{kind: TypeBool, boolean: true}, nil
 			}
 		}
-		return false, nil
+		return evaluated{kind: TypeBool, boolean: false}, nil
 
 	case ExprAllEqual:
-		// Cross-member, so it cannot be a quantifier over a member-scoped predicate.
-		//
-		// Absence is refused rather than treated as a value that can agree or disagree, for
-		// the same reason a member-scoped read refuses it: "all members agree" and "no member
-		// has one" are different claims, and collapsing them would let a group of entities
-		// missing the field entirely pass a check about that field.
-		// The DECLARED kind is required to match every stored value, which the member-scoped
-		// field arm also does and an earlier version here did not. Two members each holding a
-		// string where the schema declares an atom would otherwise compare equal and answer
-		// "the members agree on their atom" from data that is not of the declared type; the
-		// mirror case answers "they disagree" when the truth is a refusal. NewEntity validates
-		// nothing against a schema, and this function takes entities directly.
 		first, declared, present, err := boundField(schema, expr.Field, members[0])
 		if err != nil {
-			return false, err
+			return evaluated{}, err
 		}
 		if !present {
-			return false, fmt.Errorf("all_equal reads %q, absent on a member", expr.Field)
+			return evaluated{}, fmt.Errorf("all_equal reads %q, absent on a member", expr.Field)
 		}
 		for _, member := range members {
 			value, _, present, err := boundField(schema, expr.Field, member)
 			if err != nil {
-				return false, err
+				return evaluated{}, err
 			}
 			if !present {
-				return false, fmt.Errorf("all_equal reads %q, absent on a member", expr.Field)
+				return evaluated{}, fmt.Errorf("all_equal reads %q, absent on a member", expr.Field)
 			}
 			if value.Kind() != declared {
-				return false, fmt.Errorf(
+				return evaluated{}, fmt.Errorf(
 					"all_equal reads %q, which holds kind %d where %d is declared",
 					expr.Field, value.Kind(), declared)
 			}
 			if !value.Equal(first) {
-				return false, nil
+				return evaluated{kind: TypeBool, boolean: false}, nil
 			}
 		}
-		return true, nil
+		return evaluated{kind: TypeBool, boolean: true}, nil
+
+	case ExprCount:
+		count := int64(len(members))
+		return evaluated{kind: TypeInt64, value: NewInt64Value(count)}, nil
+
+	case ExprSum:
+		var sum int64
+		for _, member := range members {
+			value, declared, present, err := boundField(schema, expr.Field, member)
+			if err != nil {
+				return evaluated{}, err
+			}
+			if !present {
+				return evaluated{}, fmt.Errorf("sum reads %q, absent on a member", expr.Field)
+			}
+			if declared != ValueInt64 || value.Kind() != ValueInt64 {
+				return evaluated{}, fmt.Errorf("sum reads %q, which is not an int64", expr.Field)
+			}
+			intVal, ok := value.Int64()
+			if !ok {
+				return evaluated{}, fmt.Errorf("sum reads %q, invalid int64", expr.Field)
+			}
+			next := sum + intVal
+			if (intVal > 0 && next < sum) || (intVal < 0 && next > sum) {
+				return evaluated{}, fmt.Errorf("sum overflows int64")
+			}
+			sum = next
+		}
+		return evaluated{kind: TypeInt64, value: NewInt64Value(sum)}, nil
+
+	case ExprMin:
+		var minVal int64
+		for i, member := range members {
+			value, declared, present, err := boundField(schema, expr.Field, member)
+			if err != nil {
+				return evaluated{}, err
+			}
+			if !present {
+				return evaluated{}, fmt.Errorf("min reads %q, absent on a member", expr.Field)
+			}
+			if declared != ValueInt64 || value.Kind() != ValueInt64 {
+				return evaluated{}, fmt.Errorf("min reads %q, which is not an int64", expr.Field)
+			}
+			intVal, ok := value.Int64()
+			if !ok {
+				return evaluated{}, fmt.Errorf("min reads %q, invalid int64", expr.Field)
+			}
+			if i == 0 || intVal < minVal {
+				minVal = intVal
+			}
+		}
+		return evaluated{kind: TypeInt64, value: NewInt64Value(minVal)}, nil
+
+	case ExprMax:
+		var maxVal int64
+		for i, member := range members {
+			value, declared, present, err := boundField(schema, expr.Field, member)
+			if err != nil {
+				return evaluated{}, err
+			}
+			if !present {
+				return evaluated{}, fmt.Errorf("max reads %q, absent on a member", expr.Field)
+			}
+			if declared != ValueInt64 || value.Kind() != ValueInt64 {
+				return evaluated{}, fmt.Errorf("max reads %q, which is not an int64", expr.Field)
+			}
+			intVal, ok := value.Int64()
+			if !ok {
+				return evaluated{}, fmt.Errorf("max reads %q, invalid int64", expr.Field)
+			}
+			if i == 0 || intVal > maxVal {
+				maxVal = intVal
+			}
+		}
+		return evaluated{kind: TypeInt64, value: NewInt64Value(maxVal)}, nil
 
 	case ExprNot:
-		held, err := evaluateGroupExpr(schema, expr.Args[0], members)
+		op, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
 		if err != nil {
-			return false, err
+			return evaluated{}, err
 		}
-		return !held, nil
+		if op.kind != TypeBool {
+			return evaluated{}, fmt.Errorf("not requires bool, got %s", op.kind)
+		}
+		return evaluated{kind: TypeBool, boolean: !op.boolean}, nil
 
 	case ExprAll:
 		for i := range expr.Args {
-			held, err := evaluateGroupExpr(schema, expr.Args[i], members)
+			op, err := evaluateGroupNode(schema, expr.Args[i], members, boundMember)
 			if err != nil {
-				return false, err
+				return evaluated{}, err
 			}
-			if !held {
-				return false, nil
+			if op.kind != TypeBool {
+				return evaluated{}, fmt.Errorf("boolean composition requires bool, argument %d is %s", i, op.kind)
+			}
+			if !op.boolean {
+				return evaluated{kind: TypeBool, boolean: false}, nil
 			}
 		}
-		return true, nil
+		return evaluated{kind: TypeBool, boolean: true}, nil
 
 	case ExprAny:
 		for i := range expr.Args {
-			held, err := evaluateGroupExpr(schema, expr.Args[i], members)
+			op, err := evaluateGroupNode(schema, expr.Args[i], members, boundMember)
 			if err != nil {
-				return false, err
+				return evaluated{}, err
 			}
-			if held {
-				return true, nil
+			if op.kind != TypeBool {
+				return evaluated{}, fmt.Errorf("boolean composition requires bool, argument %d is %s", i, op.kind)
+			}
+			if op.boolean {
+				return evaluated{kind: TypeBool, boolean: true}, nil
 			}
 		}
-		return false, nil
+		return evaluated{kind: TypeBool, boolean: false}, nil
+
+	case ExprEqual:
+		left, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		right, err := evaluateGroupNode(schema, expr.Args[1], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind != right.kind {
+			return evaluated{}, fmt.Errorf("equal compares %s with %s", left.kind, right.kind)
+		}
+		if left.kind == TypeBool {
+			return evaluated{kind: TypeBool, boolean: left.boolean == right.boolean}, nil
+		}
+		return evaluated{kind: TypeBool, boolean: left.value.Equal(right.value)}, nil
+
+	case ExprLess:
+		left, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		right, err := evaluateGroupNode(schema, expr.Args[1], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		leftInt, leftOK := left.value.Int64()
+		rightInt, rightOK := right.value.Int64()
+		if left.kind != TypeInt64 || right.kind != TypeInt64 || !leftOK || !rightOK {
+			return evaluated{}, fmt.Errorf("less requires int64, got %s and %s", left.kind, right.kind)
+		}
+		return evaluated{kind: TypeBool, boolean: leftInt < rightInt}, nil
+
+	case ExprAdd:
+		left, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		right, err := evaluateGroupNode(schema, expr.Args[1], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		leftInt, leftOK := left.value.Int64()
+		rightInt, rightOK := right.value.Int64()
+		if left.kind != TypeInt64 || right.kind != TypeInt64 || !leftOK || !rightOK {
+			return evaluated{}, fmt.Errorf("add requires int64, got %s and %s", left.kind, right.kind)
+		}
+		sum := leftInt + rightInt
+		if (rightInt > 0 && sum < leftInt) || (rightInt < 0 && sum > leftInt) {
+			return evaluated{}, fmt.Errorf("add overflows int64")
+		}
+		return evaluated{kind: TypeInt64, value: NewInt64Value(sum)}, nil
 
 	default:
-		// Reached only by an un-compiled tree; a checked one cannot carry a member-reading
-		// node here. Refused rather than delegated to the member evaluator, which would have
-		// to pick a member.
-		return false, fmt.Errorf(
-			"%s reads a single entity and cannot be evaluated over a group", expr.Kind)
+		return evaluated{}, fmt.Errorf("unknown expression kind %d", expr.Kind)
 	}
 }

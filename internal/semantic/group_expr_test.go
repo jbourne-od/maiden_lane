@@ -621,3 +621,176 @@ func TestGroupQuantifiersShortCircuitOverMembers(t *testing.T) {
 		t.Fatal("a member whose predicate cannot be evaluated was skipped rather than refused")
 	}
 }
+
+func countExpr() Expr             { return Expr{Kind: ExprCount} }
+func sumExpr(path FieldPath) Expr { return Expr{Kind: ExprSum, Field: path} }
+func minExpr(path FieldPath) Expr { return Expr{Kind: ExprMin, Field: path} }
+func maxExpr(path FieldPath) Expr { return Expr{Kind: ExprMax, Field: path} }
+
+func TestGroupReductionsTypeChecking(t *testing.T) {
+	schema := expressionSchema(t)
+
+	// Valid in group scope.
+	for _, test := range []struct {
+		name string
+		expr Expr
+		want ExprType
+	}{
+		{"count", countExpr(), TypeInt64},
+		{"sum of int field", sumExpr("driver.hos_elapsed_hours"), TypeInt64},
+		{"min of int field", minExpr("driver.hos_elapsed_hours"), TypeInt64},
+		{"max of int field", maxExpr("driver.hos_elapsed_hours"), TypeInt64},
+		{"equal count with int literal", Expr{Kind: ExprEqual, Args: []Expr{countExpr(), intLiteral(2)}}, TypeBool},
+		{"less sum with int literal", Expr{Kind: ExprLess, Args: []Expr{sumExpr("driver.hos_elapsed_hours"), intLiteral(40)}}, TypeBool},
+		{"less max with int literal", Expr{Kind: ExprLess, Args: []Expr{maxExpr("driver.hos_elapsed_hours"), intLiteral(14)}}, TypeBool},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := checkGroupExpr(schema, "driver", test.expr, 0)
+			if err != nil {
+				t.Fatalf("checkGroupExpr: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("checkGroupExpr = %v, want %v", got, test.want)
+			}
+		})
+	}
+
+	// Refused in group scope.
+	for _, test := range []struct {
+		name    string
+		kind    EntityKind
+		expr    Expr
+		wantErr string
+	}{
+		{"sum of string field", "driver", sumExpr("driver.assignment_key"), "requires int64"},
+		{"sum of atom field", "driver", sumExpr("driver.hos_anchor"), "requires int64"},
+		{"sum of undeclared field", "driver", sumExpr("driver.nonexistent"), "undeclared"},
+		{"sum of other entity kind", "driver", sumExpr("team.hos_elapsed_hours"), "does not name the bound entity kind"},
+		{"min of string field", "driver", minExpr("driver.assignment_key"), "requires int64"},
+		{"max of atom field", "driver", maxExpr("driver.hos_anchor"), "requires int64"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := checkGroupExpr(schema, test.kind, test.expr, 0)
+			if err == nil {
+				t.Fatalf("checkGroupExpr(%s) succeeded, want error", test.name)
+			}
+		})
+	}
+
+	// Reductions are refused in member scope.
+	for _, expr := range []Expr{
+		countExpr(),
+		sumExpr("driver.hos_elapsed_hours"),
+		minExpr("driver.hos_elapsed_hours"),
+		maxExpr("driver.hos_elapsed_hours"),
+	} {
+		if _, err := checkExpr(schema, expr, 0); err == nil {
+			t.Fatalf("checkExpr in member scope accepted reduction %s", expr.Kind)
+		}
+	}
+}
+
+func TestGroupReductionsEvaluation(t *testing.T) {
+	schema := expressionSchema(t)
+	twoMembers := groupMembers(t, []string{"T0", "T0"}, []int64{10, 12})
+	threeMembers := groupMembers(t, []string{"T0", "T0", "T0"}, []int64{5, 14, 8})
+
+	// Guard evaluation using group reductions.
+	for _, test := range []struct {
+		name    string
+		expr    Expr
+		members []Entity
+		want    bool
+	}{
+		{
+			name:    "count equals 2 holds",
+			expr:    Expr{Kind: ExprEqual, Args: []Expr{countExpr(), intLiteral(2)}},
+			members: twoMembers, want: true,
+		},
+		{
+			name:    "count equals 2 fails on 3 members",
+			expr:    Expr{Kind: ExprEqual, Args: []Expr{countExpr(), intLiteral(2)}},
+			members: threeMembers, want: false,
+		},
+		{
+			name:    "sum below 25 holds",
+			expr:    Expr{Kind: ExprLess, Args: []Expr{sumExpr("driver.hos_elapsed_hours"), intLiteral(25)}},
+			members: twoMembers, want: true, // 10 + 12 = 22 < 25
+		},
+		{
+			name:    "sum below 25 fails on 3 members",
+			expr:    Expr{Kind: ExprLess, Args: []Expr{sumExpr("driver.hos_elapsed_hours"), intLiteral(25)}},
+			members: threeMembers, want: false, // 5 + 14 + 8 = 27 < 25 is false
+		},
+		{
+			name:    "max below 14 holds for 2 members",
+			expr:    Expr{Kind: ExprLess, Args: []Expr{maxExpr("driver.hos_elapsed_hours"), intLiteral(14)}},
+			members: twoMembers, want: true, // max(10, 12) = 12 < 14
+		},
+		{
+			name:    "max below 14 fails when member has 14",
+			expr:    Expr{Kind: ExprLess, Args: []Expr{maxExpr("driver.hos_elapsed_hours"), intLiteral(14)}},
+			members: threeMembers, want: false, // max(5, 14, 8) = 14 < 14 is false
+		},
+		{
+			name:    "min is at least 5",
+			expr:    Expr{Kind: ExprNot, Args: []Expr{{Kind: ExprLess, Args: []Expr{minExpr("driver.hos_elapsed_hours"), intLiteral(5)}}}},
+			members: threeMembers, want: true, // min(5, 14, 8) = 5, not less than 5 is true
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := evaluateGroupExpr(schema, test.expr, test.members)
+			if err != nil {
+				t.Fatalf("evaluateGroupExpr: %v", err)
+			}
+			if got != test.want {
+				t.Fatalf("evaluateGroupExpr = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestGroupReductionsRefuseMissingFields(t *testing.T) {
+	schema := expressionSchema(t)
+	sparse := groupMembers(t, []string{"T0", ""}, []int64{10, 12})
+	// Driver without hos_elapsed_hours
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "group")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+	missingHours, err := NewEntity(
+		EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "no_hours")},
+		map[FieldName]Value{"assignment_key": mustString(t, "x")})
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+	groupWithMissing := []Entity{sparse[0], missingHours}
+
+	for _, expr := range []Expr{
+		Expr{Kind: ExprLess, Args: []Expr{sumExpr("driver.hos_elapsed_hours"), intLiteral(50)}},
+		Expr{Kind: ExprLess, Args: []Expr{minExpr("driver.hos_elapsed_hours"), intLiteral(50)}},
+		Expr{Kind: ExprLess, Args: []Expr{maxExpr("driver.hos_elapsed_hours"), intLiteral(50)}},
+	} {
+		if _, err := evaluateGroupExpr(schema, expr, groupWithMissing); err == nil {
+			t.Fatalf("evaluateGroupExpr accepted missing field in %s", expr.Args[0].Kind)
+		}
+	}
+}
+
+func TestGroupSumRefusesOverflow(t *testing.T) {
+	schema := expressionSchema(t)
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "group")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+	e1, _ := NewEntity(EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "d1")},
+		map[FieldName]Value{"hos_elapsed_hours": NewInt64Value(1 << 62)})
+	e2, _ := NewEntity(EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "d2")},
+		map[FieldName]Value{"hos_elapsed_hours": NewInt64Value(1 << 62)})
+	overflowGroup := []Entity{e1, e2}
+
+	guard := Expr{Kind: ExprLess, Args: []Expr{sumExpr("driver.hos_elapsed_hours"), intLiteral(100)}}
+	if _, err := evaluateGroupExpr(schema, guard, overflowGroup); err == nil {
+		t.Fatal("evaluateGroupExpr sum did not refuse int64 overflow")
+	}
+}

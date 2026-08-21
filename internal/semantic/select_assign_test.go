@@ -611,6 +611,14 @@ func TestGroupExpressionCanonicalEncodingIsPinned(t *testing.T) {
 			want: "0b" + oneArg + existsTag + pathLen + path},
 		{name: "all_equal", expr: Expr{Kind: ExprAllEqual, Field: "driver.depot"},
 			want: "0c" + pathLen + path},
+		{name: "count", expr: Expr{Kind: ExprCount},
+			want: "0d"},
+		{name: "sum", expr: Expr{Kind: ExprSum, Field: "driver.depot"},
+			want: "0e" + pathLen + path},
+		{name: "min", expr: Expr{Kind: ExprMin, Field: "driver.depot"},
+			want: "0f" + pathLen + path},
+		{name: "max", expr: Expr{Kind: ExprMax, Field: "driver.depot"},
+			want: "10" + pathLen + path},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -625,14 +633,128 @@ func TestGroupExpressionCanonicalEncodingIsPinned(t *testing.T) {
 			}
 		})
 	}
-	// The kind byte is what separates the two shapes that encode identically otherwise.
-	var members, equal canonicalEncoder
-	encodeExpr(&members, Expr{Kind: ExprAnyMembers, Args: []Expr{inner}})
-	encodeExpr(&equal, Expr{Kind: ExprAllMembers, Args: []Expr{inner}})
-	first, _ := members.bytes()
-	second, _ := equal.bytes()
-	if bytes.Equal(first, second) {
-		t.Fatal("all_members and any_members encode identically")
+	// The kind byte is what separates the four field-carrying kinds that encode identically otherwise.
+	var allEq, sumEnc, minEnc, maxEnc canonicalEncoder
+	encodeExpr(&allEq, Expr{Kind: ExprAllEqual, Field: "driver.depot"})
+	encodeExpr(&sumEnc, Expr{Kind: ExprSum, Field: "driver.depot"})
+	encodeExpr(&minEnc, Expr{Kind: ExprMin, Field: "driver.depot"})
+	encodeExpr(&maxEnc, Expr{Kind: ExprMax, Field: "driver.depot"})
+	b1, _ := allEq.bytes()
+	b2, _ := sumEnc.bytes()
+	b3, _ := minEnc.bytes()
+	b4, _ := maxEnc.bytes()
+	if bytes.Equal(b1, b2) || bytes.Equal(b2, b3) || bytes.Equal(b3, b4) || bytes.Equal(b1, b3) || bytes.Equal(b1, b4) || bytes.Equal(b2, b4) {
+		t.Fatal("field-carrying group kinds encode with collisions")
+	}
+}
+
+func TestSelectAssignWithGroupReductions(t *testing.T) {
+	schema, err := NewSchema([]EntityDeclaration{{
+		Kind: "driver",
+		Fields: []FieldDeclaration{
+			{Name: "depot", Kind: ValueString},
+			{Name: "driving_hours", Kind: ValueInt64},
+			{Name: "team_max_hours", Kind: ValueInt64},
+			{Name: "team_total_hours", Kind: ValueInt64},
+			{Name: "team_size", Kind: ValueInt64},
+		},
+	}}, nil)
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+
+	groupBy := fieldExpr("driver.depot")
+	rule := TransformationDeclaration{
+		ID:       "certify_team_hours.v1",
+		Operator: OperatorSelectAndAssign,
+		DeclaredReads: []FieldPath{
+			"driver.depot", "driver.driving_hours",
+		},
+		DeclaredWrites: []FieldPath{
+			"driver.team_max_hours", "driver.team_size", "driver.team_total_hours",
+		},
+		SelectAssign: &SelectAssignDeclaration{
+			Selector: Selector{
+				Kind:    "driver",
+				GroupBy: &groupBy,
+				Members: Cardinality{Kind: CardinalityExactly, Count: 2},
+			},
+			Guard: Expr{Kind: ExprAll, Args: []Expr{
+				{Kind: ExprLess, Args: []Expr{maxExpr("driver.driving_hours"), intLiteral(14)}},
+				{Kind: ExprEqual, Args: []Expr{countExpr(), intLiteral(2)}},
+			}},
+			Assignments: []FieldAssignment{
+				{Target: "driver.team_max_hours", Value: maxExpr("driver.driving_hours")},
+				{Target: "driver.team_total_hours", Value: sumExpr("driver.driving_hours")},
+				{Target: "driver.team_size", Value: countExpr()},
+			},
+		},
+	}
+
+	compilation, err := Compile(CompileRequest{
+		Schema:                   schema.Declaration(),
+		CompilerSemanticsVersion: testCompilerVersion,
+		Rules: RulesetDeclaration{
+			Transformations: []TransformationDeclaration{rule},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	plan, ok := compilation.Plan()
+	if !ok {
+		t.Fatalf("plan rejected: %+v", compilationDiagnostics(t, compilation))
+	}
+
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "reductions")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+
+	// Depot D1 (qualifies): hours 10, 12 -> max 12 < 14, sum 22, count 2.
+	d1a, _ := NewEntity(EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "d1a")},
+		map[FieldName]Value{"depot": mustString(t, "D1"), "driving_hours": NewInt64Value(10)})
+	d1b, _ := NewEntity(EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "d1b")},
+		map[FieldName]Value{"depot": mustString(t, "D1"), "driving_hours": NewInt64Value(12)})
+
+	// Depot D2 (disqualifies on guard): hours 10, 15 -> max 15 >= 14.
+	d2a, _ := NewEntity(EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "d2a")},
+		map[FieldName]Value{"depot": mustString(t, "D2"), "driving_hours": NewInt64Value(10)})
+	d2b, _ := NewEntity(EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "d2b")},
+		map[FieldName]Value{"depot": mustString(t, "D2"), "driving_hours": NewInt64Value(15)})
+
+	state, err := NewState(schema, lineage, []Entity{d1a, d1b, d2a, d2b}, nil)
+	if err != nil {
+		t.Fatalf("NewState: %v", err)
+	}
+
+	outcome, err := ExecuteTransition(selectAssignBinding(t, plan, state), "certify_team_hours.v1", state, Journal{})
+	if err != nil {
+		t.Fatalf("ExecuteTransition: %v", err)
+	}
+
+	// Verify D1 members received assignments.
+	resD1a, ok := outcome.State().Entity(d1a.Ref())
+	if !ok {
+		t.Fatal("d1a missing in final state")
+	}
+	if v, _ := resD1a.Field("team_max_hours"); v != NewInt64Value(12) {
+		t.Fatalf("d1a team_max_hours = %v, want 12", v)
+	}
+	if v, _ := resD1a.Field("team_total_hours"); v != NewInt64Value(22) {
+		t.Fatalf("d1a team_total_hours = %v, want 22", v)
+	}
+	if v, _ := resD1a.Field("team_size"); v != NewInt64Value(2) {
+		t.Fatalf("d1a team_size = %v, want 2", v)
+	}
+
+	// Verify D2 members did not receive updates.
+	resD2a, ok := outcome.State().Entity(d2a.Ref())
+	if !ok {
+		t.Fatal("d2a missing in final state")
+	}
+	if _, present := resD2a.Field("team_max_hours"); present {
+		t.Fatal("d2a was updated despite failing guard")
 	}
 }
 
