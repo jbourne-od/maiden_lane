@@ -209,9 +209,9 @@ func readFieldPaths(expr Expr) []FieldPath {
 	var walk func(Expr)
 	walk = func(node Expr) {
 		switch node.Kind {
-		case ExprField, ExprExists, ExprAllEqual:
-			// ExprAllEqual carries a Field and no Args, so without naming it here the walk
-			// falls to default, iterates zero children, and silently contributes nothing --
+		case ExprField, ExprExists, ExprAllEqual, ExprSum, ExprMin, ExprMax:
+			// ExprAllEqual and reductions carry a Field and no Args, so without naming them here
+			// the walk falls to default, iterates zero children, and silently contributes nothing --
 			// a third walker over the vocabulary that a new field-carrying kind must reach.
 			paths = append(paths, node.Field)
 		default:

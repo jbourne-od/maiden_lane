@@ -159,12 +159,16 @@ const (
 	ExprKindAllMembers ExprKind = "all_members"
 	ExprKindAny        ExprKind = "any"
 	ExprKindAnyMembers ExprKind = "any_members"
+	ExprKindCount      ExprKind = "count"
 	ExprKindEqual      ExprKind = "equal"
 	ExprKindExists     ExprKind = "exists"
 	ExprKindField      ExprKind = "field"
 	ExprKindLess       ExprKind = "less"
 	ExprKindLiteral    ExprKind = "literal"
+	ExprKindMax        ExprKind = "max"
+	ExprKindMin        ExprKind = "min"
 	ExprKindNot        ExprKind = "not"
+	ExprKindSum        ExprKind = "sum"
 )
 
 // Valid indicates whether the value is a known member of the ExprKind enum.
@@ -182,6 +186,8 @@ func (e ExprKind) Valid() bool {
 		return true
 	case ExprKindAnyMembers:
 		return true
+	case ExprKindCount:
+		return true
 	case ExprKindEqual:
 		return true
 	case ExprKindExists:
@@ -192,7 +198,13 @@ func (e ExprKind) Valid() bool {
 		return true
 	case ExprKindLiteral:
 		return true
+	case ExprKindMax:
+		return true
+	case ExprKindMin:
+		return true
 	case ExprKindNot:
+		return true
+	case ExprKindSum:
 		return true
 	default:
 		return false

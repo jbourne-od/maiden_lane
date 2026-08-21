@@ -91,9 +91,9 @@ func executeSelectAndAssign(
 		for _, member := range members {
 			updates := make([]FieldUpdate, 0, len(payload.Assignments))
 			for _, assignment := range payload.Assignments {
-				value, valueErr := evaluateValue(schema, assignment.Value, member)
+				value, valueErr := evaluateAssignmentValue(schema, assignment.Value, members, member)
 				if valueErr != nil {
-					sources := memberFacts([]Entity{member}, fieldNames(readFieldPaths(assignment.Value)))
+					sources := memberFacts(members, fieldNames(readFieldPaths(assignment.Value)))
 					return rejectInvariantAtKey(binding, declaration.ID, state, journal, transformation.invariants,
 						SelectionExpressionUnavailable, invariantKey(declaration.ID, groupEvaluableSuffix),
 						[]EntityRef{member.Ref()}, canonicalFactRefs(append(facts, sources...)), nil)

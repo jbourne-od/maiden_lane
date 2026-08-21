@@ -31,6 +31,10 @@ var exprKindFromToken = map[openapiv1.ExprKind]semantic.ExprKind{
 	openapiv1.ExprKindAllMembers: semantic.ExprAllMembers,
 	openapiv1.ExprKindAnyMembers: semantic.ExprAnyMembers,
 	openapiv1.ExprKindAllEqual:   semantic.ExprAllEqual,
+	openapiv1.ExprKindCount:      semantic.ExprCount,
+	openapiv1.ExprKindSum:        semantic.ExprSum,
+	openapiv1.ExprKindMin:        semantic.ExprMin,
+	openapiv1.ExprKindMax:        semantic.ExprMax,
 }
 
 // exprKindToToken is derived from the inbound map rather than written twice.

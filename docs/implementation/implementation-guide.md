@@ -21,17 +21,20 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
 - GitHub Actions verification and ECR image publication.
 - A pure, standard-library semantic kernel with immutable typed schemas,
   values, entity-graph states, pinned worlds, and canonical content identities.
-- Deterministic compilation of the walking skeleton's two closed
-  transformation declarations, checkpoint boundaries, invariant obligations,
-  and completeness-profile declarations.
+- Deterministic compilation and execution of the closed rule language:
+  selectors, member expressions, group predicates (`all_members`, `any_members`,
+  `all_equal`), group reductions (`count`, `sum`, `min`, `max`), assignments,
+  checkpoint boundaries, invariant obligations, and completeness-profile
+  declarations.
 - An immutable, schema-bound, content-addressed atomic patch subset containing
   exactly `Insert`, `Relate`, and `Update`, with closed operation failures,
   explicit update before-images, success-only accepted-application receipts,
   and receipt-authorized verified inverse application.
-- A deterministic reference executor for the compiled walking-skeleton plan,
-  including verified run binding, the closed related-entity and related-field
-  aggregate operators, compiler-derived protected invariant results, typed
-  semantic failure reports, and immutable accepted-only journals.
+- A deterministic reference executor for the compiled plan, including verified
+  run binding, authorable select-and-assign transformations with group reductions,
+  the closed related-entity and related-field aggregate operators, compiler-derived
+  protected invariant results, typed semantic failure reports, and immutable
+  accepted-only journals.
 - Versioned identities for provenance policy, semantic input/run/execution,
   synthetic entities, accepted journal entries and prefixes, invariant-result
   sets, and protected/integrity failure reports. Executor build identity affects

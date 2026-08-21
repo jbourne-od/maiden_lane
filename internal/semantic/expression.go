@@ -48,6 +48,13 @@ const (
 	ExprAllMembers
 	ExprAnyMembers
 	ExprAllEqual
+
+	// GROUP-SCOPED REDUCTIONS, also appended. They reduce fields across group members or count
+	// group cardinality, producing an int64 Value.
+	ExprCount
+	ExprSum
+	ExprMin
+	ExprMax
 )
 
 // AllExprKinds is the complete v1 node vocabulary, in kind-byte order.
@@ -61,6 +68,7 @@ func AllExprKinds() []ExprKind {
 	return []ExprKind{
 		ExprLiteral, ExprField, ExprExists, ExprNot, ExprAll, ExprAny,
 		ExprEqual, ExprLess, ExprAdd, ExprAllMembers, ExprAnyMembers, ExprAllEqual,
+		ExprCount, ExprSum, ExprMin, ExprMax,
 	}
 }
 
@@ -97,6 +105,14 @@ func (k ExprKind) String() string {
 		return "any_members"
 	case ExprAllEqual:
 		return "all_equal"
+	case ExprCount:
+		return "count"
+	case ExprSum:
+		return "sum"
+	case ExprMin:
+		return "min"
+	case ExprMax:
+		return "max"
 	default:
 		return fmt.Sprintf("kind(%d)", uint8(k))
 	}
@@ -326,12 +342,12 @@ func checkExpr(schema Schema, expr Expr, depth int) (ExprType, error) {
 		}
 		return TypeInt64, nil
 
-	case ExprAllMembers, ExprAnyMembers, ExprAllEqual:
-		// checkExpr is the MEMBER-scope checker. A group predicate reaching it means the
-		// expression was checked in the wrong scope, which is refused rather than delegated:
+	case ExprAllMembers, ExprAnyMembers, ExprAllEqual, ExprCount, ExprSum, ExprMin, ExprMax:
+		// checkExpr is the MEMBER-scope checker. A group predicate or reduction reaching it
+		// means the expression was checked in the wrong scope, which is refused rather than delegated:
 		// answering it here would require picking a member.
 		return TypeInvalid, fmt.Errorf(
-			"%s is a group predicate and cannot appear in member scope", expr.Kind)
+			"%s is a group expression and cannot appear in member scope", expr.Kind)
 
 	default:
 		return TypeInvalid, fmt.Errorf("unknown expression kind %d", expr.Kind)
@@ -381,8 +397,10 @@ func checkOperandShape(expr Expr) error {
 		wantArgs = 2
 	case ExprAllMembers, ExprAnyMembers:
 		wantArgs = 1
-	case ExprAllEqual:
+	case ExprAllEqual, ExprSum, ExprMin, ExprMax:
 		wantField = true
+	case ExprCount:
+		// Group cardinality takes no arguments, field, or literal.
 	default:
 		return fmt.Errorf("unknown expression kind %d", expr.Kind)
 	}
@@ -499,10 +517,12 @@ func encodeExpr(encoder *canonicalEncoder, expr Expr) {
 	switch expr.Kind {
 	case ExprLiteral:
 		encoder.value(*expr.Literal)
-	case ExprField, ExprExists, ExprAllEqual:
-		// ExprAllEqual encodes exactly as the other field-carrying kinds: the kind byte is
-		// what separates them, which is the scheme the golden vectors pin.
+	case ExprField, ExprExists, ExprAllEqual, ExprSum, ExprMin, ExprMax:
+		// ExprAllEqual and reductions encode exactly as the other field-carrying kinds:
+		// the kind byte is what separates them, which is the scheme the golden vectors pin.
 		encoder.string(string(expr.Field))
+	case ExprCount:
+		// Takes no operands beyond its kind byte.
 	case ExprNot, ExprAll, ExprAny, ExprEqual, ExprLess, ExprAdd, ExprAllMembers, ExprAnyMembers:
 		encoder.uint64(uint64(len(expr.Args)))
 		for i := range expr.Args {

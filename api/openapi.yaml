@@ -484,6 +484,10 @@ components:
         - all_members
         - any_members
         - all_equal
+        - count
+        - sum
+        - min
+        - max
 
     Expr:
       type: object

@@ -225,3 +225,86 @@ func TestAuthoredSelectorRuleReadsBackUnchanged(t *testing.T) {
 			recreated.PlanID, created.PlanID)
 	}
 }
+
+func TestGroupReductionRuleIsAuthorableAndRunnableOverHTTP(t *testing.T) {
+	fixture := newExecutionFixture(t)
+	groupBy := wireField("driver.depot")
+	count := int64(1)
+
+	declarations := openapiv1.PlanDeclarations{
+		CompilerSemanticsVersion: "semantics.v1",
+		Schema:                   depotSchema(),
+		Rules: openapiv1.RulesetDeclaration{
+			Transformations: []openapiv1.TransformationDeclaration{{
+				Id:       "certify_team_reductions.v1",
+				Operator: openapiv1.TransformationDeclarationOperatorSelectAndAssign,
+				DeclaredReads: &[]string{
+					"driver.depot", "driver.driving_hours",
+				},
+				DeclaredWrites: &[]string{"driver.shift_total", "driver.status"},
+				SelectAssign: &openapiv1.SelectAndAssign{
+					Selector: openapiv1.Selector{
+						Kind:    "driver",
+						GroupBy: &groupBy,
+						Members: openapiv1.Cardinality{Kind: openapiv1.CardinalityKindAtLeast, Count: &count},
+					},
+					Guard: openapiv1.Expr{Kind: openapiv1.ExprKindAll, Args: &[]openapiv1.Expr{
+						{Kind: openapiv1.ExprKindLess, Args: &[]openapiv1.Expr{
+							{Kind: openapiv1.ExprKindMax, Field: stringPtr("driver.driving_hours")},
+							wireInt(14),
+						}},
+						{Kind: openapiv1.ExprKindEqual, Args: &[]openapiv1.Expr{
+							{Kind: openapiv1.ExprKindCount},
+							wireInt(2),
+						}},
+					}},
+					Assignments: []openapiv1.FieldAssignment{{
+						Target: "driver.shift_total",
+						Value:  openapiv1.Expr{Kind: openapiv1.ExprKindSum, Field: stringPtr("driver.driving_hours")},
+					}, {
+						Target: "driver.status",
+						Value:  wireString(t, "certified_team"),
+					}},
+				},
+			}},
+		},
+	}
+
+	created := createPlan(t, fixture.router, "acme", declarations)
+	if created.PlanID == "" {
+		t.Fatal("plan creation yielded an empty PlanID")
+	}
+
+	accepted := acceptExecution(t, fixture.router, "acme", depotExecutionRequest(created.PlanID))
+	fixture.drain(t)
+	execution := getExecution(t, fixture.router, "acme", accepted.ExecutionID)
+	if execution.ExecutionStatus != openapiv1.ExecutionStatusSucceeded {
+		t.Fatalf("status = %s, want succeeded", execution.ExecutionStatus)
+	}
+	if execution.Result == nil || execution.Result.Failure != nil {
+		t.Fatalf("run failed: %+v", execution.Result)
+	}
+
+	// Verify plan round-trips through GetPlan.
+	recorder := get(t, fixture.router, "/v1/plans/"+string(created.PlanID), "acme")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GetPlan: %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var read openapiv1.Plan
+	decodeBody(t, recorder, &read)
+	if read.Declarations == nil {
+		t.Fatal("the stored plan reads back with no declarations")
+	}
+	returned := read.Declarations.Rules.Transformations
+	if len(returned) != 1 {
+		t.Fatalf("plan holds %d transformations, want 1", len(returned))
+	}
+	recreated := createPlan(t, fixture.router, "acme", openapiv1.PlanDeclarations{
+		CompilerSemanticsVersion: "semantics.v1",
+		Schema:                   depotSchema(),
+		Rules:                    openapiv1.RulesetDeclaration{Transformations: returned},
+	})
+	if recreated.PlanID != created.PlanID {
+		t.Fatalf("projected reduction plan recompiled to %s, want %s", recreated.PlanID, created.PlanID)
+	}
+}

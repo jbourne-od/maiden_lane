@@ -39,6 +39,10 @@ func exemplarExprs(t *testing.T) map[semantic.ExprKind]semantic.Expr {
 		semantic.ExprAllMembers: {Kind: semantic.ExprAllMembers, Args: []semantic.Expr{exists}},
 		semantic.ExprAnyMembers: {Kind: semantic.ExprAnyMembers, Args: []semantic.Expr{exists}},
 		semantic.ExprAllEqual:   {Kind: semantic.ExprAllEqual, Field: "driver.depot"},
+		semantic.ExprCount:      {Kind: semantic.ExprCount},
+		semantic.ExprSum:        {Kind: semantic.ExprSum, Field: "driver.violations"},
+		semantic.ExprMin:        {Kind: semantic.ExprMin, Field: "driver.violations"},
+		semantic.ExprMax:        {Kind: semantic.ExprMax, Field: "driver.violations"},
 	}
 }
 
