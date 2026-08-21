@@ -196,6 +196,7 @@ func TranspileInsertEntity(
 
 	var selectQuery string
 	var newEntitiesAssignmentsSQL strings.Builder
+	var progenitorExpr string
 
 	if decl.Selector.GroupBy != nil {
 		gCtx := ctx
@@ -244,8 +245,12 @@ func TranspileInsertEntity(
     (%s) AS _ml_group_key,
     (%s) AS _ml_discriminator,
     (%s) AS _ml_guard_passed,
-    ROW_NUMBER() OVER (PARTITION BY (%s) ORDER BY s."id") AS _ml_row_num%s
-FROM %s s %s`, gk, discExpr, guardExpr, gk, windowedAssignmentsSQL.String(), prevSourceTable, whereClause)
+    ROW_NUMBER() OVER (PARTITION BY (%s) ORDER BY s."id") AS _ml_row_num,
+    COUNT(*) OVER (PARTITION BY (%s)) AS _ml_progenitor_count,
+    STRING_AGG(SUBSTRING(s."id" FROM 8), '' ORDER BY s."id") OVER (PARTITION BY (%s)) AS _ml_progenitor_hex%s
+FROM %s s %s`, gk, discExpr, guardExpr, gk, gk, gk, windowedAssignmentsSQL.String(), prevSourceTable, whereClause)
+
+		progenitorExpr = `decode(LPAD(TO_HEX(src."_ml_progenitor_count"), 16, '0'), 'hex') || decode(src."_ml_progenitor_hex", 'hex')`
 
 	} else {
 		guardCtx.GroupPartitionClause = "PARTITION BY (s.\"id\")"
@@ -278,13 +283,14 @@ FROM %s s %s`, discExpr, guardExpr, prevSourceTable, whereClause)
 			}
 			fmt.Fprintf(&newEntitiesAssignmentsSQL, ",\n    (%s) AS %s", valExpr, col)
 		}
+
+		progenitorExpr = `'\x0000000000000001'::bytea || decode(SUBSTRING(src."id" FROM 8), 'hex')`
 	}
 
 	ctes = append(ctes, NamedCTE{Name: selectCTEName, Query: selectQuery})
 
 	// 2. Synthesize new entities with canonical content-addressed identity
 	newEntitiesCTEName := fmt.Sprintf("%s_new_entities", stepName)
-	progenitorExpr := `'\x0000000000000001'::bytea || decode(SUBSTRING(src."id" FROM 8), 'hex')`
 	idHashExpr := d.SyntheticEntityID(targetKind, string(ruleID), `src."lineage_id"`, progenitorExpr, `src."_ml_discriminator"`)
 
 	var whereFilter string
@@ -629,7 +635,7 @@ FROM %s s %s`, groupKeyExpr, discExpr, guardExpr, prevSourceTable, whereClause)
 		fmt.Fprintf(&assignmentsSQL, ",\n    (%s) AS %s", valExpr, col)
 	}
 
-	progenitorExpr := `decode(LPAD(TO_HEX(COUNT(*)), 16, '0'), 'hex') || STRING_AGG(decode(SUBSTRING(grp."id" FROM 8), 'hex'), '' ORDER BY grp."id")`
+	progenitorExpr := `decode(LPAD(TO_HEX(COUNT(*)), 16, '0'), 'hex') || decode(STRING_AGG(SUBSTRING(grp."id" FROM 8), '' ORDER BY grp."id"), 'hex')`
 	idHashExpr := d.SyntheticEntityID(targetKind, string(ruleID), `MAX(grp."lineage_id")`, progenitorExpr, `MAX(grp."_ml_discriminator"::text)`)
 
 	mergedQuery := fmt.Sprintf(`SELECT 
@@ -792,7 +798,7 @@ SELECT c.* FROM %s c`, prevTargetTable, splitChildrenCTEName)
 	} else {
 		outTargetQuery := fmt.Sprintf(`SELECT t.* FROM %s t
 UNION ALL
-SELECT c.* FROM %s c`, prevTargetTable, splitChildrenCTEName)
+SELECT m.* FROM %s m`, prevTargetTable, splitChildrenCTEName)
 		ctes = append(ctes, NamedCTE{Name: outTargetCTEName, Query: outTargetQuery})
 		outputTables[targetKind] = outTargetCTEName
 

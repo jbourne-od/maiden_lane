@@ -7,6 +7,8 @@ step_3_create_dynamic_loads_selected AS (
         ('TITAN_LOAD') AS _ml_discriminator,
         ((NOT (COUNT(*) OVER (PARTITION BY (s."customer_id")) < 1))) AS _ml_guard_passed,
         ROW_NUMBER() OVER (PARTITION BY (s."customer_id") ORDER BY s."id") AS _ml_row_num,
+        COUNT(*) OVER (PARTITION BY (s."customer_id")) AS _ml_progenitor_count,
+        STRING_AGG(SUBSTRING(s."id" FROM 8), '' ORDER BY s."id") OVER (PARTITION BY (s."customer_id")) AS _ml_progenitor_hex,
         ('LOAD_TITAN_01') AS "_ml_assign_load_id",
         ('SIAC') AS "_ml_assign_shipper_id",
         ('STANDARD') AS "_ml_assign_freight_class",
@@ -25,7 +27,7 @@ step_3_create_dynamic_loads_new_entities AS (
         || convert_to('dynamic_load', 'UTF8')
         || decode(LPAD(TO_HEX(OCTET_LENGTH('create_dynamic_loads')), 16, '0'), 'hex')
         || convert_to('create_dynamic_loads', 'UTF8')
-        || ('\x0000000000000001'::bytea || decode(SUBSTRING(src."id" FROM 8), 'hex'))
+        || (decode(LPAD(TO_HEX(src."_ml_progenitor_count"), 16, '0'), 'hex') || decode(src."_ml_progenitor_hex", 'hex'))
         || '\x01'::bytea
         || decode(LPAD(TO_HEX(OCTET_LENGTH((src."_ml_discriminator")::text)), 16, '0'), 'hex')
         || convert_to((src."_ml_discriminator")::text, 'UTF8'),

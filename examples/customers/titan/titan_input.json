@@ -88,6 +88,20 @@
       }
     },
     {
+      "kind": "raw_order",
+      "id": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "fields": {
+        "order_id": "0768001",
+        "customer_id": "SIAC",
+        "commodity_id": "WTRHTR",
+        "weight_lbs": 15000,
+        "total_charge_cents": 50000,
+        "bill_distance_miles": 150,
+        "operational_status": "CLIN",
+        "is_hazmat": "false"
+      }
+    },
+    {
       "kind": "raw_driver",
       "id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
       "fields": {
@@ -101,7 +115,7 @@
     },
     {
       "kind": "raw_driver",
-      "id": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "fields": {
         "driver_id": "BUCHERW",
         "home_terminal_zip": "17601",
