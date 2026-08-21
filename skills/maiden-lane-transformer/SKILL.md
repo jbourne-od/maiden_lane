@@ -105,16 +105,13 @@ Maiden Lane provides a unified CLI tool `bin/maiden-lane`:
 
 ### 2.1 Compile & Validate Rules Statically
 ```bash
-bin/maiden-lane compile rules.ml [--schema schema.json] [--out plan.json]
+bin/maiden-lane compile rules.ml [--schema schema.json|schema.ml] [--out plan.json]
 ```
 
 ### 2.2 Execute Against State Fixtures
 ```bash
 # Execute with Reference Go Engine
-bin/maiden-lane run rules.ml
-
-# Execute with Target SQL CTE Engine
-bin/maiden-lane run rules.ml --backend sql
+bin/maiden-lane run rules.ml [--state state.json]
 ```
 
 ### 2.3 Transpile to Target SQL or dbt Project
@@ -128,12 +125,12 @@ bin/maiden-lane transpile dbt rules.ml --out dbt_project/
 
 ### 2.4 Semantic State Diffing
 ```bash
-bin/maiden-lane diff <baseline_state> <candidate_state>
+bin/maiden-lane diff <baseline_state.json> <candidate_state.json>
 ```
 
 ### 2.5 9-Clause Promotion Gate
 ```bash
-bin/maiden-lane gate
+bin/maiden-lane gate [--policy policy.json] [--candidate candidate.json]
 ```
 
 ---
