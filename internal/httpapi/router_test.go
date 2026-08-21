@@ -120,7 +120,10 @@ func TestUnmatchedRoutesStillAnswerAsProblems(t *testing.T) {
 func testDependencies() httpapi.Dependencies {
 	store := memory.NewStore()
 	return httpapi.Dependencies{
-		Plans:      store,
-		Executions: store,
+		Plans:        store,
+		Executions:   store,
+		Policies:     store,
+		Publications: store,
+		Comparisons:  store,
 	}
 }

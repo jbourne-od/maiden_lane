@@ -590,6 +590,55 @@ type CheckpointDeclaration struct {
 	Key   string `json:"key"`
 }
 
+// CheckpointPair One authored correspondence pairing checkpoint keys in two plans.
+type CheckpointPair struct {
+	// Baseline Checkpoint key declared in the baseline plan.
+	Baseline string `json:"baseline"`
+
+	// Candidate Checkpoint key declared in the candidate plan.
+	Candidate string `json:"candidate"`
+}
+
+// Comparison The canonical projection of a stored comparison question.
+type Comparison struct {
+	// BaselineCheckpointID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	BaselineCheckpointID Digest `json:"baselineCheckpointID"`
+
+	// BaselinePlanID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	BaselinePlanID Digest `json:"baselinePlanID"`
+
+	// CandidateCheckpointID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CandidateCheckpointID Digest `json:"candidateCheckpointID"`
+
+	// CandidatePlanID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CandidatePlanID Digest `json:"candidatePlanID"`
+
+	// ComparisonID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	ComparisonID Digest `json:"comparisonID"`
+
+	// CorpusID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CorpusID        Digest                     `json:"corpusID"`
+	Correspondences []ComparisonCorrespondence `json:"correspondences"`
+
+	// PolicyID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	PolicyID Digest `json:"policyID"`
+
+	// ProfileID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	ProfileID Digest `json:"profileID"`
+
+	// WorldID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	WorldID Digest `json:"worldID"`
+}
+
+// ComparisonCorrespondence One derived checkpoint correspondence by identity.
+type ComparisonCorrespondence struct {
+	// Baseline A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	Baseline Digest `json:"baseline"`
+
+	// Candidate A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	Candidate Digest `json:"candidate"`
+}
+
 // CompiledProfile defines model for CompiledProfile.
 type CompiledProfile struct {
 	Key string `json:"key"`
@@ -606,6 +655,33 @@ type CompilerDiagnostic struct {
 
 // CompilerDiagnosticCode A closed compilation diagnostic code.
 type CompilerDiagnosticCode string
+
+// CreateComparisonRequest A request to define and store a comparison contract.
+type CreateComparisonRequest struct {
+	// BaselineCheckpoint The checkpoint key in the baseline plan to compare.
+	BaselineCheckpoint string `json:"baselineCheckpoint"`
+
+	// BaselinePlanID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	BaselinePlanID Digest `json:"baselinePlanID"`
+
+	// CandidateCheckpoint The checkpoint key in the candidate plan to compare.
+	CandidateCheckpoint string `json:"candidateCheckpoint"`
+
+	// CandidatePlanID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CandidatePlanID Digest `json:"candidatePlanID"`
+
+	// CorpusID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CorpusID Digest `json:"corpusID"`
+
+	// Correspondences The complete set of corresponding checkpoint declarations between the two plans.
+	Correspondences []CheckpointPair `json:"correspondences"`
+
+	// ProfileID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	ProfileID Digest `json:"profileID"`
+
+	// WorldID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	WorldID Digest `json:"worldID"`
+}
 
 // CreateExecutionRequest defines model for CreateExecutionRequest.
 type CreateExecutionRequest struct {
@@ -1246,6 +1322,20 @@ type UnprocessableEntity = Problem
 // UnsupportedMediaType An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type UnsupportedMediaType = Problem
 
+// CreateComparisonParams defines parameters for CreateComparison.
+type CreateComparisonParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
+// GetComparisonParams defines parameters for GetComparison.
+type GetComparisonParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
 // CreateExecutionParams defines parameters for CreateExecution.
 type CreateExecutionParams struct {
 	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
@@ -1291,6 +1381,9 @@ type GetPublicationParams struct {
 	// mandatory; an identifier from another tenant is reported as absent.
 	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
 }
+
+// CreateComparisonJSONRequestBody defines body for CreateComparison for application/json ContentType.
+type CreateComparisonJSONRequestBody = CreateComparisonRequest
 
 // CreateExecutionJSONRequestBody defines body for CreateExecution for application/json ContentType.
 type CreateExecutionJSONRequestBody = CreateExecutionRequest
@@ -1384,6 +1477,44 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /readyz (the `GetReadiness` operationId).
 	GetReadiness(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateComparisonWithBody Define and store a comparison contract
+	//
+	// Defines an explicit correspondence between checkpoint declarations of two
+	// compiled plans and identifies the comparison over a pinned world, completeness
+	// profile, and replay corpus.
+	//
+	// Comparison identity is content derived, so submitting identical inputs returns
+	// the same `comparisonID`. Storing the comparison is idempotent.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /v1/comparisons (the `CreateComparison` operationId).
+	CreateComparisonWithBody(ctx context.Context, params *CreateComparisonParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateComparison Define and store a comparison contract
+	//
+	// Defines an explicit correspondence between checkpoint declarations of two
+	// compiled plans and identifies the comparison over a pinned world, completeness
+	// profile, and replay corpus.
+	//
+	// Comparison identity is content derived, so submitting identical inputs returns
+	// the same `comparisonID`. Storing the comparison is idempotent.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /v1/comparisons (the `CreateComparison` operationId).
+	CreateComparison(ctx context.Context, params *CreateComparisonParams, body CreateComparisonJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetComparison Retrieve a comparison contract
+	//
+	// Returns the stored comparison question and its declared correspondences.
+	//
+	// This operation reports the comparison question, never a comparability verdict.
+	// Comparability is verified from fresh re-executions during promotion evaluation.
+	//
+	// Corresponds with GET /v1/comparisons/{comparisonID} (the `GetComparison` operationId).
+	GetComparison(ctx context.Context, comparisonID Digest, params *GetComparisonParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateExecutionWithBody Execute a compiled plan
 	//
@@ -1578,6 +1709,74 @@ func (c *Client) GetHealth(ctx context.Context, reqEditors ...RequestEditorFn) (
 // Corresponds with GET /readyz (the `GetReadiness` operationId).
 func (c *Client) GetReadiness(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetReadinessRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateComparisonWithBody Define and store a comparison contract
+//
+// Defines an explicit correspondence between checkpoint declarations of two
+// compiled plans and identifies the comparison over a pinned world, completeness
+// profile, and replay corpus.
+//
+// Comparison identity is content derived, so submitting identical inputs returns
+// the same `comparisonID`. Storing the comparison is idempotent.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /v1/comparisons (the `CreateComparison` operationId).
+func (c *Client) CreateComparisonWithBody(ctx context.Context, params *CreateComparisonParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateComparisonRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateComparison Define and store a comparison contract
+//
+// Defines an explicit correspondence between checkpoint declarations of two
+// compiled plans and identifies the comparison over a pinned world, completeness
+// profile, and replay corpus.
+//
+// Comparison identity is content derived, so submitting identical inputs returns
+// the same `comparisonID`. Storing the comparison is idempotent.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /v1/comparisons (the `CreateComparison` operationId).
+func (c *Client) CreateComparison(ctx context.Context, params *CreateComparisonParams, body CreateComparisonJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateComparisonRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetComparison Retrieve a comparison contract
+//
+// Returns the stored comparison question and its declared correspondences.
+//
+// This operation reports the comparison question, never a comparability verdict.
+// Comparability is verified from fresh re-executions during promotion evaluation.
+//
+// Corresponds with GET /v1/comparisons/{comparisonID} (the `GetComparison` operationId).
+func (c *Client) GetComparison(ctx context.Context, comparisonID Digest, params *GetComparisonParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetComparisonRequest(c.Server, comparisonID, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1899,6 +2098,106 @@ func NewGetReadinessRequest(server string) (*http.Request, error) {
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateComparisonRequest calls the generic CreateComparison builder with application/json body
+func NewCreateComparisonRequest(server string, params *CreateComparisonParams, body CreateComparisonJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateComparisonRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreateComparisonRequestWithBody constructs an http.Request for the CreateComparison method, with any body, and a specified content type
+func NewCreateComparisonRequestWithBody(server string, params *CreateComparisonParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/comparisons")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Maiden-Lane-Tenant", params.XMaidenLaneTenant, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Maiden-Lane-Tenant", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetComparisonRequest constructs an http.Request for the GetComparison method
+func NewGetComparisonRequest(server string, comparisonID Digest, params *GetComparisonParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "comparisonID", comparisonID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/comparisons/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Maiden-Lane-Tenant", params.XMaidenLaneTenant, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Maiden-Lane-Tenant", headerParam0)
+
 	}
 
 	return req, nil
@@ -2296,6 +2595,46 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /readyz (the `GetReadiness` operationId).
 	GetReadinessWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetReadinessResponse, error)
 
+	// CreateComparisonWithBodyWithResponse Define and store a comparison contract
+	//
+	// Defines an explicit correspondence between checkpoint declarations of two
+	// compiled plans and identifies the comparison over a pinned world, completeness
+	// profile, and replay corpus.
+	//
+	// Comparison identity is content derived, so submitting identical inputs returns
+	// the same `comparisonID`. Storing the comparison is idempotent.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /v1/comparisons (the `CreateComparison` operationId).
+	CreateComparisonWithBodyWithResponse(ctx context.Context, params *CreateComparisonParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateComparisonResponse, error)
+
+	// CreateComparisonWithResponse Define and store a comparison contract
+	//
+	// Defines an explicit correspondence between checkpoint declarations of two
+	// compiled plans and identifies the comparison over a pinned world, completeness
+	// profile, and replay corpus.
+	//
+	// Comparison identity is content derived, so submitting identical inputs returns
+	// the same `comparisonID`. Storing the comparison is idempotent.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /v1/comparisons (the `CreateComparison` operationId).
+	CreateComparisonWithResponse(ctx context.Context, params *CreateComparisonParams, body CreateComparisonJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateComparisonResponse, error)
+
+	// GetComparisonWithResponse Retrieve a comparison contract
+	//
+	// Returns the stored comparison question and its declared correspondences.
+	//
+	// This operation reports the comparison question, never a comparability verdict.
+	// Comparability is verified from fresh re-executions during promotion evaluation.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /v1/comparisons/{comparisonID} (the `GetComparison` operationId).
+	GetComparisonWithResponse(ctx context.Context, comparisonID Digest, params *GetComparisonParams, reqEditors ...RequestEditorFn) (*GetComparisonResponse, error)
+
 	// CreateExecutionWithBodyWithResponse Execute a compiled plan
 	//
 	// Accepts a previously compiled plan for execution over a pinned initial
@@ -2551,6 +2890,172 @@ func (r GetReadinessResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetReadinessResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateComparisonResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *Comparison
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *Problem
+	// ApplicationproblemJSON405 the response for an HTTP 405 `application/problem+json` response
+	ApplicationproblemJSON405 *MethodNotAllowed
+	// ApplicationproblemJSON415 the response for an HTTP 415 `application/problem+json` response
+	ApplicationproblemJSON415 *UnsupportedMediaType
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *UnprocessableEntity
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *DependencyUnavailable
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r CreateComparisonResponse) GetJSON201() *Comparison {
+	return r.JSON201
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r CreateComparisonResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r CreateComparisonResponse) GetApplicationproblemJSON404() *Problem {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON405 returns the response for an HTTP 405 `application/problem+json` response
+func (r CreateComparisonResponse) GetApplicationproblemJSON405() *MethodNotAllowed {
+	return r.ApplicationproblemJSON405
+}
+
+// GetApplicationproblemJSON415 returns the response for an HTTP 415 `application/problem+json` response
+func (r CreateComparisonResponse) GetApplicationproblemJSON415() *UnsupportedMediaType {
+	return r.ApplicationproblemJSON415
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r CreateComparisonResponse) GetApplicationproblemJSON422() *UnprocessableEntity {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r CreateComparisonResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r CreateComparisonResponse) GetApplicationproblemJSON503() *DependencyUnavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r CreateComparisonResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateComparisonResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateComparisonResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateComparisonResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetComparisonResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Comparison
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON405 the response for an HTTP 405 `application/problem+json` response
+	ApplicationproblemJSON405 *MethodNotAllowed
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *DependencyUnavailable
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetComparisonResponse) GetJSON200() *Comparison {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r GetComparisonResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r GetComparisonResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON405 returns the response for an HTTP 405 `application/problem+json` response
+func (r GetComparisonResponse) GetApplicationproblemJSON405() *MethodNotAllowed {
+	return r.ApplicationproblemJSON405
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r GetComparisonResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r GetComparisonResponse) GetApplicationproblemJSON503() *DependencyUnavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r GetComparisonResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetComparisonResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetComparisonResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetComparisonResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -3060,6 +3565,64 @@ func (c *ClientWithResponses) GetReadinessWithResponse(ctx context.Context, reqE
 	return ParseGetReadinessResponse(rsp)
 }
 
+// CreateComparisonWithBodyWithResponse Define and store a comparison contract
+//
+// Defines an explicit correspondence between checkpoint declarations of two
+// compiled plans and identifies the comparison over a pinned world, completeness
+// profile, and replay corpus.
+//
+// Comparison identity is content derived, so submitting identical inputs returns
+// the same `comparisonID`. Storing the comparison is idempotent.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /v1/comparisons (the `CreateComparison` operationId).
+func (c *ClientWithResponses) CreateComparisonWithBodyWithResponse(ctx context.Context, params *CreateComparisonParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateComparisonResponse, error) {
+	rsp, err := c.CreateComparisonWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateComparisonResponse(rsp)
+}
+
+// CreateComparisonWithResponse Define and store a comparison contract
+//
+// Defines an explicit correspondence between checkpoint declarations of two
+// compiled plans and identifies the comparison over a pinned world, completeness
+// profile, and replay corpus.
+//
+// Comparison identity is content derived, so submitting identical inputs returns
+// the same `comparisonID`. Storing the comparison is idempotent.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /v1/comparisons (the `CreateComparison` operationId).
+func (c *ClientWithResponses) CreateComparisonWithResponse(ctx context.Context, params *CreateComparisonParams, body CreateComparisonJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateComparisonResponse, error) {
+	rsp, err := c.CreateComparison(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateComparisonResponse(rsp)
+}
+
+// GetComparisonWithResponse Retrieve a comparison contract
+//
+// Returns the stored comparison question and its declared correspondences.
+//
+// This operation reports the comparison question, never a comparability verdict.
+// Comparability is verified from fresh re-executions during promotion evaluation.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /v1/comparisons/{comparisonID} (the `GetComparison` operationId).
+func (c *ClientWithResponses) GetComparisonWithResponse(ctx context.Context, comparisonID Digest, params *GetComparisonParams, reqEditors ...RequestEditorFn) (*GetComparisonResponse, error) {
+	rsp, err := c.GetComparison(ctx, comparisonID, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetComparisonResponse(rsp)
+}
+
 // CreateExecutionWithBodyWithResponse Execute a compiled plan
 //
 // Accepts a previously compiled plan for execution over a pinned initial
@@ -3344,6 +3907,142 @@ func ParseGetReadinessResponse(rsp *http.Response) (*GetReadinessResponse, error
 			return nil, err
 		}
 		response.ApplicationproblemJSON405 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateComparisonResponse parses an HTTP response from a CreateComparisonWithResponse call
+func ParseCreateComparisonResponse(rsp *http.Response) (*CreateComparisonResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateComparisonResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Comparison
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest Problem
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 405:
+		var dest MethodNotAllowed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON405 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 415:
+		var dest UnsupportedMediaType
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON415 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest UnprocessableEntity
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest DependencyUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetComparisonResponse parses an HTTP response from a GetComparisonWithResponse call
+func ParseGetComparisonResponse(rsp *http.Response) (*GetComparisonResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetComparisonResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Comparison
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 405:
+		var dest MethodNotAllowed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON405 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest DependencyUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
 
 	}
 

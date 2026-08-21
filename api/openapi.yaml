@@ -37,6 +37,10 @@ tags:
     description: Compiled semantic plans.
   - name: executions
     description: Semantic plan execution.
+  - name: publications
+    description: Publication targets and promotion gate evaluation.
+  - name: comparisons
+    description: Declarative checkpoint comparison contracts over replay corpora.
 
 paths:
   /healthz:
@@ -323,6 +327,76 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
+
+  /v1/comparisons:
+    post:
+      operationId: createComparison
+      tags: [comparisons]
+      summary: Define and store a comparison contract
+      description: |
+        Defines an explicit correspondence between checkpoint declarations of two
+        compiled plans and identifies the comparison over a pinned world, completeness
+        profile, and replay corpus.
+
+        Comparison identity is content derived, so submitting identical inputs returns
+        the same `comparisonID`. Storing the comparison is idempotent.
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateComparisonRequest"
+      responses:
+        "201":
+          description: The comparison contract was accepted and stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comparison"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404":
+          description: Either the baseline or candidate plan does not exist for this tenant.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+
+  /v1/comparisons/{comparisonID}:
+    get:
+      operationId: getComparison
+      tags: [comparisons]
+      summary: Retrieve a comparison contract
+      description: |
+        Returns the stored comparison question and its declared correspondences.
+
+        This operation reports the comparison question, never a comparability verdict.
+        Comparability is verified from fresh re-executions during promotion evaluation.
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+        - name: comparisonID
+          in: path
+          required: true
+          description: The content-derived comparison identity.
+          schema:
+            $ref: "#/components/schemas/Digest"
+      responses:
+        "200":
+          description: The stored comparison contract.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Comparison"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
 
 components:
   parameters:
@@ -1261,3 +1335,86 @@ components:
           items: { $ref: "#/components/schemas/Assessment" }
         failure: { $ref: "#/components/schemas/SemanticFailure" }
       additionalProperties: false
+
+    CheckpointPair:
+      type: object
+      description: One authored correspondence pairing checkpoint keys in two plans.
+      required: [baseline, candidate]
+      properties:
+        baseline:
+          type: string
+          description: Checkpoint key declared in the baseline plan.
+        candidate:
+          type: string
+          description: Checkpoint key declared in the candidate plan.
+      additionalProperties: false
+
+    CreateComparisonRequest:
+      type: object
+      description: A request to define and store a comparison contract.
+      required:
+        - baselinePlanID
+        - candidatePlanID
+        - baselineCheckpoint
+        - candidateCheckpoint
+        - profileID
+        - worldID
+        - corpusID
+        - correspondences
+      properties:
+        baselinePlanID: { $ref: "#/components/schemas/Digest" }
+        candidatePlanID: { $ref: "#/components/schemas/Digest" }
+        baselineCheckpoint:
+          type: string
+          description: The checkpoint key in the baseline plan to compare.
+        candidateCheckpoint:
+          type: string
+          description: The checkpoint key in the candidate plan to compare.
+        profileID: { $ref: "#/components/schemas/Digest" }
+        worldID: { $ref: "#/components/schemas/Digest" }
+        corpusID: { $ref: "#/components/schemas/Digest" }
+        correspondences:
+          type: array
+          minItems: 1
+          description: The complete set of corresponding checkpoint declarations between the two plans.
+          items: { $ref: "#/components/schemas/CheckpointPair" }
+      additionalProperties: false
+
+    ComparisonCorrespondence:
+      type: object
+      description: One derived checkpoint correspondence by identity.
+      required: [baseline, candidate]
+      properties:
+        baseline: { $ref: "#/components/schemas/Digest" }
+        candidate: { $ref: "#/components/schemas/Digest" }
+      additionalProperties: false
+
+    Comparison:
+      type: object
+      description: The canonical projection of a stored comparison question.
+      required:
+        - comparisonID
+        - baselinePlanID
+        - candidatePlanID
+        - baselineCheckpointID
+        - candidateCheckpointID
+        - profileID
+        - worldID
+        - corpusID
+        - policyID
+        - correspondences
+      properties:
+        comparisonID: { $ref: "#/components/schemas/Digest" }
+        baselinePlanID: { $ref: "#/components/schemas/Digest" }
+        candidatePlanID: { $ref: "#/components/schemas/Digest" }
+        baselineCheckpointID: { $ref: "#/components/schemas/Digest" }
+        candidateCheckpointID: { $ref: "#/components/schemas/Digest" }
+        profileID: { $ref: "#/components/schemas/Digest" }
+        worldID: { $ref: "#/components/schemas/Digest" }
+        corpusID: { $ref: "#/components/schemas/Digest" }
+        policyID: { $ref: "#/components/schemas/Digest" }
+        correspondences:
+          type: array
+          items: { $ref: "#/components/schemas/ComparisonCorrespondence" }
+      additionalProperties: false
+

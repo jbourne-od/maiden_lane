@@ -29,6 +29,8 @@ var wantOperations = []string{
 	"GetExecution",
 	"CreatePublication",
 	"GetPublication",
+	"CreateComparison",
+	"GetComparison",
 }
 
 // Production break caught: adding an operation to the contract without
@@ -62,6 +64,8 @@ func TestEveryVersionedOperationRequiresTheTenantHeader(t *testing.T) {
 		"GetExecutionParams":      true,
 		"CreatePublicationParams": true,
 		"GetPublicationParams":    true,
+		"CreateComparisonParams":  true,
+		"GetComparisonParams":     true,
 	}
 	for name := range tenanted {
 		params, ok := paramsTypeByName(name)
@@ -148,6 +152,28 @@ func TestAcceptedSubmissionCarriesNoResult(t *testing.T) {
 	}
 }
 
+func TestComparisonResponseFieldNamesAreStable(t *testing.T) {
+	comparison := map[string]string{
+		"ComparisonID":          "comparisonID",
+		"BaselinePlanID":        "baselinePlanID",
+		"CandidatePlanID":       "candidatePlanID",
+		"BaselineCheckpointID":  "baselineCheckpointID",
+		"CandidateCheckpointID": "candidateCheckpointID",
+		"ProfileID":             "profileID",
+		"WorldID":               "worldID",
+		"CorpusID":              "corpusID",
+		"PolicyID":              "policyID",
+		"Correspondences":       "correspondences",
+	}
+	assertJSONNames(t, reflect.TypeFor[openapiv1.Comparison](), "Comparison", comparison)
+
+	correspondence := map[string]string{
+		"Baseline":  "baseline",
+		"Candidate": "candidate",
+	}
+	assertJSONNames(t, reflect.TypeFor[openapiv1.ComparisonCorrespondence](), "ComparisonCorrespondence", correspondence)
+}
+
 func assertJSONNames(t *testing.T, target reflect.Type, name string, want map[string]string) {
 	t.Helper()
 	for field, jsonName := range want {
@@ -177,6 +203,10 @@ func paramsTypeByName(name string) (reflect.Type, bool) {
 		return reflect.TypeFor[openapiv1.CreatePublicationParams](), true
 	case "GetPublicationParams":
 		return reflect.TypeFor[openapiv1.GetPublicationParams](), true
+	case "CreateComparisonParams":
+		return reflect.TypeFor[openapiv1.CreateComparisonParams](), true
+	case "GetComparisonParams":
+		return reflect.TypeFor[openapiv1.GetComparisonParams](), true
 	default:
 		return nil, false
 	}
