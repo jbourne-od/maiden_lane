@@ -352,7 +352,14 @@ func newTestRouter(t *testing.T) http.Handler {
 
 func oneStoreDependencies() Dependencies {
 	store := memory.NewStore()
-	return Dependencies{Plans: store, Executions: store, Policies: store, Publications: store, Comparisons: store}
+	return Dependencies{
+		Plans:        store,
+		Executions:   store,
+		Policies:     store,
+		Publications: store,
+		Comparisons:  store,
+		Corpora:      store,
+	}
 }
 
 // Production break caught by running the binary, not by the suite: the compiler

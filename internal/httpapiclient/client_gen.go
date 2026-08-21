@@ -4277,6 +4277,8 @@ type GetExecutionCheckpointResponse struct {
 	ApplicationproblemJSON405 *MethodNotAllowed
 	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
 	ApplicationproblemJSON500 *InternalError
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *DependencyUnavailable
 }
 
 // GetJSON200 returns the response for an HTTP 200 `application/json` response
@@ -4302,6 +4304,11 @@ func (r GetExecutionCheckpointResponse) GetApplicationproblemJSON405() *MethodNo
 // GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
 func (r GetExecutionCheckpointResponse) GetApplicationproblemJSON500() *InternalError {
 	return r.ApplicationproblemJSON500
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r GetExecutionCheckpointResponse) GetApplicationproblemJSON503() *DependencyUnavailable {
+	return r.ApplicationproblemJSON503
 }
 
 // GetBody returns the raw response body bytes
@@ -5845,6 +5852,13 @@ func ParseGetExecutionCheckpointResponse(rsp *http.Response) (*GetExecutionCheck
 			return nil, err
 		}
 		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest DependencyUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
 
 	}
 

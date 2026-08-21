@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"github.com/optimaldynamics/maiden-lane/internal/app"
 	"github.com/optimaldynamics/maiden-lane/internal/fixtures/teamhos"
 	openapiv1 "github.com/optimaldynamics/maiden-lane/internal/httpapi/openapiv1"
+	"github.com/optimaldynamics/maiden-lane/internal/ports"
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
 	"github.com/optimaldynamics/maiden-lane/internal/worker"
 )
@@ -462,5 +464,108 @@ func TestGetExecutionCheckpoint(t *testing.T) {
 	crossRecorder := get(t, fixture.router, "/v1/executions/"+string(accepted.ExecutionID)+"/checkpoints/team_formed.v1", "other-tenant")
 	if crossRecorder.Code != http.StatusNotFound {
 		t.Fatalf("cross-tenant status = %d, want 404", crossRecorder.Code)
+	}
+
+	// 4. GET checkpoint when store is unavailable -> 503 Service Unavailable
+	unavailRouter := NewRouter(Dependencies{})
+	unavailRecorder := get(t, unavailRouter, "/v1/executions/"+string(accepted.ExecutionID)+"/checkpoints/team_formed.v1", "acme")
+	if unavailRecorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unavail status = %d, want 503", unavailRecorder.Code)
+	}
+}
+
+func TestReattemptSemanticRefusalIsRefused(t *testing.T) {
+	fixture := newExecutionFixture(t)
+	plan := createPlan(t, fixture.router, "acme", fixtureDeclarations(t))
+	// Use invariant-violating variant to cause a deterministic semantic failure
+	accepted := acceptExecution(t, fixture.router, "acme", executionRequest(t, plan.PlanID, teamhos.AnchorMismatch))
+
+	// Run worker to execute and fail semantically
+	workerInstance := worker.New(worker.Options{
+		Plans:      fixture.store,
+		Executions: fixture.store,
+		Runner:     spineRunner{},
+	})
+	ran, err := workerInstance.RunOnce(context.Background())
+	if err != nil || !ran {
+		t.Fatalf("RunOnce: ran=%v, err=%v", ran, err)
+	}
+
+	exec := getExecution(t, fixture.router, "acme", accepted.ExecutionID)
+	if exec.ExecutionStatus != openapiv1.ExecutionStatusFailed || exec.Result == nil || exec.Result.Failure == nil {
+		t.Fatalf("expected failed execution with semantic result, got %+v", exec)
+	}
+
+	// Attempting to reattempt a deterministically failed execution -> 409 Conflict
+	reattemptRecorder := postJSON(t, fixture.router, "/v1/executions/"+string(accepted.ExecutionID)+"/reattempt", "acme", nil)
+	if reattemptRecorder.Code != http.StatusConflict {
+		t.Fatalf("reattempt status = %d, want 409; body = %s", reattemptRecorder.Code, reattemptRecorder.Body.String())
+	}
+}
+
+func TestGetExecutionCheckpointWithZeroAssessmentsSerializesEmptyArray(t *testing.T) {
+	store := memory.NewStore()
+	router := NewRouter(Dependencies{Executions: store})
+
+	inputs, err := teamhos.New(teamhos.Passing)
+	if err != nil {
+		t.Fatalf("teamhos.New: %v", err)
+	}
+
+	world, _ := semantic.NewWorld(nil)
+	executor, _ := semantic.NewExecutorIdentity("go", "sha256:1c0d5a3e9b7f2c4d6a8e0b1f3d5c7a9e2b4d6f8a0c2e4b6d8f0a2c4e6b8d0f2a")
+
+	execReq := ports.ExecutionRequest{
+		TenantID:    "acme",
+		ExecutionID: semantic.ExecutionID("sha256:0000000000000000000000000000000000000000000000000000000000000003"),
+		RunID:       semantic.SemanticRunID("sha256:0000000000000000000000000000000000000000000000000000000000000002"),
+		PlanID:      semantic.PlanID("sha256:0000000000000000000000000000000000000000000000000000000000000001"),
+		Input: ports.ExecutionInput{
+			InitialState:     inputs.InitialState,
+			World:            world,
+			ExecutorIdentity: executor,
+			Policy:           semantic.ChangesProvenance,
+		},
+	}
+
+	if _, err := store.Enqueue(context.Background(), execReq); err != nil {
+		t.Fatalf("store.Enqueue: %v", err)
+	}
+
+	attempt, ok, err := store.Claim(context.Background(), time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("store.Claim: ok=%v, err=%v", ok, err)
+	}
+
+	result := ports.ExecutionResult{
+		TenantID:    "acme",
+		ExecutionID: execReq.ExecutionID,
+		Status:      ports.ExecutionSucceeded,
+		SpineStatus: "succeeded",
+		Checkpoints: []ports.SealedCheckpoint{
+			{
+				CheckpointKey:        "checkpoint_no_assessments",
+				CheckpointID:         "sha256:0000000000000000000000000000000000000000000000000000000000000010",
+				CheckpointArtifactID: "sha256:0000000000000000000000000000000000000000000000000000000000000020",
+				Digest:               "sha256:0000000000000000000000000000000000000000000000000000000000000030",
+				StateDigest:          "sha256:0000000000000000000000000000000000000000000000000000000000000040",
+			},
+		},
+		Assessments: nil, // Zero assessments
+	}
+
+	if err := store.Complete(context.Background(), attempt.AttemptID, result); err != nil {
+		t.Fatalf("store.Complete: %v", err)
+	}
+
+	recorder := get(t, router, "/v1/executions/"+string(execReq.ExecutionID)+"/checkpoints/checkpoint_no_assessments", "acme")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET checkpoint status = %d, want 200; body = %s", recorder.Code, recorder.Body.String())
+	}
+
+	// Verify JSON body contains `"assessments":[]` and not `"assessments":null`
+	bodyStr := recorder.Body.String()
+	if !bytes.Contains(recorder.Body.Bytes(), []byte(`"assessments":[]`)) {
+		t.Fatalf("expected assessments to serialize as [], body = %s", bodyStr)
 	}
 }

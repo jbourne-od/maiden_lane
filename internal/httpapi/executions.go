@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 
 	openapiv1 "github.com/optimaldynamics/maiden-lane/internal/httpapi/openapiv1"
@@ -159,12 +160,18 @@ func (s *server) ReattemptExecution(
 		writeProblem(w, problemNotFound, nil)
 		return
 	}
-	if record.Status != ports.ExecutionFailed {
+	if record.Status != ports.ExecutionFailed || record.Result != nil {
+		// A run that produced a deterministic semantic result cannot be reattempted,
+		// and an execution that is not in a failed state cannot be retried.
 		writeProblem(w, problemExecutionConflict, nil)
 		return
 	}
 
 	if err := s.deps.Executions.Reattempt(r.Context(), tenant, semantic.ExecutionID(executionID)); err != nil {
+		if errors.Is(err, ports.ErrExecutionNotReattemptable) {
+			writeProblem(w, problemExecutionConflict, nil)
+			return
+		}
 		writeStorageProblem(w, err)
 		return
 	}
@@ -216,7 +223,7 @@ func (s *server) GetExecutionCheckpoint(
 		return
 	}
 
-	var matchedAssessments []openapiv1.Assessment
+	matchedAssessments := make([]openapiv1.Assessment, 0)
 	for _, a := range record.Result.Assessments {
 		if a.CheckpointArtifactID == matchedCheckpoint.CheckpointArtifactID {
 			missing := make([]string, 0, len(a.MissingRequirements))
