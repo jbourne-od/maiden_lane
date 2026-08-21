@@ -70,10 +70,6 @@ func ExecuteTransition(binding RunBinding, rule RuleID, state State, journal Jou
 	}
 	transformation := cloneCompiledTransformation(binding.plan.transformations[len(journal.entries)])
 	switch transformation.Operator() {
-	case OperatorFormRelatedEntity:
-		return executeFormRelatedEntity(binding, transformation, state, journal)
-	case OperatorAggregateRelatedFields:
-		return executeAggregateRelatedFields(binding, transformation, state, journal)
 	case OperatorSelectAndAssign:
 		return executeSelectAndAssign(binding, transformation, state, journal)
 	default:
@@ -97,15 +93,6 @@ func digestOrFallback(value, fallback string) Digest {
 		return Digest(value)
 	}
 	return Digest(fallback)
-}
-
-func findCompiledTransformation(plan Plan, rule RuleID) (CompiledTransformation, bool) {
-	for _, transformation := range plan.transformations {
-		if transformation.declaration.ID == rule {
-			return cloneCompiledTransformation(transformation), true
-		}
-	}
-	return CompiledTransformation{}, false
 }
 
 func passingResults(declarations []InvariantDeclaration, entities []EntityRef, facts []FactRef) []InvariantResult {
@@ -147,17 +134,6 @@ func invariantResult(declaration InvariantDeclaration, passed bool, entities []E
 		passed: passed, code: declaration.code, entities: entityCopy, facts: factCopy}
 }
 
-func rejectInvariant(binding RunBinding, rule RuleID, state State, journal Journal, declarations []InvariantDeclaration, code InvariantCode, entities []EntityRef, facts []FactRef, patch *Patch) (TransitionOutcome, error) {
-	failureKey := ""
-	for _, declaration := range declarations {
-		if declaration.code == code {
-			failureKey = declaration.key
-			break
-		}
-	}
-	return rejectInvariantAtKey(binding, rule, state, journal, declarations, code, failureKey, entities, facts, patch)
-}
-
 func rejectInvariantAtKey(binding RunBinding, rule RuleID, state State, journal Journal, declarations []InvariantDeclaration, code InvariantCode, failureKey string, entities []EntityRef, facts []FactRef, patch *Patch) (TransitionOutcome, error) {
 	results := evaluatedFailureResults(declarations, failureKey, entities, facts)
 	return rejectInvariantEvaluated(binding, rule, state, journal, code, results, entities, facts, patch)
@@ -170,15 +146,6 @@ func rejectInvariantEvaluated(binding RunBinding, rule RuleID, state State, jour
 	}
 	failure := FailureReport{protected: &report}
 	return TransitionOutcome{state: state, journal: Journal{entries: cloneJournalEntries(journal.entries)}, results: outcomeInvariantResults(journal, results), failure: &failure}, nil
-}
-
-func requiredInvariant(declarations []InvariantDeclaration, key string) (InvariantDeclaration, error) {
-	for _, declaration := range declarations {
-		if declaration.key == key {
-			return declaration, nil
-		}
-	}
-	return InvariantDeclaration{}, fmt.Errorf("compiled invariant declaration %q is missing", key)
 }
 
 func rejectOperation(binding RunBinding, rule RuleID, state State, journal Journal, declarations []InvariantDeclaration, code OperationInvariantCode, entities []EntityRef, facts []FactRef, patch Patch) (TransitionOutcome, error) {
@@ -256,14 +223,6 @@ func newJournalEntry(rule RuleID, predecessor, result State, patch Patch, eviden
 	}
 	entry.canonical, entry.digest = canonical, JournalEntryDigest(canonicalDigest(canonical))
 	return entry, nil
-}
-
-func syntheticEntityID(lineage InputLineageID, kind EntityKind, rule RuleID, progenitors []EntityRef, outputKey Value) (EntityID, error) {
-	canonical, err := encodeSyntheticEntityIdentity(lineage, kind, rule, canonicalEntityRefs(progenitors), outputKey)
-	if err != nil {
-		return "", err
-	}
-	return EntityID(canonicalDigest(canonical)), nil
 }
 
 func canonicalEntityRefs(input []EntityRef) []EntityRef {

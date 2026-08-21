@@ -297,9 +297,8 @@ func versionLabel(version ports.PolicyVersion) string {
 // ProfileID is one the kernel actually produced. A fabricated digest would let a
 // store pass while failing for identities of the shape it will really be given.
 //
-// Profiles compile only as part of a whole request, so this builds a minimal one.
-// The requirement code comes from the kernel's closed readiness vocabulary; an
-// invented code does not compile, which is the compiler doing its job.
+// Profiles compile only as part of a whole request, so this builds a minimal one
+// with a valid requirement atom on team.assignment_key.
 func profileIdentity(t *testing.T, key string) semantic.ProfileID {
 	t.Helper()
 
@@ -321,7 +320,7 @@ func profileIdentity(t *testing.T, key string) semantic.ProfileID {
 			Scope:       semantic.ProfileScope{Kind: semantic.AllEntitiesOfKind, EntityKind: "team"},
 			Aggregation: semantic.AllSelected,
 			Requirements: []semantic.RequirementAtom{{
-				Code:  semantic.TeamAssignmentKeyRequired,
+				Code:  "team_assignment_key_required",
 				Kind:  semantic.FieldPresent,
 				Field: "team.assignment_key",
 			}},

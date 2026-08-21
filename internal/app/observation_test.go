@@ -149,12 +149,12 @@ func TestRunObserverSequencePassing(t *testing.T) {
 		t.Fatal("execution observation lacks the execution ID")
 	}
 	t1End := observer.calls[4].observation.MetricProjection()
-	if t1End.AcceptedInserts != 1 || t1End.AcceptedRelates != 2 || t1End.AcceptedUpdates != 0 {
-		t.Fatalf("T1 accepted operations = %d/%d/%d, want 1/2/0", t1End.AcceptedInserts, t1End.AcceptedRelates, t1End.AcceptedUpdates)
+	if t1End.AcceptedInserts != 0 || t1End.AcceptedRelates != 0 || t1End.AcceptedUpdates != 2 {
+		t.Fatalf("T1 accepted operations = %d/%d/%d, want 0/0/2", t1End.AcceptedInserts, t1End.AcceptedRelates, t1End.AcceptedUpdates)
 	}
 	t2End := observer.calls[12].observation.MetricProjection()
-	if t2End.AcceptedInserts != 0 || t2End.AcceptedRelates != 0 || t2End.AcceptedUpdates != 1 {
-		t.Fatalf("T2 accepted operations = %d/%d/%d, want 0/0/1", t2End.AcceptedInserts, t2End.AcceptedRelates, t2End.AcceptedUpdates)
+	if t2End.AcceptedInserts != 0 || t2End.AcceptedRelates != 0 || t2End.AcceptedUpdates != 2 {
+		t.Fatalf("T2 accepted operations = %d/%d/%d, want 0/0/2", t2End.AcceptedInserts, t2End.AcceptedRelates, t2End.AcceptedUpdates)
 	}
 }
 
@@ -172,9 +172,9 @@ func TestRunObserverSequenceRejected(t *testing.T) {
 	}
 	expected := append(passingSequence()[:12:12],
 		expectedObservation{event: ObservationEnd, phase: PhaseExecuteTransition,
-			result: ResultProtectedInvariantFailed, transition: TransitionAggregateTeamHOS, code: CodeHOSAnchorMismatch},
+			result: ResultProtectedInvariantFailed, transition: TransitionAggregateTeamHOS, code: CodeSelectionGuardUnsatisfied},
 		expectedObservation{event: ObservationEnd, phase: PhaseExecuteSpine,
-			result: ResultProtectedInvariantFailed, code: CodeHOSAnchorMismatch},
+			result: ResultProtectedInvariantFailed, code: CodeSelectionGuardUnsatisfied},
 	)
 	assertSequence(t, observer, expected)
 	projection := observer.calls[12].observation.MetricProjection()

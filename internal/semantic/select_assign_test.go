@@ -492,7 +492,7 @@ func TestSelectAssignRefusesMalformedDeclarationsForTheStatedReason(t *testing.T
 		wantDetail: "driver.status",
 	}, {
 		name:                   "payload disagrees with the operator tag",
-		mutate:                 func(rule *TransformationDeclaration) { rule.Operator = OperatorFormRelatedEntity },
+		mutate:                 func(rule *TransformationDeclaration) { rule.Operator = OperatorKind(99) },
 		wantDetail:             "operator_union",
 		accessMismatchExpected: true,
 	}, {
@@ -546,10 +546,6 @@ func TestRulesetIdentityCoversEveryDerivedInvariant(t *testing.T) {
 		t.Run(string(rule.ID), func(t *testing.T) {
 			var derived []InvariantDeclaration
 			switch rule.Operator {
-			case OperatorFormRelatedEntity:
-				derived = formInvariants(rule.ID, rule.Form.GroupingField)
-			case OperatorAggregateRelatedFields:
-				derived = aggregateInvariants(rule.ID, rule.Aggregate)
 			case OperatorSelectAndAssign:
 				derived = selectAssignInvariants(rule.ID, rule.SelectAssign)
 			default:
@@ -1194,32 +1190,17 @@ func TestSelectAssignRefusesAnUnboundedAuthoredTree(t *testing.T) {
 // This does not prove injectivity; it tests the cases the broken argument left uncovered.
 func TestRulesetEncodingSeparatesDistinctDeclarations(t *testing.T) {
 	base := selectAssignRule(t, 3)
-	form := compileFixtureRequest(t, false).Rules.Transformations[0]
-	form.ID = "certify_depot.v1"
-
-	withStray := form
-	withStray.SelectAssign = base.SelectAssign
-
-	strayOnly := form
-	strayOnly.Form = nil
-	strayOnly.SelectAssign = base.SelectAssign
-
-	aggregate := compileFixtureRequest(t, false).Rules.Transformations[1]
-	aggregate.ID = "certify_depot.v1"
-
-	aggregateWithStray := aggregate
-	aggregateWithStray.SelectAssign = base.SelectAssign
-
 	otherThreshold := selectAssignRule(t, 9)
+	otherField := selectAssignRule(t, 3)
+	otherField.SelectAssign.Assignments[0].Target = "driver.hos_driving_hours"
+	otherCardinality := selectAssignRule(t, 3)
+	otherCardinality.SelectAssign.Selector.Members.Count = 5
 
 	candidates := map[string]TransformationDeclaration{
-		"select-assign":                         base,
-		"select-assign with another threshold":  otherThreshold,
-		"form only":                             form,
-		"form carrying a stray select-assign":   withStray,
-		"select-assign under the form operator": strayOnly,
-		"aggregate only":                        aggregate,
-		"aggregate carrying a stray payload":    aggregateWithStray,
+		"select-assign":                        base,
+		"select-assign with another threshold": otherThreshold,
+		"select-assign with another field":     otherField,
+		"select-assign with other cardinality": otherCardinality,
 	}
 	seen := make(map[string]string, len(candidates))
 	names := make([]string, 0, len(candidates))

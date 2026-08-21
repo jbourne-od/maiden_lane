@@ -169,8 +169,8 @@ func TestRejectedExecutionIsReportedAsAnAnswer(t *testing.T) {
 	if execution.Result == nil || execution.Result.Failure == nil {
 		t.Fatal("a rejected execution reports no typed failure")
 	}
-	if execution.Result.Failure.Code == nil || *execution.Result.Failure.Code != "HOS_ANCHOR_MISMATCH" {
-		t.Fatalf("failure code = %v", execution.Result.Failure.Code)
+	if execution.Result.Failure.Code == nil || *execution.Result.Failure.Code != "SELECTION_GUARD_UNSATISFIED" {
+		t.Fatalf("failure code = %v", *execution.Result.Failure.Code)
 	}
 	if execution.Result.Failure.Kind != openapiv1.SemanticFailureKindProtectedInvariantFailed {
 		t.Fatalf("failure kind = %s", execution.Result.Failure.Kind)

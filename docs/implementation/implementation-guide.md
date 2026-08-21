@@ -32,9 +32,8 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
   and receipt-authorized verified inverse application.
 - A deterministic reference executor for the compiled plan, including verified
   run binding, authorable select-and-assign transformations with group reductions,
-  the closed related-entity and related-field aggregate operators, compiler-derived
-  protected invariant results, typed semantic failure reports, and immutable
-  accepted-only journals.
+  compiler-derived protected invariant results, typed semantic failure reports,
+  and immutable accepted-only journals.
 - Versioned identities for provenance policy, semantic input/run/execution,
   synthetic entities, accepted journal entries and prefixes, invariant-result
   sets, and protected/integrity failure reports. Executor build identity affects

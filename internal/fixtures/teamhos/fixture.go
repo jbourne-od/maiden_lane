@@ -28,7 +28,7 @@ const (
 	// Passing is the golden variant whose T2 aggregates (T0, 10, 8).
 	Passing Variant = iota + 1
 	// AnchorMismatch differs from Passing only in driver B's hos_anchor and
-	// deterministically rejects T2 with HOS_ANCHOR_MISMATCH.
+	// deterministically rejects T2 with SELECTION_GUARD_UNSATISFIED.
 	AnchorMismatch
 )
 
@@ -123,11 +123,7 @@ func New(variant Variant) (Inputs, error) {
 	}, nil
 }
 
-// newSchema declares the ratified driver/team fields (design section 4.1)
-// and the directed team --member--> driver relation. Field presence beyond
-// construction is a rule-boundary obligation, so no field is required at
-// construction: driver HOS observations are optional inputs and the team
-// aggregate tuple is wholly absent at C1.
+// newSchema declares the ratified driver fields.
 func newSchema() (semantic.Schema, error) {
 	return semantic.NewSchema(
 		[]semantic.EntityDeclaration{
@@ -136,23 +132,17 @@ func newSchema() (semantic.Schema, error) {
 				{Name: "hos_anchor", Kind: semantic.ValueAtom},
 				{Name: "hos_elapsed_hours", Kind: semantic.ValueInt64},
 				{Name: "hos_driving_hours", Kind: semantic.ValueInt64},
-			}},
-			{Kind: "team", Fields: []semantic.FieldDeclaration{
-				{Name: "assignment_key", Kind: semantic.ValueString},
-				{Name: "aggregation_anchor", Kind: semantic.ValueAtom},
+				{Name: "assignment_status", Kind: semantic.ValueString},
+				{Name: "reconciled_anchor", Kind: semantic.ValueAtom},
 				{Name: "elapsed_duration_hours", Kind: semantic.ValueInt64},
 				{Name: "driving_duration_hours", Kind: semantic.ValueInt64},
 			}},
 		},
-		[]semantic.RelationDeclaration{
-			{Kind: "member", FromKind: "team", ToKind: "driver"},
-		},
+		nil,
 	)
 }
 
-// newInitialState builds S0: exactly the two source drivers, no team, and no
-// relations (design section 4.2). Both variants share the pinned lineage and
-// source identities; only driver B's hos_anchor observation differs.
+// newInitialState builds S0: exactly the two source drivers.
 func newInitialState(schema semantic.Schema, variant Variant) (semantic.State, error) {
 	lineage, err := semantic.NewInputLineageID(lineageNamespace, lineageRootKey)
 	if err != nil {
@@ -202,20 +192,6 @@ func newInitialState(schema semantic.Schema, variant Variant) (semantic.State, e
 }
 
 // ComparisonPlans compiles two ratified plans that differ only by a renamed checkpoint.
-//
-// The two plans share a SCHEMA and identical transformation behaviour, so one corpus
-// replays under both. They do not share a ruleset identity: checkpoints are part of the
-// normalized ruleset, so renaming one changes RulesetDigest and therefore PlanID.
-//
-// Renaming is all that differs, and that is deliberate rather than a weaker version of
-// revising the semantics. It isolates NAMING from meaning, which is the thing explicit
-// correspondence exists to handle: two declarations that compute the same result under
-// different keys are exactly the case where inferring correspondence from a key would
-// silently do the wrong thing.
-//
-// It lives here because these are team-HOS declarations, and this package is the one
-// place they are authored. A second copy elsewhere would be a second ratified fixture
-// able to drift from this one.
 func ComparisonPlans() (baseline, candidate semantic.Plan, err error) {
 	schema, err := newSchema()
 	if err != nil {
@@ -246,9 +222,6 @@ func ComparisonPlans() (baseline, candidate semantic.Plan, err error) {
 	}
 
 	if baseline.ID() == candidate.ID() {
-		// Refused rather than returned. Two identical plans would make every comparison
-		// built from them symmetric, and a symmetric fixture cannot distinguish code that
-		// uses one side for both.
 		return semantic.Plan{}, semantic.Plan{},
 			fmt.Errorf("teamhos: the two comparison plans are identical")
 	}
@@ -271,69 +244,129 @@ func compilePlan(request semantic.CompileRequest) (semantic.Plan, error) {
 	return plan, nil
 }
 
+func exprFieldPtr(path semantic.FieldPath) *semantic.Expr {
+	return &semantic.Expr{Kind: semantic.ExprField, Field: path}
+}
+
+func stringExpr(s string) semantic.Expr {
+	v, _ := semantic.NewStringValue(s)
+	return semantic.Expr{Kind: semantic.ExprLiteral, Literal: &v}
+}
+
+func int64Expr(n int64) semantic.Expr {
+	v := semantic.NewInt64Value(n)
+	return semantic.Expr{Kind: semantic.ExprLiteral, Literal: &v}
+}
+
 // newCompileRequest instantiates the two closed ratified transformations
-// (design sections 3.3, 5, and 6), the two checkpoint declarations, and the
-// CM/optimizer profile declarations with the declared cm.v1 implication
-// (design section 7.4).
+// using SelectAndAssign.
 func newCompileRequest(schema semantic.Schema) semantic.CompileRequest {
 	form := semantic.TransformationDeclaration{
 		ID:             RuleFormTeam,
-		Operator:       semantic.OperatorFormRelatedEntity,
+		Operator:       semantic.OperatorSelectAndAssign,
 		DeclaredReads:  []semantic.FieldPath{"driver.assignment_key"},
-		DeclaredWrites: []semantic.FieldPath{"team.assignment_key"},
-		Form: &semantic.FormRelatedEntityDeclaration{
-			SourceKind: "driver",
-			Sources: []semantic.SourceReference{
-				{Kind: "driver", CanonicalSourceKey: driverSourceKeyA},
-				{Kind: "driver", CanonicalSourceKey: driverSourceKeyB},
+		DeclaredWrites: []semantic.FieldPath{"driver.assignment_status"},
+		SelectAssign: &semantic.SelectAssignDeclaration{
+			Selector: semantic.Selector{
+				Kind:    "driver",
+				GroupBy: exprFieldPtr("driver.assignment_key"),
+				Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 2},
 			},
-			OutputKind:    "team",
-			OutputSlot:    "team",
-			GroupingField: "driver.assignment_key",
-			SourceCount:   2,
-			CopiedFields: []semantic.FieldCopy{
-				{Source: "driver.assignment_key", Destination: "team.assignment_key"},
+			Guard: semantic.Expr{Kind: semantic.ExprAllEqual, Field: "driver.assignment_key"},
+			Assignments: []semantic.FieldAssignment{
+				{Target: "driver.assignment_status", Value: stringExpr("assigned")},
 			},
-			RelationKind: "member",
-			OutputKey:    &semantic.OutputKeyExpression{Kind: semantic.OutputKeyCommonSourceField, Field: "driver.assignment_key"},
 		},
 	}
 	aggregate := semantic.TransformationDeclaration{
 		ID:       RuleAggregateTeamHOS,
-		Operator: semantic.OperatorAggregateRelatedFields,
+		Operator: semantic.OperatorSelectAndAssign,
 		DeclaredReads: []semantic.FieldPath{
-			"driver.hos_anchor", "driver.hos_driving_hours", "driver.hos_elapsed_hours",
-			"team.aggregation_anchor", "team.driving_duration_hours", "team.elapsed_duration_hours",
+			"driver.assignment_key",
+			"driver.hos_anchor",
+			"driver.hos_driving_hours",
+			"driver.hos_elapsed_hours",
 		},
 		DeclaredWrites: []semantic.FieldPath{
-			"team.aggregation_anchor", "team.driving_duration_hours", "team.elapsed_duration_hours",
+			"driver.driving_duration_hours",
+			"driver.elapsed_duration_hours",
+			"driver.reconciled_anchor",
 		},
-		Aggregate: &semantic.AggregateRelatedFieldsDeclaration{
-			Target:       semantic.OutputSlotReference{Rule: RuleFormTeam, Slot: "team"},
-			RelationKind: "member",
-			SourceKind:   "driver",
-			RequiredSourceTuple: []semantic.FieldPath{
-				"driver.hos_anchor", "driver.hos_elapsed_hours", "driver.hos_driving_hours",
+		After: []semantic.RuleID{RuleFormTeam},
+		SelectAssign: &semantic.SelectAssignDeclaration{
+			Selector: semantic.Selector{
+				Kind:    "driver",
+				GroupBy: exprFieldPtr("driver.assignment_key"),
+				Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 2},
 			},
-			Predicates: []semantic.AggregatePredicate{
-				{Kind: semantic.CompleteTuple, Fields: []semantic.FieldPath{"driver.hos_anchor", "driver.hos_elapsed_hours", "driver.hos_driving_hours"}},
-				{Kind: semantic.NonNegativeInt, Fields: []semantic.FieldPath{"driver.hos_elapsed_hours"}},
-				{Kind: semantic.NonNegativeInt, Fields: []semantic.FieldPath{"driver.hos_driving_hours"}},
-				{Kind: semantic.EqualFieldAcrossSources, Fields: []semantic.FieldPath{"driver.hos_anchor"}},
-				{Kind: semantic.LessOrEqualFields, Fields: []semantic.FieldPath{"driver.hos_driving_hours", "driver.hos_elapsed_hours"}},
+			Guard: semantic.Expr{
+				Kind: semantic.ExprAll,
+				Args: []semantic.Expr{
+					{Kind: semantic.ExprAllEqual, Field: "driver.hos_anchor"},
+					{
+						Kind: semantic.ExprAllMembers,
+						Args: []semantic.Expr{
+							{
+								Kind: semantic.ExprNot,
+								Args: []semantic.Expr{
+									{
+										Kind: semantic.ExprLess,
+										Args: []semantic.Expr{
+											{Kind: semantic.ExprField, Field: "driver.hos_elapsed_hours"},
+											int64Expr(0),
+										},
+									},
+								},
+							},
+						},
+					},
+					{
+						Kind: semantic.ExprAllMembers,
+						Args: []semantic.Expr{
+							{
+								Kind: semantic.ExprNot,
+								Args: []semantic.Expr{
+									{
+										Kind: semantic.ExprLess,
+										Args: []semantic.Expr{
+											{Kind: semantic.ExprField, Field: "driver.hos_driving_hours"},
+											int64Expr(0),
+										},
+									},
+								},
+							},
+						},
+					},
+					{
+						Kind: semantic.ExprAllMembers,
+						Args: []semantic.Expr{
+							{
+								Kind: semantic.ExprAny,
+								Args: []semantic.Expr{
+									{
+										Kind: semantic.ExprLess,
+										Args: []semantic.Expr{
+											{Kind: semantic.ExprField, Field: "driver.hos_driving_hours"},
+											{Kind: semantic.ExprField, Field: "driver.hos_elapsed_hours"},
+										},
+									},
+									{
+										Kind: semantic.ExprEqual,
+										Args: []semantic.Expr{
+											{Kind: semantic.ExprField, Field: "driver.hos_driving_hours"},
+											{Kind: semantic.ExprField, Field: "driver.hos_elapsed_hours"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
 			},
-			Anchor: semantic.FieldCopy{Source: "driver.hos_anchor", Destination: "team.aggregation_anchor"},
-			// Componentwise maxima: a fixture-only reconciliation envelope.
-			// See the package documentation's non-production caveat.
-			Reductions: []semantic.FieldReduction{
-				{Kind: semantic.ReduceInt64Max, Source: "driver.hos_elapsed_hours", Destination: "team.elapsed_duration_hours"},
-				{Kind: semantic.ReduceInt64Max, Source: "driver.hos_driving_hours", Destination: "team.driving_duration_hours"},
-			},
-			ResultPredicates: []semantic.AggregatePredicate{
-				{Kind: semantic.CompleteTuple, Fields: []semantic.FieldPath{"team.aggregation_anchor", "team.elapsed_duration_hours", "team.driving_duration_hours"}},
-				{Kind: semantic.NonNegativeInt, Fields: []semantic.FieldPath{"team.elapsed_duration_hours"}},
-				{Kind: semantic.NonNegativeInt, Fields: []semantic.FieldPath{"team.driving_duration_hours"}},
-				{Kind: semantic.LessOrEqualFields, Fields: []semantic.FieldPath{"team.driving_duration_hours", "team.elapsed_duration_hours"}},
+			Assignments: []semantic.FieldAssignment{
+				{Target: "driver.reconciled_anchor", Value: semantic.Expr{Kind: semantic.ExprField, Field: "driver.hos_anchor"}},
+				{Target: "driver.elapsed_duration_hours", Value: semantic.Expr{Kind: semantic.ExprMax, Field: "driver.hos_elapsed_hours"}},
+				{Target: "driver.driving_duration_hours", Value: semantic.Expr{Kind: semantic.ExprMax, Field: "driver.hos_driving_hours"}},
 			},
 		},
 	}
@@ -351,19 +384,23 @@ func newCompileRequest(schema semantic.Schema) semantic.CompileRequest {
 	}
 }
 
-// newProfileDeclarations declares the ratified CM and optimizer completeness
-// profiles (design sections 7.1 through 7.4): identical explicit team scope,
-// universal aggregation, field-presence atoms, and the declared
-// cm.v1 <= optimizer.v1 ordering claim the compiler must prove.
+const (
+	DriverAssignmentRequired        semantic.RequirementCode = "driver_assignment_required"
+	DriverAggregationAnchorRequired semantic.RequirementCode = "driver_aggregation_anchor_required"
+	DriverElapsedDurationRequired   semantic.RequirementCode = "driver_elapsed_duration_required"
+	DriverDrivingDurationRequired   semantic.RequirementCode = "driver_driving_duration_required"
+)
+
+// newProfileDeclarations declares the ratified CM and optimizer completeness profiles.
 func newProfileDeclarations() []semantic.ProfileDeclaration {
-	scope := semantic.ProfileScope{Kind: semantic.AllEntitiesOfKind, EntityKind: "team"}
+	scope := semantic.ProfileScope{Kind: semantic.AllEntitiesOfKind, EntityKind: "driver"}
 	return []semantic.ProfileDeclaration{
 		{
 			Key:         ProfileCM,
 			Scope:       scope,
 			Aggregation: semantic.AllSelected,
 			Requirements: []semantic.RequirementAtom{
-				{Code: semantic.TeamAssignmentKeyRequired, Kind: semantic.FieldPresent, Field: "team.assignment_key"},
+				{Code: DriverAssignmentRequired, Kind: semantic.FieldPresent, Field: "driver.assignment_status"},
 			},
 		},
 		{
@@ -371,10 +408,10 @@ func newProfileDeclarations() []semantic.ProfileDeclaration {
 			Scope:       scope,
 			Aggregation: semantic.AllSelected,
 			Requirements: []semantic.RequirementAtom{
-				{Code: semantic.TeamAssignmentKeyRequired, Kind: semantic.FieldPresent, Field: "team.assignment_key"},
-				{Code: semantic.TeamAggregationAnchorRequired, Kind: semantic.FieldPresent, Field: "team.aggregation_anchor"},
-				{Code: semantic.TeamElapsedDurationRequired, Kind: semantic.FieldPresent, Field: "team.elapsed_duration_hours"},
-				{Code: semantic.TeamDrivingDurationRequired, Kind: semantic.FieldPresent, Field: "team.driving_duration_hours"},
+				{Code: DriverAssignmentRequired, Kind: semantic.FieldPresent, Field: "driver.assignment_status"},
+				{Code: DriverAggregationAnchorRequired, Kind: semantic.FieldPresent, Field: "driver.reconciled_anchor"},
+				{Code: DriverElapsedDurationRequired, Kind: semantic.FieldPresent, Field: "driver.elapsed_duration_hours"},
+				{Code: DriverDrivingDurationRequired, Kind: semantic.FieldPresent, Field: "driver.driving_duration_hours"},
 			},
 			Implies: []semantic.ProfileKey{ProfileCM},
 		},

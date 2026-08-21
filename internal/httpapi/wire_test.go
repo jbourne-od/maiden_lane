@@ -502,7 +502,7 @@ func TestTransformationProjectionRefusesADeclarationTheContractCannotExpress(t *
 	if err == nil {
 		t.Fatalf("projected an inexpressible declaration as %+v", projected)
 	}
-	if projected.Operator != "" || projected.Form != nil || projected.Aggregate != nil || projected.SelectAssign != nil {
+	if projected.Operator != "" || projected.SelectAssign != nil {
 		t.Fatalf("refused projection still returned content: %+v", projected)
 	}
 
@@ -510,10 +510,6 @@ func TestTransformationProjectionRefusesADeclarationTheContractCannotExpress(t *
 	// against a projection that had simply stopped working.
 	groupBy := semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"}
 	for _, expressible := range []semantic.TransformationDeclaration{
-		{ID: "form_team.v1", Operator: semantic.OperatorFormRelatedEntity,
-			Form: &semantic.FormRelatedEntityDeclaration{SourceKind: "driver", OutputKind: "team"}},
-		{ID: "aggregate_team_hos.v1", Operator: semantic.OperatorAggregateRelatedFields,
-			Aggregate: &semantic.AggregateRelatedFieldsDeclaration{SourceKind: "driver"}},
 		{ID: "certify_depot.v1", Operator: semantic.OperatorSelectAndAssign,
 			SelectAssign: &semantic.SelectAssignDeclaration{
 				Selector: semantic.Selector{Kind: "driver", GroupBy: &groupBy,

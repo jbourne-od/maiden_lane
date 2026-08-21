@@ -439,13 +439,5 @@ func committedOperationCounts(patch semantic.Patch) (inserts, relates, updates u
 // a relation, or two operations touching one entity -- this default becomes a live wrong
 // answer, so the argument is written here rather than left to be re-derived.
 func proposedOperationCounts(transformation semantic.CompiledTransformation) (inserts, relates, updates uint64) {
-	declaration := transformation.Declaration()
-	switch {
-	case declaration.Form != nil:
-		return 1, uint64(len(declaration.Form.Sources)), 0
-	case declaration.Aggregate != nil:
-		return 0, 0, 1
-	default:
-		return 0, 0, 0
-	}
+	return 0, 0, 0
 }

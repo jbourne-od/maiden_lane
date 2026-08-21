@@ -192,14 +192,14 @@ func TestFixtureDeclaresRatifiedProfileRequirements(t *testing.T) {
 	if cm.Key() != teamhos.ProfileCM || optimizer.Key() != teamhos.ProfileOptimizer {
 		t.Fatalf("profile keys=(%s,%s)", cm.Key(), optimizer.Key())
 	}
-	if got := requirementCodes(cm); !slices.Equal(got, []semantic.RequirementCode{semantic.TeamAssignmentKeyRequired}) {
+	if got := requirementCodes(cm); !slices.Equal(got, []semantic.RequirementCode{teamhos.DriverAssignmentRequired}) {
 		t.Fatalf("cm requirements=%v", got)
 	}
 	wantOptimizer := []semantic.RequirementCode{
-		semantic.TeamAggregationAnchorRequired,
-		semantic.TeamAssignmentKeyRequired,
-		semantic.TeamDrivingDurationRequired,
-		semantic.TeamElapsedDurationRequired,
+		teamhos.DriverAggregationAnchorRequired,
+		teamhos.DriverAssignmentRequired,
+		teamhos.DriverDrivingDurationRequired,
+		teamhos.DriverElapsedDurationRequired,
 	}
 	if got := requirementCodes(optimizer); !slices.Equal(got, wantOptimizer) {
 		t.Fatalf("optimizer requirements=%v, want %v", got, wantOptimizer)
@@ -216,40 +216,45 @@ func TestFixtureDeclaresRatifiedAggregateReductions(t *testing.T) {
 	in := mustInputs(t, teamhos.Passing)
 	plan := mustPlan(t, in.Compilation)
 	declaration := plan.MustTransformation(teamhos.RuleAggregateTeamHOS).Declaration()
-	aggregate := declaration.Aggregate
-	if aggregate == nil {
-		t.Fatal("aggregate payload absent")
+	if declaration.SelectAssign == nil {
+		t.Fatal("select_and_assign payload absent")
 	}
-	if aggregate.Target != (semantic.OutputSlotReference{Rule: teamhos.RuleFormTeam, Slot: "team"}) {
-		t.Fatalf("aggregate target=%v, want T1 team output slot", aggregate.Target)
+	sa := declaration.SelectAssign
+
+	// Check guard structure
+	if sa.Guard.Kind != semantic.ExprAll || len(sa.Guard.Args) != 4 {
+		t.Fatalf("guard kind=%v, args=%d, want ExprAll with 4 arguments", sa.Guard.Kind, len(sa.Guard.Args))
 	}
-	if aggregate.Anchor != (semantic.FieldCopy{Source: "driver.hos_anchor", Destination: "team.aggregation_anchor"}) {
-		t.Fatalf("anchor copy=%v", aggregate.Anchor)
+	if sa.Guard.Args[0].Kind != semantic.ExprAllEqual || sa.Guard.Args[0].Field != "driver.hos_anchor" {
+		t.Fatalf("guard arg[0]=%+v, want ExprAllEqual on driver.hos_anchor", sa.Guard.Args[0])
 	}
-	wantReductions := []semantic.FieldReduction{
-		{Kind: semantic.ReduceInt64Max, Source: "driver.hos_driving_hours", Destination: "team.driving_duration_hours"},
-		{Kind: semantic.ReduceInt64Max, Source: "driver.hos_elapsed_hours", Destination: "team.elapsed_duration_hours"},
+
+	// Check assignments and group reductions
+	assignments := sa.Assignments
+	wantTargets := []semantic.FieldPath{
+		"driver.driving_duration_hours",
+		"driver.elapsed_duration_hours",
+		"driver.reconciled_anchor",
 	}
-	reductions := aggregate.Reductions
-	slices.SortFunc(reductions, func(a, b semantic.FieldReduction) int {
-		return strings.Compare(string(a.Destination), string(b.Destination))
-	})
-	if !slices.Equal(reductions, wantReductions) {
-		t.Fatalf("reductions=%v, want ratified componentwise maxima %v", reductions, wantReductions)
+	gotTargets := make([]semantic.FieldPath, 0, len(assignments))
+	assignmentsByTarget := map[semantic.FieldPath]semantic.Expr{}
+	for _, a := range assignments {
+		gotTargets = append(gotTargets, a.Target)
+		assignmentsByTarget[a.Target] = a.Value
 	}
-	var sawSourceOrder, sawResultOrder bool
-	for _, predicate := range aggregate.Predicates {
-		if predicate.Kind == semantic.LessOrEqualFields {
-			sawSourceOrder = slices.Equal(predicate.Fields, []semantic.FieldPath{"driver.hos_driving_hours", "driver.hos_elapsed_hours"})
-		}
+	slices.Sort(gotTargets)
+	if !slices.Equal(gotTargets, wantTargets) {
+		t.Fatalf("assignment targets=%v, want %v", gotTargets, wantTargets)
 	}
-	for _, predicate := range aggregate.ResultPredicates {
-		if predicate.Kind == semantic.LessOrEqualFields {
-			sawResultOrder = slices.Equal(predicate.Fields, []semantic.FieldPath{"team.driving_duration_hours", "team.elapsed_duration_hours"})
-		}
+
+	if expr := assignmentsByTarget["driver.elapsed_duration_hours"]; expr.Kind != semantic.ExprMax || expr.Field != "driver.hos_elapsed_hours" {
+		t.Fatalf("elapsed_duration_hours expr=%+v, want ExprMax on driver.hos_elapsed_hours", expr)
 	}
-	if !sawSourceOrder || !sawResultOrder {
-		t.Fatalf("driving <= elapsed predicate roles missing: source=%t result=%t", sawSourceOrder, sawResultOrder)
+	if expr := assignmentsByTarget["driver.driving_duration_hours"]; expr.Kind != semantic.ExprMax || expr.Field != "driver.hos_driving_hours" {
+		t.Fatalf("driving_duration_hours expr=%+v, want ExprMax on driver.hos_driving_hours", expr)
+	}
+	if expr := assignmentsByTarget["driver.reconciled_anchor"]; expr.Kind != semantic.ExprField || expr.Field != "driver.hos_anchor" {
+		t.Fatalf("reconciled_anchor expr=%+v, want ExprField on driver.hos_anchor", expr)
 	}
 }
 
@@ -314,13 +319,14 @@ func TestMutatingOneInputsCannotAffectAnotherCall(t *testing.T) {
 	victim.Compilation.CompilerSemanticsVersion = "mutated.v9"
 	victim.Compilation.Rules.Transformations[0].ID = "mutated.v1"
 	victim.Compilation.Rules.Transformations[0].DeclaredReads[0] = "driver.hos_anchor"
-	victim.Compilation.Rules.Transformations[0].Form.Sources[0].CanonicalSourceKey = "Z"
-	victim.Compilation.Rules.Transformations[0].Form.CopiedFields[0].Destination = "team.aggregation_anchor"
-	victim.Compilation.Rules.Transformations[1].Aggregate.Predicates[0].Fields[0] = "driver.mutated"
-	victim.Compilation.Rules.Transformations[1].Aggregate.Reductions[0].Kind = 0
-	victim.Compilation.Rules.Transformations[1].Aggregate.RequiredSourceTuple[0] = "driver.mutated"
+	if sa := victim.Compilation.Rules.Transformations[0].SelectAssign; sa != nil {
+		sa.Selector.Kind = "mutated"
+	}
+	if sa := victim.Compilation.Rules.Transformations[1].SelectAssign; sa != nil {
+		sa.Selector.Kind = "mutated"
+	}
 	victim.Compilation.Rules.Checkpoints[0].Key = "mutated_checkpoint.v1"
-	victim.Compilation.Profiles[0].Requirements[0].Field = "team.aggregation_anchor"
+	victim.Compilation.Profiles[0].Requirements[0].Field = "driver.hos_anchor"
 	victim.Compilation.Profiles[1].Requirements = victim.Compilation.Profiles[1].Requirements[:1]
 	victim.Compilation.Profiles[1].Implies[0] = "mutated.v1"
 	victim.Policy = semantic.ProvenancePolicy(99)
@@ -377,17 +383,18 @@ func TestDirectKernelLifecyclePassing(t *testing.T) {
 	})
 	assertVerdict(t, c1, t1.State(), cm, semantic.Ready, nil)
 	assertVerdict(t, c1, t1.State(), optimizer, semantic.NeedsInput, []semantic.RequirementCode{
-		semantic.TeamAggregationAnchorRequired,
-		semantic.TeamDrivingDurationRequired,
-		semantic.TeamElapsedDurationRequired,
+		teamhos.DriverAggregationAnchorRequired,
+		teamhos.DriverDrivingDurationRequired,
+		teamhos.DriverElapsedDurationRequired,
 	})
 
 	t2 := mustAcceptedTransition(t, binding, teamhos.RuleAggregateTeamHOS, t1.State(), t1.Journal())
-	team := mustTeamEntity(t, t2.State())
-	assertStringField(t, team, "assignment_key", assignmentKey)
-	assertAtomField(t, team, "aggregation_anchor", "T0")
-	assertInt64Field(t, team, "elapsed_duration_hours", 10)
-	assertInt64Field(t, team, "driving_duration_hours", 8)
+	for _, driver := range t2.State().Entities() {
+		assertStringField(t, driver, "assignment_key", assignmentKey)
+		assertAtomField(t, driver, "reconciled_anchor", "T0")
+		assertInt64Field(t, driver, "elapsed_duration_hours", 10)
+		assertInt64Field(t, driver, "driving_duration_hours", 8)
+	}
 
 	c2 := mustSealed(t, semantic.SealRequest{
 		Binding: binding, Checkpoint: teamhos.CheckpointTeamHOSAggregated,
@@ -433,8 +440,8 @@ func TestDirectKernelLifecycleAnchorMismatch(t *testing.T) {
 	if failure.Kind() != semantic.ProtectedInvariantFailed {
 		t.Fatalf("failure kind=%s", failure.Kind())
 	}
-	if failure.InvariantCode() != semantic.HOSAnchorMismatch {
-		t.Fatalf("invariant code=%s, want %s", failure.InvariantCode(), semantic.HOSAnchorMismatch)
+	if failure.InvariantCode() != semantic.SelectionGuardUnsatisfied {
+		t.Fatalf("invariant code=%s, want %s", failure.InvariantCode(), semantic.SelectionGuardUnsatisfied)
 	}
 	if digest, present := failure.ProposedPatchDigest(); present {
 		t.Fatalf("pre-patch rejection carries patch digest %s", digest)
@@ -639,20 +646,6 @@ func assertVerdict(t *testing.T, checkpoint semantic.CheckpointArtifact, state s
 	if !slices.Equal(missing, wantMissing) {
 		t.Fatalf("%s missing codes=%v, want %v", profile.Key(), missing, wantMissing)
 	}
-}
-
-func mustTeamEntity(t *testing.T, state semantic.State) semantic.Entity {
-	t.Helper()
-	var teams []semantic.Entity
-	for _, entity := range state.Entities() {
-		if entity.Ref().Kind == "team" {
-			teams = append(teams, entity)
-		}
-	}
-	if len(teams) != 1 {
-		t.Fatalf("teams=%d, want exactly one", len(teams))
-	}
-	return teams[0]
 }
 
 func planRuleIDs(plan semantic.Plan) []semantic.RuleID {

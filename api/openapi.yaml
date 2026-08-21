@@ -716,106 +716,6 @@ components:
           items: { $ref: "#/components/schemas/RelationDeclaration" }
       additionalProperties: false
 
-    SourceReference:
-      type: object
-      required: [kind, canonicalSourceKey]
-      properties:
-        kind: { type: string }
-        canonicalSourceKey: { type: string }
-      additionalProperties: false
-
-    FieldCopy:
-      type: object
-      required: [source, destination]
-      properties:
-        source: { type: string, description: "A field path of the form kind.field." }
-        destination: { type: string, description: "A field path of the form kind.field." }
-      additionalProperties: false
-
-    OutputKeyExpression:
-      type: object
-      required: [kind, field]
-      properties:
-        kind:
-          type: string
-          enum: [common_source_field]
-        field: { type: string }
-      additionalProperties: false
-
-    FormRelatedEntity:
-      type: object
-      description: The closed related-entity transformation payload.
-      required: [sourceKind, sources, outputKind, outputSlot, groupingField, sourceCount, relationKind]
-      properties:
-        sourceKind: { type: string }
-        sources:
-          type: array
-          items: { $ref: "#/components/schemas/SourceReference" }
-        outputKind: { type: string }
-        outputSlot: { type: string }
-        groupingField: { type: string }
-        sourceCount: { type: integer, format: int64, minimum: 0 }
-        copiedFields:
-          type: array
-          items: { $ref: "#/components/schemas/FieldCopy" }
-        relationKind: { type: string }
-        outputKey: { $ref: "#/components/schemas/OutputKeyExpression" }
-      additionalProperties: false
-
-    AggregatePredicate:
-      type: object
-      required: [kind, fields]
-      properties:
-        kind:
-          type: string
-          enum: [complete_tuple, non_negative_int, equal_field_across_sources, less_or_equal_fields]
-        fields:
-          type: array
-          items: { type: string }
-      additionalProperties: false
-
-    FieldReduction:
-      type: object
-      required: [kind, source, destination]
-      properties:
-        kind:
-          type: string
-          enum: [reduce_int64_max]
-        source: { type: string }
-        destination: { type: string }
-      additionalProperties: false
-
-    OutputSlotReference:
-      type: object
-      required: [rule, slot]
-      properties:
-        rule: { type: string }
-        slot: { type: string }
-      additionalProperties: false
-
-    AggregateRelatedFields:
-      type: object
-      description: The closed related-field aggregation payload.
-      required: [target, relationKind, sourceKind, requiredSourceTuple, anchor]
-      properties:
-        target: { $ref: "#/components/schemas/OutputSlotReference" }
-        relationKind: { type: string }
-        sourceKind: { type: string }
-        requiredSourceTuple:
-          type: array
-          items: { type: string }
-        predicates:
-          type: array
-          items: { $ref: "#/components/schemas/AggregatePredicate" }
-        anchor: { $ref: "#/components/schemas/FieldCopy" }
-        reductions:
-          type: array
-          items: { $ref: "#/components/schemas/FieldReduction" }
-        resultPredicates:
-          type: array
-          items: { $ref: "#/components/schemas/AggregatePredicate" }
-      additionalProperties: false
-
     TransformationDeclaration:
       type: object
       description: A closed tagged union. Exactly one payload must be present and must agree with `operator`.
@@ -824,7 +724,7 @@ components:
         id: { type: string }
         operator:
           type: string
-          enum: [form_related_entity, aggregate_related_fields, select_and_assign]
+          enum: [select_and_assign]
         declaredReads:
           type: array
           items: { type: string }
@@ -834,8 +734,6 @@ components:
         after:
           type: array
           items: { type: string }
-        form: { $ref: "#/components/schemas/FormRelatedEntity" }
-        aggregate: { $ref: "#/components/schemas/AggregateRelatedFields" }
         selectAssign: { $ref: "#/components/schemas/SelectAndAssign" }
       additionalProperties: false
 

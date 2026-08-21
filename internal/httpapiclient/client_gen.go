@@ -16,30 +16,6 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
-// Defines values for AggregatePredicateKind.
-const (
-	AggregatePredicateKindCompleteTuple           AggregatePredicateKind = "complete_tuple"
-	AggregatePredicateKindEqualFieldAcrossSources AggregatePredicateKind = "equal_field_across_sources"
-	AggregatePredicateKindLessOrEqualFields       AggregatePredicateKind = "less_or_equal_fields"
-	AggregatePredicateKindNonNegativeInt          AggregatePredicateKind = "non_negative_int"
-)
-
-// Valid indicates whether the value is a known member of the AggregatePredicateKind enum.
-func (e AggregatePredicateKind) Valid() bool {
-	switch e {
-	case AggregatePredicateKindCompleteTuple:
-		return true
-	case AggregatePredicateKindEqualFieldAcrossSources:
-		return true
-	case AggregatePredicateKindLessOrEqualFields:
-		return true
-	case AggregatePredicateKindNonNegativeInt:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for CardinalityKind.
 const (
 	CardinalityKindAny     CardinalityKind = "any"
@@ -211,21 +187,6 @@ func (e ExprKind) Valid() bool {
 	}
 }
 
-// Defines values for FieldReductionKind.
-const (
-	FieldReductionKindReduceInt64Max FieldReductionKind = "reduce_int64_max"
-)
-
-// Valid indicates whether the value is a known member of the FieldReductionKind enum.
-func (e FieldReductionKind) Valid() bool {
-	switch e {
-	case FieldReductionKindReduceInt64Max:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for GateClauseResultClause.
 const (
 	GateClauseResultClauseCertifiedBackend     GateClauseResultClause = "certified_backend"
@@ -301,21 +262,6 @@ func (e GateVerdict) Valid() bool {
 	case GateVerdictNotEvaluated:
 		return true
 	case GateVerdictPass:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for OutputKeyExpressionKind.
-const (
-	OutputKeyExpressionKindCommonSourceField OutputKeyExpressionKind = "common_source_field"
-)
-
-// Valid indicates whether the value is a known member of the OutputKeyExpressionKind enum.
-func (e OutputKeyExpressionKind) Valid() bool {
-	switch e {
-	case OutputKeyExpressionKindCommonSourceField:
 		return true
 	default:
 		return false
@@ -447,18 +393,12 @@ func (e SemanticFailureKind) Valid() bool {
 
 // Defines values for TransformationDeclarationOperator.
 const (
-	TransformationDeclarationOperatorAggregateRelatedFields TransformationDeclarationOperator = "aggregate_related_fields"
-	TransformationDeclarationOperatorFormRelatedEntity      TransformationDeclarationOperator = "form_related_entity"
-	TransformationDeclarationOperatorSelectAndAssign        TransformationDeclarationOperator = "select_and_assign"
+	TransformationDeclarationOperatorSelectAndAssign TransformationDeclarationOperator = "select_and_assign"
 )
 
 // Valid indicates whether the value is a known member of the TransformationDeclarationOperator enum.
 func (e TransformationDeclarationOperator) Valid() bool {
 	switch e {
-	case TransformationDeclarationOperatorAggregateRelatedFields:
-		return true
-	case TransformationDeclarationOperatorFormRelatedEntity:
-		return true
 	case TransformationDeclarationOperatorSelectAndAssign:
 		return true
 	default:
@@ -503,27 +443,6 @@ func (e WorldReferenceKind) Valid() bool {
 	default:
 		return false
 	}
-}
-
-// AggregatePredicate defines model for AggregatePredicate.
-type AggregatePredicate struct {
-	Fields []string               `json:"fields"`
-	Kind   AggregatePredicateKind `json:"kind"`
-}
-
-// AggregatePredicateKind defines model for AggregatePredicate.Kind.
-type AggregatePredicateKind string
-
-// AggregateRelatedFields The closed related-field aggregation payload.
-type AggregateRelatedFields struct {
-	Anchor              FieldCopy             `json:"anchor"`
-	Predicates          *[]AggregatePredicate `json:"predicates,omitempty"`
-	Reductions          *[]FieldReduction     `json:"reductions,omitempty"`
-	RelationKind        string                `json:"relationKind"`
-	RequiredSourceTuple []string              `json:"requiredSourceTuple"`
-	ResultPredicates    *[]AggregatePredicate `json:"resultPredicates,omitempty"`
-	SourceKind          string                `json:"sourceKind"`
-	Target              OutputSlotReference   `json:"target"`
 }
 
 // Assessment defines model for Assessment.
@@ -878,15 +797,6 @@ type FieldAssignment struct {
 	Value Expr `json:"value"`
 }
 
-// FieldCopy defines model for FieldCopy.
-type FieldCopy struct {
-	// Destination A field path of the form kind.field.
-	Destination string `json:"destination"`
-
-	// Source A field path of the form kind.field.
-	Source string `json:"source"`
-}
-
 // FieldDeclaration defines model for FieldDeclaration.
 type FieldDeclaration struct {
 	// Kind The closed typed-value vocabulary.
@@ -898,29 +808,6 @@ type FieldDeclaration struct {
 	// value type; rule-level presence obligations are enforced by the
 	// transformations that read the field, not here.
 	RequiredAtConstruction *bool `json:"requiredAtConstruction,omitempty"`
-}
-
-// FieldReduction defines model for FieldReduction.
-type FieldReduction struct {
-	Destination string             `json:"destination"`
-	Kind        FieldReductionKind `json:"kind"`
-	Source      string             `json:"source"`
-}
-
-// FieldReductionKind defines model for FieldReduction.Kind.
-type FieldReductionKind string
-
-// FormRelatedEntity The closed related-entity transformation payload.
-type FormRelatedEntity struct {
-	CopiedFields  *[]FieldCopy         `json:"copiedFields,omitempty"`
-	GroupingField string               `json:"groupingField"`
-	OutputKey     *OutputKeyExpression `json:"outputKey,omitempty"`
-	OutputKind    string               `json:"outputKind"`
-	OutputSlot    string               `json:"outputSlot"`
-	RelationKind  string               `json:"relationKind"`
-	SourceCount   int64                `json:"sourceCount"`
-	SourceKind    string               `json:"sourceKind"`
-	Sources       []SourceReference    `json:"sources"`
 }
 
 // GateClauseResult One clause of HLD §14.1's nine-clause gate.
@@ -960,21 +847,6 @@ type GateVerdict string
 type InputLineage struct {
 	Namespace string `json:"namespace"`
 	RootKey   string `json:"rootKey"`
-}
-
-// OutputKeyExpression defines model for OutputKeyExpression.
-type OutputKeyExpression struct {
-	Field string                  `json:"field"`
-	Kind  OutputKeyExpressionKind `json:"kind"`
-}
-
-// OutputKeyExpressionKind defines model for OutputKeyExpression.Kind.
-type OutputKeyExpressionKind string
-
-// OutputSlotReference defines model for OutputSlotReference.
-type OutputSlotReference struct {
-	Rule string `json:"rule"`
-	Slot string `json:"slot"`
 }
 
 // Plan defines model for Plan.
@@ -1225,12 +1097,6 @@ type SemanticFailure struct {
 // SemanticFailureKind defines model for SemanticFailure.Kind.
 type SemanticFailureKind string
 
-// SourceReference defines model for SourceReference.
-type SourceReference struct {
-	CanonicalSourceKey string `json:"canonicalSourceKey"`
-	Kind               string `json:"kind"`
-}
-
 // StateInput defines model for StateInput.
 type StateInput struct {
 	Entities []EntityInput `json:"entities"`
@@ -1242,17 +1108,11 @@ type StateInput struct {
 
 // TransformationDeclaration A closed tagged union. Exactly one payload must be present and must agree with `operator`.
 type TransformationDeclaration struct {
-	After *[]string `json:"after,omitempty"`
-
-	// Aggregate The closed related-field aggregation payload.
-	Aggregate      *AggregateRelatedFields `json:"aggregate,omitempty"`
-	DeclaredReads  *[]string               `json:"declaredReads,omitempty"`
-	DeclaredWrites *[]string               `json:"declaredWrites,omitempty"`
-
-	// Form The closed related-entity transformation payload.
-	Form     *FormRelatedEntity                `json:"form,omitempty"`
-	Id       string                            `json:"id"`
-	Operator TransformationDeclarationOperator `json:"operator"`
+	After          *[]string                         `json:"after,omitempty"`
+	DeclaredReads  *[]string                         `json:"declaredReads,omitempty"`
+	DeclaredWrites *[]string                         `json:"declaredWrites,omitempty"`
+	Id             string                            `json:"id"`
+	Operator       TransformationDeclarationOperator `json:"operator"`
 
 	// SelectAssign The selector-scoped transformation payload: a rule applied to a
 	// population rather than to entities named one by one.

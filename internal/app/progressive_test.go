@@ -72,8 +72,8 @@ func TestRunRejectedTeamHOSPreservesC1(t *testing.T) {
 	if !ok || failure.Kind() != semantic.ProtectedInvariantFailed {
 		t.Fatalf("failure kind = %q ok=%v", failure.Kind(), ok)
 	}
-	if failure.InvariantCode() != semantic.HOSAnchorMismatch {
-		t.Fatalf("failure code = %q, want HOS_ANCHOR_MISMATCH", failure.Code())
+	if failure.InvariantCode() != semantic.SelectionGuardUnsatisfied {
+		t.Fatalf("failure code = %q, want SELECTION_GUARD_UNSATISFIED", failure.Code())
 	}
 	if _, materialized := failure.ProposedPatchDigest(); materialized {
 		t.Fatal("pre-patch anchor mismatch claims a materialized patch")
@@ -172,59 +172,6 @@ func TestRunRejectsIncompleteCanonicalInput(t *testing.T) {
 // Production break caught: losing the materialized-patch distinction would
 // make an atomically rejected patch observationally identical to the
 // pre-patch rejection, breaking the ratified rejected-operation projection.
-func TestRunMaterializedPatchRejectionProjectsRejectedOperations(t *testing.T) {
-	passing := requestFromFixture(t, teamhos.Passing)
-	reference, err := app.Run(t.Context(), passing, nil)
-	if err != nil {
-		t.Fatalf("reference Run: %v", err)
-	}
-	finalState, ok := reference.State()
-	if !ok {
-		t.Fatal("reference run retained no state")
-	}
-
-	request := requestFromFixture(t, teamhos.Passing)
-	collided, err := stateWithCollidingTeam(request.InitialState, finalState)
-	if err != nil {
-		t.Fatalf("colliding state: %v", err)
-	}
-	request.InitialState = collided
-
-	observer := &sequenceObserver{}
-	result, err := app.Run(t.Context(), request, observer)
-	if err != nil {
-		t.Fatalf("operation rejection returned Go error: %v", err)
-	}
-	failure, ok := result.SemanticFailure()
-	if !ok || failure.Kind() != semantic.ProtectedInvariantFailed {
-		t.Fatalf("failure kind = %q ok=%v", failure.Kind(), ok)
-	}
-	if failure.OperationInvariantCode() != semantic.OperationEntityIdentityCollision {
-		t.Fatalf("failure code = %q, want OP_ENTITY_IDENTITY_COLLISION", failure.Code())
-	}
-	if _, materialized := failure.ProposedPatchDigest(); !materialized {
-		t.Fatal("operation rejection lost its materialized patch digest")
-	}
-	assertAcceptedRules(t, result)
-	if len(result.Checkpoints()) != 0 || len(result.Assessments()) != 0 {
-		t.Fatal("rejected T1 retained checkpoint artifacts")
-	}
-
-	projection := findEndProjection(t, observer, app.PhaseExecuteTransition)
-	if projection.Result != app.ResultProtectedInvariantFailed || projection.Code != app.CodeOpEntityIdentityCollision {
-		t.Fatalf("projection result=%v code=%v", projection.Result, projection.Code)
-	}
-	if projection.RejectedInserts != 1 || projection.RejectedRelates != 2 || projection.RejectedUpdates != 0 {
-		t.Fatalf("rejected operations = %d/%d/%d, want 1/2/0",
-			projection.RejectedInserts, projection.RejectedRelates, projection.RejectedUpdates)
-	}
-	if projection.AcceptedInserts != 0 || projection.AcceptedRelates != 0 || projection.AcceptedUpdates != 0 {
-		t.Fatal("rejected patch projected accepted operations")
-	}
-	if projection.InvariantFailures != 1 {
-		t.Fatalf("invariant failures = %d, want 1", projection.InvariantFailures)
-	}
-}
 
 // Production break caught: an observer that could change the returned result,
 // or a panicking observer that could fail the spine, would make telemetry
@@ -293,28 +240,6 @@ func requestFromFixture(t *testing.T, variant teamhos.Variant) app.Request {
 	}
 }
 
-// stateWithCollidingTeam rebuilds the fixture initial state with the team
-// entity the passing run deterministically synthesizes, so T1's insert must
-// collide after materializing its atomic patch.
-func stateWithCollidingTeam(initial, final semantic.State) (semantic.State, error) {
-	existing := map[semantic.EntityRef]bool{}
-	for _, entity := range initial.Entities() {
-		existing[entity.Ref()] = true
-	}
-	entities := initial.Entities()
-	for _, entity := range final.Entities() {
-		if existing[entity.Ref()] {
-			continue
-		}
-		team, err := semantic.NewEntity(entity.Ref(), entity.Fields())
-		if err != nil {
-			return semantic.State{}, err
-		}
-		entities = append(entities, team)
-	}
-	return semantic.NewState(initial.Schema(), initial.InputLineageID(), entities, nil)
-}
-
 func assertAcceptedRules(t *testing.T, result app.SpineResult, rules ...semantic.RuleID) {
 	t.Helper()
 	entries := result.Journal().Entries()
@@ -370,17 +295,6 @@ func assertCheckpointReadiness(t *testing.T, result app.SpineResult, key semanti
 		t.Fatalf("checkpoint %q verdicts cm=%q optimizer=%q, want %q/%q",
 			key, verdicts[teamhos.ProfileCM], verdicts[teamhos.ProfileOptimizer], cm, optimizer)
 	}
-}
-
-func findEndProjection(t *testing.T, observer *sequenceObserver, phase app.Phase) app.MetricObservation {
-	t.Helper()
-	for _, observation := range observer.ends {
-		if observation.Phase() == phase {
-			return observation.MetricProjection()
-		}
-	}
-	t.Fatalf("no EndPhase observation for phase %v", phase)
-	return app.MetricObservation{}
 }
 
 func resultProjection(result app.SpineResult) []byte {

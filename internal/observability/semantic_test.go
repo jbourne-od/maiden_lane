@@ -118,9 +118,7 @@ func TestSemanticObserverPassingMetrics(t *testing.T) {
 		"phase=execute_spine,result=success":        1,
 	})
 	assertSumPoints(t, metrics, semanticOperationsName, map[string]int64{
-		"operation_kind=insert,result=accepted": 1,
-		"operation_kind=relate,result=accepted": 2,
-		"operation_kind=update,result=accepted": 1,
+		"operation_kind=update,result=accepted": 4,
 	})
 	assertSumPoints(t, metrics, semanticCheckpointsName, map[string]int64{"result=sealed": 2})
 	assertSumPoints(t, metrics, semanticAssessmentsName, map[string]int64{
@@ -162,8 +160,8 @@ func TestSemanticObserverAnchorMismatch(t *testing.T) {
 	if rejected.Status().Code != codes.Error {
 		t.Fatalf("rejected transition status = %v, want Error", rejected.Status())
 	}
-	if got := spanAttributeMap(rejected)[attributeCode]; got != "HOS_ANCHOR_MISMATCH" {
-		t.Fatalf("code attribute = %#v, want HOS_ANCHOR_MISMATCH", got)
+	if got := spanAttributeMap(rejected)[attributeCode]; got != "SELECTION_GUARD_UNSATISFIED" {
+		t.Fatalf("code attribute = %#v, want SELECTION_GUARD_UNSATISFIED", got)
 	}
 	spine := findSpan(t, ended, "maiden_lane.semantic.execute_spine", "", "protected_invariant_failed")
 	if spine.Status().Code != codes.Error {
@@ -175,12 +173,11 @@ func TestSemanticObserverAnchorMismatch(t *testing.T) {
 
 	metrics := collectMetrics(t, reader)
 	assertSumPoints(t, metrics, semanticOperationsName, map[string]int64{
-		"operation_kind=insert,result=accepted": 1,
-		"operation_kind=relate,result=accepted": 2,
+		"operation_kind=update,result=accepted": 2,
 	})
 	assertSumPoints(t, metrics, semanticCheckpointsName, map[string]int64{"result=sealed": 1})
 	assertSumPoints(t, metrics, semanticInvariantFailuresName,
-		map[string]int64{"invariant_code=HOS_ANCHOR_MISMATCH": 1})
+		map[string]int64{"invariant_code=SELECTION_GUARD_UNSATISFIED": 1})
 	assertSumPoints(t, metrics, semanticAssessmentsName, map[string]int64{
 		"profile_kind=cm.v1,verdict=ready":              1,
 		"profile_kind=optimizer.v1,verdict=needs_input": 1,
@@ -444,18 +441,11 @@ func TestSemanticCodeMappingSeparatesSpanAndInvariantVocabularies(t *testing.T) 
 	// observedCode AND by observedInvariantCode, while a span-only code is admitted by the
 	// first and refused by the second.
 	invariants := map[app.ObservationCode]string{
-		app.CodeOpEntityIdentityCollision:    "OP_ENTITY_IDENTITY_COLLISION",
-		app.CodeOpUpdateTargetNotFound:       "OP_UPDATE_TARGET_NOT_FOUND",
-		app.CodeOpBeforeImageMismatch:        "OP_BEFORE_IMAGE_MISMATCH",
-		app.CodeOpRelationAlreadyPresent:     "OP_RELATION_ALREADY_PRESENT",
-		app.CodeOpRelationEndpointMissing:    "OP_RELATION_ENDPOINT_MISSING",
-		app.CodeDeclaredSourceNotFound:       "DECLARED_SOURCE_NOT_FOUND",
-		app.CodeDeclaredSourceKindInvalid:    "DECLARED_SOURCE_KIND_INVALID",
-		app.CodeTeamAssignmentKeyInvalid:     "TEAM_ASSIGNMENT_KEY_INVALID",
-		app.CodeTeamAssignmentKeyMismatch:    "TEAM_ASSIGNMENT_KEY_MISMATCH",
-		app.CodeTeamMemberCardinalityInvalid: "TEAM_MEMBER_CARDINALITY_INVALID",
-		app.CodeHOSTupleIncomplete:           "HOS_TUPLE_INCOMPLETE", app.CodeHOSDurationInvalid: "HOS_DURATION_INVALID",
-		app.CodeHOSAnchorMismatch: "HOS_ANCHOR_MISMATCH", app.CodeHOSAggregateInvalid: "HOS_AGGREGATE_INVALID",
+		app.CodeOpEntityIdentityCollision:      "OP_ENTITY_IDENTITY_COLLISION",
+		app.CodeOpUpdateTargetNotFound:         "OP_UPDATE_TARGET_NOT_FOUND",
+		app.CodeOpBeforeImageMismatch:          "OP_BEFORE_IMAGE_MISMATCH",
+		app.CodeOpRelationAlreadyPresent:       "OP_RELATION_ALREADY_PRESENT",
+		app.CodeOpRelationEndpointMissing:      "OP_RELATION_ENDPOINT_MISSING",
 		app.CodeSelectionCardinalityInvalid:    "SELECTION_CARDINALITY_INVALID",
 		app.CodeSelectionEmpty:                 "SELECTION_EMPTY",
 		app.CodeSelectionGuardUnsatisfied:      "SELECTION_GUARD_UNSATISFIED",

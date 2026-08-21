@@ -159,12 +159,12 @@ func reversedAuthoringOrder(t *testing.T, in teamhos.Inputs) teamhos.Inputs {
 		writes := slices.Clone(transformations[i].DeclaredWrites)
 		slices.Reverse(writes)
 		transformations[i].DeclaredWrites = writes
-		if form := transformations[i].Form; form != nil {
-			sources := slices.Clone(form.Sources)
-			slices.Reverse(sources)
-			reversed := *form
-			reversed.Sources = sources
-			transformations[i].Form = &reversed
+		if sa := transformations[i].SelectAssign; sa != nil {
+			assignments := slices.Clone(sa.Assignments)
+			slices.Reverse(assignments)
+			reversed := *sa
+			reversed.Assignments = assignments
+			transformations[i].SelectAssign = &reversed
 		}
 	}
 	in.Compilation.Rules.Transformations = transformations
@@ -431,29 +431,11 @@ func withPinnedWorldReference(t *testing.T, in teamhos.Inputs) teamhos.Inputs {
 
 func withChangedOutputSlot(t *testing.T, in teamhos.Inputs) teamhos.Inputs {
 	t.Helper()
-	transformations := slices.Clone(in.Compilation.Rules.Transformations)
-	changed := false
-	for i := range transformations {
-		if transformations[i].Form == nil {
-			continue
-		}
-		form := *transformations[i].Form
-		form.OutputSlot = "formed_team_slot.v1"
-		transformations[i].Form = &form
-		changed = true
-	}
-	if !changed {
-		t.Fatal("fixture no longer declares a form transformation")
-	}
-	for i := range transformations {
-		if transformations[i].Aggregate == nil {
-			continue
-		}
-		aggregate := *transformations[i].Aggregate
-		aggregate.Target.Slot = "formed_team_slot.v1"
-		transformations[i].Aggregate = &aggregate
-	}
-	in.Compilation.Rules.Transformations = transformations
+	checkpoints := append(slices.Clone(in.Compilation.Rules.Checkpoints), semantic.CheckpointDeclaration{
+		Key:   "team_checkpoint_extra.v1",
+		After: teamhos.RuleFormTeam,
+	})
+	in.Compilation.Rules.Checkpoints = checkpoints
 	return in
 }
 
@@ -470,7 +452,7 @@ func withRelaxedOptimizerProfile(t *testing.T, in teamhos.Inputs) teamhos.Inputs
 		// identity moves.
 		requirements := make([]semantic.RequirementAtom, 0, len(profiles[i].Requirements))
 		for _, atom := range profiles[i].Requirements {
-			if atom.Code == semantic.TeamDrivingDurationRequired {
+			if atom.Code == teamhos.DriverDrivingDurationRequired {
 				continue
 			}
 			requirements = append(requirements, atom)
