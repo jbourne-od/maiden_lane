@@ -1,6 +1,9 @@
 package semantic
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Group-scoped expressions: predicates about a whole group rather than one entity.
 //
@@ -175,11 +178,20 @@ func checkExprInScope(
 		if err := checkPathsBindKind(expr, kind); err != nil {
 			return TypeInvalid, err
 		}
-		if declared != ValueInt64 {
-			return TypeInvalid, fmt.Errorf(
-				"%s requires int64 field, got declared kind %d", expr.Kind, declared)
+		fieldT, err := valueKindType(declared)
+		if err != nil {
+			return TypeInvalid, err
 		}
-		return TypeInt64, nil
+		if expr.Kind == ExprSum {
+			if fieldT != TypeInt64 && fieldT != TypeDecimal && fieldT != TypeDuration {
+				return TypeInvalid, fmt.Errorf("sum requires int64, decimal, or duration field, got %s", fieldT)
+			}
+			return fieldT, nil
+		}
+		if fieldT != TypeInt64 && fieldT != TypeDecimal && fieldT != TypeDuration && fieldT != TypeTimestamp && fieldT != TypeDate {
+			return TypeInvalid, fmt.Errorf("%s requires comparable field, got %s", expr.Kind, fieldT)
+		}
+		return fieldT, nil
 
 	case ExprNot:
 		argument, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
@@ -227,8 +239,11 @@ func checkExprInScope(
 		if err != nil {
 			return TypeInvalid, err
 		}
-		if left != TypeInt64 || right != TypeInt64 {
-			return TypeInvalid, fmt.Errorf("less requires int64 on both sides, got %s and %s", left, right)
+		if left != right {
+			return TypeInvalid, fmt.Errorf("less compares %s with %s", left, right)
+		}
+		if left != TypeInt64 && left != TypeDecimal && left != TypeDuration && left != TypeTimestamp && left != TypeDate {
+			return TypeInvalid, fmt.Errorf("less requires ordered type on both sides, got %s", left)
 		}
 		return TypeBool, nil
 
@@ -241,10 +256,251 @@ func checkExprInScope(
 		if err != nil {
 			return TypeInvalid, err
 		}
-		if left != TypeInt64 || right != TypeInt64 {
-			return TypeInvalid, fmt.Errorf("add requires int64 on both sides, got %s and %s", left, right)
+		if left == TypeInt64 && right == TypeInt64 {
+			return TypeInt64, nil
+		}
+		if left == TypeDecimal && right == TypeDecimal {
+			return TypeDecimal, nil
+		}
+		if left == TypeDuration && right == TypeDuration {
+			return TypeDuration, nil
+		}
+		if (left == TypeTimestamp && right == TypeDuration) || (left == TypeDuration && right == TypeTimestamp) {
+			return TypeTimestamp, nil
+		}
+		return TypeInvalid, fmt.Errorf("add unsupported operand types %s and %s", left, right)
+
+	case ExprSubtract:
+		left, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		right, err := checkExprInScope(schema, kind, expr.Args[1], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if left == TypeInt64 && right == TypeInt64 {
+			return TypeInt64, nil
+		}
+		if left == TypeDecimal && right == TypeDecimal {
+			return TypeDecimal, nil
+		}
+		if left == TypeDuration && right == TypeDuration {
+			return TypeDuration, nil
+		}
+		if left == TypeTimestamp && right == TypeTimestamp {
+			return TypeDuration, nil
+		}
+		if left == TypeTimestamp && right == TypeDuration {
+			return TypeTimestamp, nil
+		}
+		return TypeInvalid, fmt.Errorf("subtract unsupported operand types %s and %s", left, right)
+
+	case ExprMultiply:
+		left, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		right, err := checkExprInScope(schema, kind, expr.Args[1], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if left == TypeInt64 && right == TypeInt64 {
+			return TypeInt64, nil
+		}
+		if left == TypeDecimal && right == TypeDecimal {
+			return TypeDecimal, nil
+		}
+		if (left == TypeDuration && right == TypeInt64) || (left == TypeInt64 && right == TypeDuration) {
+			return TypeDuration, nil
+		}
+		return TypeInvalid, fmt.Errorf("multiply unsupported operand types %s and %s", left, right)
+
+	case ExprDivide:
+		left, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		right, err := checkExprInScope(schema, kind, expr.Args[1], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if left == TypeInt64 && right == TypeInt64 {
+			return TypeInt64, nil
+		}
+		if left == TypeDecimal && right == TypeDecimal {
+			return TypeDecimal, nil
+		}
+		return TypeInvalid, fmt.Errorf("divide unsupported operand types %s and %s", left, right)
+
+	case ExprModulo:
+		left, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		right, err := checkExprInScope(schema, kind, expr.Args[1], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if left == TypeInt64 && right == TypeInt64 {
+			return TypeInt64, nil
+		}
+		return TypeInvalid, fmt.Errorf("modulo requires int64, got %s and %s", left, right)
+
+	case ExprAbs:
+		arg, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if arg == TypeInt64 || arg == TypeDecimal || arg == TypeDuration {
+			return arg, nil
+		}
+		return TypeInvalid, fmt.Errorf("abs requires int64, decimal, or duration, got %s", arg)
+
+	case ExprClamp:
+		val, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		minVal, err := checkExprInScope(schema, kind, expr.Args[1], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		maxVal, err := checkExprInScope(schema, kind, expr.Args[2], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if val != minVal || val != maxVal {
+			return TypeInvalid, fmt.Errorf("clamp arguments must have matching types, got %s, %s, %s", val, minVal, maxVal)
+		}
+		if val != TypeInt64 && val != TypeDecimal && val != TypeDuration && val != TypeTimestamp && val != TypeDate {
+			return TypeInvalid, fmt.Errorf("clamp requires ordered type, got %s", val)
+		}
+		return val, nil
+
+	case ExprTimestampAdd:
+		left, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		right, err := checkExprInScope(schema, kind, expr.Args[1], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if (left == TypeTimestamp && right == TypeDuration) || (left == TypeDuration && right == TypeTimestamp) {
+			return TypeTimestamp, nil
+		}
+		return TypeInvalid, fmt.Errorf("timestamp_add requires timestamp and duration, got %s and %s", left, right)
+
+	case ExprTimestampDiff:
+		left, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		right, err := checkExprInScope(schema, kind, expr.Args[1], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if left == TypeTimestamp && right == TypeTimestamp {
+			return TypeDuration, nil
+		}
+		return TypeInvalid, fmt.Errorf("timestamp_diff requires timestamp on both sides, got %s and %s", left, right)
+
+	case ExprDateExtract:
+		unit := strings.ToLower(string(expr.Field))
+		switch unit {
+		case "year", "month", "day", "hour", "minute", "second", "day_of_week":
+		default:
+			return TypeInvalid, fmt.Errorf("unknown date extract unit %q", expr.Field)
+		}
+		arg, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if arg == TypeDate && (unit == "hour" || unit == "minute" || unit == "second") {
+			return TypeInvalid, fmt.Errorf("date extract unit %q is not valid for date type", unit)
+		}
+		if arg != TypeTimestamp && arg != TypeDate {
+			return TypeInvalid, fmt.Errorf("date_extract requires timestamp or date, got %s", arg)
 		}
 		return TypeInt64, nil
+
+	case ExprConcat:
+		for i := range expr.Args {
+			arg, err := checkExprInScope(schema, kind, expr.Args[i], in, depth+1)
+			if err != nil {
+				return TypeInvalid, err
+			}
+			if arg != TypeString {
+				return TypeInvalid, fmt.Errorf("concat requires string arguments, argument %d is %s", i, arg)
+			}
+		}
+		return TypeString, nil
+
+	case ExprSubstring:
+		str, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		start, err := checkExprInScope(schema, kind, expr.Args[1], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		length, err := checkExprInScope(schema, kind, expr.Args[2], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if str != TypeString || start != TypeInt64 || length != TypeInt64 {
+			return TypeInvalid, fmt.Errorf("substring requires (string, int64, int64), got (%s, %s, %s)", str, start, length)
+		}
+		return TypeString, nil
+
+	case ExprTrim:
+		arg, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if arg != TypeString {
+			return TypeInvalid, fmt.Errorf("trim requires string, got %s", arg)
+		}
+		return TypeString, nil
+
+	case ExprIf:
+		cond, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if cond != TypeBool {
+			return TypeInvalid, fmt.Errorf("if condition must be bool, got %s", cond)
+		}
+		thenT, err := checkExprInScope(schema, kind, expr.Args[1], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		elseT, err := checkExprInScope(schema, kind, expr.Args[2], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		if thenT != elseT {
+			return TypeInvalid, fmt.Errorf("if branches must have matching types, got %s and %s", thenT, elseT)
+		}
+		return thenT, nil
+
+	case ExprCoalesce:
+		firstT, err := checkExprInScope(schema, kind, expr.Args[0], in, depth+1)
+		if err != nil {
+			return TypeInvalid, err
+		}
+		for i := 1; i < len(expr.Args); i++ {
+			t, err := checkExprInScope(schema, kind, expr.Args[i], in, depth+1)
+			if err != nil {
+				return TypeInvalid, err
+			}
+			if t != firstT {
+				return TypeInvalid, fmt.Errorf("coalesce arguments must have matching types, argument %d is %s, want %s", i, t, firstT)
+			}
+		}
+		return firstT, nil
 
 	default:
 		return TypeInvalid, fmt.Errorf("unknown expression kind %d", expr.Kind)
@@ -274,6 +530,21 @@ func evaluateAssignmentValue(schema Schema, expr Expr, members []Entity, member 
 	}
 	if !result.value.Valid() {
 		return Value{}, fmt.Errorf("assignment expression yielded no value")
+	}
+	return result.value, nil
+}
+
+// evaluateGroupValue evaluates a group-scoped value expression (e.g. reductions, literals) over a group's members.
+func evaluateGroupValue(schema Schema, expr Expr, members []Entity) (Value, error) {
+	result, err := evaluateGroupNode(schema, expr, members, nil)
+	if err != nil {
+		return Value{}, err
+	}
+	if result.kind == TypeBool {
+		return Value{}, fmt.Errorf("group value expression is bool, not a value")
+	}
+	if !result.value.Valid() {
+		return Value{}, fmt.Errorf("group value expression yielded no value")
 	}
 	return result.value, nil
 }
@@ -367,8 +638,11 @@ func evaluateGroupNode(
 		return evaluated{kind: TypeInt64, value: NewInt64Value(count)}, nil
 
 	case ExprSum:
-		var sum int64
-		for _, member := range members {
+		var sumInt int64
+		var sumDur int64
+		var sumDec decimal
+		var kind ValueKind
+		for i, member := range members {
 			value, declared, present, err := boundField(schema, expr.Field, member)
 			if err != nil {
 				return evaluated{}, err
@@ -376,66 +650,88 @@ func evaluateGroupNode(
 			if !present {
 				return evaluated{}, fmt.Errorf("sum reads %q, absent on a member", expr.Field)
 			}
-			if declared != ValueInt64 || value.Kind() != ValueInt64 {
-				return evaluated{}, fmt.Errorf("sum reads %q, which is not an int64", expr.Field)
+			if i == 0 {
+				kind = declared
 			}
-			intVal, ok := value.Int64()
-			if !ok {
-				return evaluated{}, fmt.Errorf("sum reads %q, invalid int64", expr.Field)
+			switch kind {
+			case ValueInt64:
+				val, ok := value.Int64()
+				if !ok {
+					return evaluated{}, fmt.Errorf("sum reads %q, invalid int64", expr.Field)
+				}
+				next, err := addInt64(sumInt, val)
+				if err != nil {
+					return evaluated{}, fmt.Errorf("sum overflows int64")
+				}
+				sumInt = next
+			case ValueDuration:
+				val, ok := value.Duration()
+				if !ok {
+					return evaluated{}, fmt.Errorf("sum reads %q, invalid duration", expr.Field)
+				}
+				next, err := addInt64(sumDur, val)
+				if err != nil {
+					return evaluated{}, fmt.Errorf("sum overflows duration")
+				}
+				sumDur = next
+			case ValueDecimal:
+				d, ok := value.Decimal()
+				if !ok {
+					return evaluated{}, fmt.Errorf("sum reads %q, invalid decimal", expr.Field)
+				}
+				dec, _ := parseDecimal(d)
+				next, err := sumDec.Add(dec)
+				if err != nil {
+					return evaluated{}, fmt.Errorf("sum overflows decimal: %w", err)
+				}
+				sumDec = next
+			default:
+				return evaluated{}, fmt.Errorf("sum reads unsupported kind %d", kind)
 			}
-			next := sum + intVal
-			if (intVal > 0 && next < sum) || (intVal < 0 && next > sum) {
-				return evaluated{}, fmt.Errorf("sum overflows int64")
-			}
-			sum = next
 		}
-		return evaluated{kind: TypeInt64, value: NewInt64Value(sum)}, nil
+		switch kind {
+		case ValueInt64:
+			return evaluated{kind: TypeInt64, value: NewInt64Value(sumInt)}, nil
+		case ValueDuration:
+			return evaluated{kind: TypeDuration, value: NewDurationValue(sumDur)}, nil
+		case ValueDecimal:
+			val, _ := NewDecimalValue(sumDec.String())
+			return evaluated{kind: TypeDecimal, value: val}, nil
+		default:
+			return evaluated{}, fmt.Errorf("sum reads unsupported kind %d", kind)
+		}
 
-	case ExprMin:
-		var minVal int64
+	case ExprMin, ExprMax:
+		var bestVal Value
+		var bestType ExprType
 		for i, member := range members {
 			value, declared, present, err := boundField(schema, expr.Field, member)
 			if err != nil {
 				return evaluated{}, err
 			}
 			if !present {
-				return evaluated{}, fmt.Errorf("min reads %q, absent on a member", expr.Field)
+				return evaluated{}, fmt.Errorf("%s reads %q, absent on a member", expr.Kind, expr.Field)
 			}
-			if declared != ValueInt64 || value.Kind() != ValueInt64 {
-				return evaluated{}, fmt.Errorf("min reads %q, which is not an int64", expr.Field)
-			}
-			intVal, ok := value.Int64()
-			if !ok {
-				return evaluated{}, fmt.Errorf("min reads %q, invalid int64", expr.Field)
-			}
-			if i == 0 || intVal < minVal {
-				minVal = intVal
-			}
-		}
-		return evaluated{kind: TypeInt64, value: NewInt64Value(minVal)}, nil
-
-	case ExprMax:
-		var maxVal int64
-		for i, member := range members {
-			value, declared, present, err := boundField(schema, expr.Field, member)
+			t, err := valueKindType(declared)
 			if err != nil {
 				return evaluated{}, err
 			}
-			if !present {
-				return evaluated{}, fmt.Errorf("max reads %q, absent on a member", expr.Field)
-			}
-			if declared != ValueInt64 || value.Kind() != ValueInt64 {
-				return evaluated{}, fmt.Errorf("max reads %q, which is not an int64", expr.Field)
-			}
-			intVal, ok := value.Int64()
-			if !ok {
-				return evaluated{}, fmt.Errorf("max reads %q, invalid int64", expr.Field)
-			}
-			if i == 0 || intVal > maxVal {
-				maxVal = intVal
+			if i == 0 {
+				bestVal = value
+				bestType = t
+			} else {
+				isLess, err := valueLess(value, bestVal, t)
+				if err != nil {
+					return evaluated{}, err
+				}
+				if expr.Kind == ExprMin && isLess {
+					bestVal = value
+				} else if expr.Kind == ExprMax && !isLess && !value.Equal(bestVal) {
+					bestVal = value
+				}
 			}
 		}
-		return evaluated{kind: TypeInt64, value: NewInt64Value(maxVal)}, nil
+		return evaluated{kind: bestType, value: bestVal}, nil
 
 	case ExprNot:
 		op, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
@@ -503,12 +799,14 @@ func evaluateGroupNode(
 		if err != nil {
 			return evaluated{}, err
 		}
-		leftInt, leftOK := left.value.Int64()
-		rightInt, rightOK := right.value.Int64()
-		if left.kind != TypeInt64 || right.kind != TypeInt64 || !leftOK || !rightOK {
-			return evaluated{}, fmt.Errorf("less requires int64, got %s and %s", left.kind, right.kind)
+		if left.kind != right.kind {
+			return evaluated{}, fmt.Errorf("less compares %s with %s", left.kind, right.kind)
 		}
-		return evaluated{kind: TypeBool, boolean: leftInt < rightInt}, nil
+		isLess, err := valueLess(left.value, right.value, left.kind)
+		if err != nil {
+			return evaluated{}, err
+		}
+		return evaluated{kind: TypeBool, boolean: isLess}, nil
 
 	case ExprAdd:
 		left, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
@@ -519,18 +817,523 @@ func evaluateGroupNode(
 		if err != nil {
 			return evaluated{}, err
 		}
-		leftInt, leftOK := left.value.Int64()
-		rightInt, rightOK := right.value.Int64()
-		if left.kind != TypeInt64 || right.kind != TypeInt64 || !leftOK || !rightOK {
-			return evaluated{}, fmt.Errorf("add requires int64, got %s and %s", left.kind, right.kind)
+		if left.kind == TypeInt64 && right.kind == TypeInt64 {
+			sum, err := addInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(sum)}, nil
 		}
-		sum := leftInt + rightInt
-		if (rightInt > 0 && sum < leftInt) || (rightInt < 0 && sum > leftInt) {
-			return evaluated{}, fmt.Errorf("add overflows int64")
+		if left.kind == TypeDecimal && right.kind == TypeDecimal {
+			d1, _ := parseDecimal(left.value.text)
+			d2, _ := parseDecimal(right.value.text)
+			res, err := d1.Add(d2)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewDecimalValue(res.String())
+			return evaluated{kind: TypeDecimal, value: val}, nil
 		}
-		return evaluated{kind: TypeInt64, value: NewInt64Value(sum)}, nil
+		if left.kind == TypeDuration && right.kind == TypeDuration {
+			sum, err := addInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(sum)}, nil
+		}
+		if left.kind == TypeTimestamp && right.kind == TypeDuration {
+			ts, _ := parseTimestamp(left.value.text)
+			res, err := ts.AddDuration(right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewTimestampValue(res.String())
+			return evaluated{kind: TypeTimestamp, value: val}, nil
+		}
+		if left.kind == TypeDuration && right.kind == TypeTimestamp {
+			ts, _ := parseTimestamp(right.value.text)
+			res, err := ts.AddDuration(left.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewTimestampValue(res.String())
+			return evaluated{kind: TypeTimestamp, value: val}, nil
+		}
+		return evaluated{}, fmt.Errorf("add unsupported on %s and %s", left.kind, right.kind)
+
+	case ExprSubtract:
+		left, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		right, err := evaluateGroupNode(schema, expr.Args[1], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind == TypeInt64 && right.kind == TypeInt64 {
+			diff, err := subInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(diff)}, nil
+		}
+		if left.kind == TypeDecimal && right.kind == TypeDecimal {
+			d1, _ := parseDecimal(left.value.text)
+			d2, _ := parseDecimal(right.value.text)
+			res, err := d1.Sub(d2)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewDecimalValue(res.String())
+			return evaluated{kind: TypeDecimal, value: val}, nil
+		}
+		if left.kind == TypeDuration && right.kind == TypeDuration {
+			diff, err := subInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(diff)}, nil
+		}
+		if left.kind == TypeTimestamp && right.kind == TypeTimestamp {
+			ts1, _ := parseTimestamp(left.value.text)
+			ts2, _ := parseTimestamp(right.value.text)
+			diff, err := ts1.Diff(ts2)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(diff)}, nil
+		}
+		if left.kind == TypeTimestamp && right.kind == TypeDuration {
+			ts, _ := parseTimestamp(left.value.text)
+			dur := right.value.integer
+			if dur == -9223372036854775808 {
+				return evaluated{}, fmt.Errorf("duration %d overflows negation", dur)
+			}
+			res, err := ts.AddDuration(-dur)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewTimestampValue(res.String())
+			return evaluated{kind: TypeTimestamp, value: val}, nil
+		}
+		return evaluated{}, fmt.Errorf("subtract unsupported on %s and %s", left.kind, right.kind)
+
+	case ExprMultiply:
+		left, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		right, err := evaluateGroupNode(schema, expr.Args[1], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind == TypeInt64 && right.kind == TypeInt64 {
+			prod, err := mulInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(prod)}, nil
+		}
+		if left.kind == TypeDecimal && right.kind == TypeDecimal {
+			d1, _ := parseDecimal(left.value.text)
+			d2, _ := parseDecimal(right.value.text)
+			res, err := d1.Mul(d2)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewDecimalValue(res.String())
+			return evaluated{kind: TypeDecimal, value: val}, nil
+		}
+		if left.kind == TypeDuration && right.kind == TypeInt64 {
+			prod, err := mulInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(prod)}, nil
+		}
+		if left.kind == TypeInt64 && right.kind == TypeDuration {
+			prod, err := mulInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(prod)}, nil
+		}
+		return evaluated{}, fmt.Errorf("multiply unsupported on %s and %s", left.kind, right.kind)
+
+	case ExprDivide:
+		left, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		right, err := evaluateGroupNode(schema, expr.Args[1], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind == TypeInt64 && right.kind == TypeInt64 {
+			if right.value.integer == 0 {
+				return evaluated{}, fmt.Errorf("division by zero")
+			}
+			if left.value.integer == -9223372036854775808 && right.value.integer == -1 {
+				return evaluated{}, fmt.Errorf("division overflows int64")
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(left.value.integer / right.value.integer)}, nil
+		}
+		if left.kind == TypeDecimal && right.kind == TypeDecimal {
+			d1, _ := parseDecimal(left.value.text)
+			d2, _ := parseDecimal(right.value.text)
+			res, err := d1.Div(d2)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewDecimalValue(res.String())
+			return evaluated{kind: TypeDecimal, value: val}, nil
+		}
+		return evaluated{}, fmt.Errorf("divide unsupported on %s and %s", left.kind, right.kind)
+
+	case ExprModulo:
+		left, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		right, err := evaluateGroupNode(schema, expr.Args[1], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind == TypeInt64 && right.kind == TypeInt64 {
+			if right.value.integer == 0 {
+				return evaluated{}, fmt.Errorf("modulo by zero")
+			}
+			if left.value.integer == -9223372036854775808 && right.value.integer == -1 {
+				return evaluated{}, fmt.Errorf("modulo overflows int64")
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(left.value.integer % right.value.integer)}, nil
+		}
+		return evaluated{}, fmt.Errorf("modulo requires int64")
+
+	case ExprAbs:
+		arg, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		switch arg.kind {
+		case TypeInt64:
+			if arg.value.integer == -9223372036854775808 {
+				return evaluated{}, fmt.Errorf("abs overflows int64")
+			}
+			v := arg.value.integer
+			if v < 0 {
+				v = -v
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(v)}, nil
+		case TypeDuration:
+			if arg.value.integer == -9223372036854775808 {
+				return evaluated{}, fmt.Errorf("abs overflows duration")
+			}
+			v := arg.value.integer
+			if v < 0 {
+				v = -v
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(v)}, nil
+		case TypeDecimal:
+			d, _ := parseDecimal(arg.value.text)
+			res := d.Abs()
+			val, _ := NewDecimalValue(res.String())
+			return evaluated{kind: TypeDecimal, value: val}, nil
+		default:
+			return evaluated{}, fmt.Errorf("abs unsupported on %s", arg.kind)
+		}
+
+	case ExprClamp:
+		val, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		minVal, err := evaluateGroupNode(schema, expr.Args[1], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		maxVal, err := evaluateGroupNode(schema, expr.Args[2], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if val.kind != minVal.kind || val.kind != maxVal.kind {
+			return evaluated{}, fmt.Errorf("clamp types mismatch: %s, %s, %s", val.kind, minVal.kind, maxVal.kind)
+		}
+		switch val.kind {
+		case TypeInt64, TypeDuration, TypeTimestamp, TypeDate:
+			if maxVal.value.integer < minVal.value.integer {
+				return evaluated{}, fmt.Errorf("clamp min %d is greater than max %d", minVal.value.integer, maxVal.value.integer)
+			}
+			clamped := val.value.integer
+			if clamped < minVal.value.integer {
+				return minVal, nil
+			}
+			if clamped > maxVal.value.integer {
+				return maxVal, nil
+			}
+			return val, nil
+		case TypeDecimal:
+			dVal, _ := parseDecimal(val.value.text)
+			dMin, _ := parseDecimal(minVal.value.text)
+			dMax, _ := parseDecimal(maxVal.value.text)
+			res, err := dVal.Clamp(dMin, dMax)
+			if err != nil {
+				return evaluated{}, err
+			}
+			v, _ := NewDecimalValue(res.String())
+			return evaluated{kind: TypeDecimal, value: v}, nil
+		default:
+			return evaluated{}, fmt.Errorf("clamp unsupported on %s", val.kind)
+		}
+
+	case ExprTimestampAdd:
+		left, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		right, err := evaluateGroupNode(schema, expr.Args[1], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind == TypeTimestamp && right.kind == TypeDuration {
+			ts, _ := parseTimestamp(left.value.text)
+			res, err := ts.AddDuration(right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			v, _ := NewTimestampValue(res.String())
+			return evaluated{kind: TypeTimestamp, value: v}, nil
+		}
+		if left.kind == TypeDuration && right.kind == TypeTimestamp {
+			ts, _ := parseTimestamp(right.value.text)
+			res, err := ts.AddDuration(left.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			v, _ := NewTimestampValue(res.String())
+			return evaluated{kind: TypeTimestamp, value: v}, nil
+		}
+		return evaluated{}, fmt.Errorf("timestamp_add requires timestamp and duration")
+
+	case ExprTimestampDiff:
+		left, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		right, err := evaluateGroupNode(schema, expr.Args[1], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind == TypeTimestamp && right.kind == TypeTimestamp {
+			ts1, _ := parseTimestamp(left.value.text)
+			ts2, _ := parseTimestamp(right.value.text)
+			diff, err := ts1.Diff(ts2)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(diff)}, nil
+		}
+		return evaluated{}, fmt.Errorf("timestamp_diff requires timestamps")
+
+	case ExprDateExtract:
+		arg, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		unit := string(expr.Field)
+		if arg.kind == TypeTimestamp {
+			ts, _ := parseTimestamp(arg.value.text)
+			extracted, err := ts.DateExtract(unit)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(extracted)}, nil
+		}
+		if arg.kind == TypeDate {
+			d, _ := parseDate(arg.value.text)
+			extracted, err := d.DateExtract(unit)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(extracted)}, nil
+		}
+		return evaluated{}, fmt.Errorf("date_extract requires timestamp or date")
+
+	case ExprConcat:
+		var buf strings.Builder
+		for _, arg := range expr.Args {
+			res, err := evaluateGroupNode(schema, arg, members, boundMember)
+			if err != nil {
+				return evaluated{}, err
+			}
+			if res.kind != TypeString {
+				return evaluated{}, fmt.Errorf("concat requires string, got %s", res.kind)
+			}
+			buf.WriteString(res.value.text)
+		}
+		val, err := NewStringValue(buf.String())
+		if err != nil {
+			return evaluated{}, err
+		}
+		return evaluated{kind: TypeString, value: val}, nil
+
+	case ExprSubstring:
+		strRes, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		startRes, err := evaluateGroupNode(schema, expr.Args[1], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		lenRes, err := evaluateGroupNode(schema, expr.Args[2], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if strRes.kind != TypeString || startRes.kind != TypeInt64 || lenRes.kind != TypeInt64 {
+			return evaluated{}, fmt.Errorf("substring requires (string, int64, int64)")
+		}
+		start := startRes.value.integer
+		length := lenRes.value.integer
+		if start < 0 || length < 0 {
+			return evaluated{}, fmt.Errorf("substring start and length must be non-negative")
+		}
+		runes := []rune(strRes.value.text)
+		runeCount := int64(len(runes))
+		if start >= runeCount {
+			val, _ := NewStringValue("")
+			return evaluated{kind: TypeString, value: val}, nil
+		}
+		end := runeCount
+		if length < runeCount-start {
+			end = start + length
+		}
+		val, _ := NewStringValue(string(runes[start:end]))
+		return evaluated{kind: TypeString, value: val}, nil
+
+	case ExprTrim:
+		strRes, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if strRes.kind != TypeString {
+			return evaluated{}, fmt.Errorf("trim requires string, got %s", strRes.kind)
+		}
+		val, _ := NewStringValue(strings.TrimSpace(strRes.value.text))
+		return evaluated{kind: TypeString, value: val}, nil
+
+	case ExprIf:
+		cond, err := evaluateGroupNode(schema, expr.Args[0], members, boundMember)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if cond.kind != TypeBool {
+			return evaluated{}, fmt.Errorf("if condition must be bool")
+		}
+		if cond.boolean {
+			return evaluateGroupNode(schema, expr.Args[1], members, boundMember)
+		}
+		return evaluateGroupNode(schema, expr.Args[2], members, boundMember)
+
+	case ExprCoalesce:
+		var lastErr error
+		for _, arg := range expr.Args {
+			res, err := evaluateGroupNode(schema, arg, members, boundMember)
+			if err == nil {
+				return res, nil
+			}
+			lastErr = err
+		}
+		return evaluated{}, fmt.Errorf("coalesce failed: %w", lastErr)
 
 	default:
 		return evaluated{}, fmt.Errorf("unknown expression kind %d", expr.Kind)
 	}
+}
+
+func valueLess(a, b Value, t ExprType) (bool, error) {
+	switch t {
+	case TypeInt64, TypeDuration, TypeTimestamp, TypeDate:
+		return a.integer < b.integer, nil
+	case TypeString:
+		return a.text < b.text, nil
+	case TypeDecimal:
+		d1, _ := parseDecimal(a.text)
+		d2, _ := parseDecimal(b.text)
+		return d1.Less(d2), nil
+	default:
+		return false, fmt.Errorf("type %s is not ordered", t)
+	}
+}
+
+// checkRelationGuard type-checks relation guard expressions over (fromKind, toKind) endpoints.
+func checkRelationGuard(
+	schema Schema, fromKind, toKind EntityKind, expr Expr, depth int,
+) (ExprType, error) {
+	if depth > maxExprDepth {
+		return TypeInvalid, fmt.Errorf("expression nests deeper than %d", maxExprDepth)
+	}
+
+	// Validate and rewrite from. and to. aliases into concrete entity kinds
+	var mapFieldPaths func(e Expr) (Expr, error)
+	mapFieldPaths = func(e Expr) (Expr, error) {
+		cloned := e
+		if e.Field != "" {
+			k, name := splitFieldPath(e.Field)
+			if k == "" || name == "" {
+				return Expr{}, fmt.Errorf("malformed field path %q", e.Field)
+			}
+			if k == "from" {
+				realPath := FieldPath(string(fromKind) + "." + string(name))
+				if _, isDeclared := schema.fieldKind(realPath); !isDeclared {
+					return Expr{}, fmt.Errorf("from endpoint reads undeclared field %q", realPath)
+				}
+				cloned.Field = realPath
+			} else if k == "to" {
+				realPath := FieldPath(string(toKind) + "." + string(name))
+				if _, isDeclared := schema.fieldKind(realPath); !isDeclared {
+					return Expr{}, fmt.Errorf("to endpoint reads undeclared field %q", realPath)
+				}
+				cloned.Field = realPath
+			} else if fromKind == toKind && k == fromKind {
+				return Expr{}, fmt.Errorf(
+					"field %q is ambiguous for same-kind relation endpoints (%s -> %s); use from.%s or to.%s",
+					e.Field, fromKind, toKind, name, name)
+			} else if fromKind != toKind {
+				if k == fromKind {
+					if _, isDeclared := schema.fieldKind(e.Field); !isDeclared {
+						return Expr{}, fmt.Errorf("from endpoint reads undeclared field %q", e.Field)
+					}
+				} else if k == toKind {
+					if _, isDeclared := schema.fieldKind(e.Field); !isDeclared {
+						return Expr{}, fmt.Errorf("to endpoint reads undeclared field %q", e.Field)
+					}
+				} else {
+					return Expr{}, fmt.Errorf("field %q does not match relation endpoints %s or %s", e.Field, fromKind, toKind)
+				}
+			} else {
+				return Expr{}, fmt.Errorf("field %q does not match relation endpoints %s or %s", e.Field, fromKind, toKind)
+			}
+		}
+
+		if len(e.Args) > 0 {
+			newArgs := make([]Expr, len(e.Args))
+			for i, arg := range e.Args {
+				mapped, err := mapFieldPaths(arg)
+				if err != nil {
+					return Expr{}, err
+				}
+				newArgs[i] = mapped
+			}
+			cloned.Args = newArgs
+		}
+		return cloned, nil
+	}
+
+	mappedExpr, err := mapFieldPaths(expr)
+	if err != nil {
+		return TypeInvalid, err
+	}
+
+	return checkExprInScope(schema, "", mappedExpr, memberScope, depth)
 }

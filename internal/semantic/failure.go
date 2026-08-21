@@ -295,6 +295,27 @@ func (f FailureReport) InvariantResults() []InvariantResult {
 	return f.protected.InvariantResults()
 }
 
+func (f FailureReport) ProtectedInvariant() (ProtectedInvariantFailureReport, bool) {
+	if f.protected == nil {
+		return ProtectedInvariantFailureReport{}, false
+	}
+	return *f.protected, true
+}
+
+func (f FailureReport) Entities() []EntityRef {
+	if f.protected == nil {
+		return nil
+	}
+	return f.protected.Entities()
+}
+
+func (f FailureReport) FactRefs() []FactRef {
+	if f.protected == nil {
+		return nil
+	}
+	return f.protected.FactRefs()
+}
+
 func (f FailureReport) ArtifactIntegrity() (ArtifactIntegrityFailureReport, bool) {
 	if f.integrity == nil {
 		return ArtifactIntegrityFailureReport{}, false

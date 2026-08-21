@@ -129,6 +129,24 @@ func TestValueTextFormRoundTripsEveryDimension(t *testing.T) {
 		"two digits": NewInt64Value(16),
 		"maximum":    NewInt64Value(1<<63 - 1),
 		"minimum":    NewInt64Value(-1 << 63),
+
+		// Timestamps
+		"timestamp epoch":  mustTimestamp(t, "1970-01-01T00:00:00Z"),
+		"timestamp recent": mustTimestamp(t, "2026-08-21T10:00:00.123Z"),
+
+		// Durations
+		"duration zero":     NewDurationValue(0),
+		"duration 1h":       NewDurationValue(3600),
+		"duration negative": NewDurationValue(-1800),
+
+		// Decimals
+		"decimal zero":     mustDecimal(t, "0"),
+		"decimal positive": mustDecimal(t, "123.45"),
+		"decimal negative": mustDecimal(t, "-0.005"),
+
+		// Dates
+		"date leap":   mustDate(t, "2024-02-29"),
+		"date recent": mustDate(t, "2026-08-21"),
 	}
 	encoded := make(map[string]string, len(cases))
 	for name, value := range cases {
@@ -160,6 +178,33 @@ func TestValueTextFormRoundTripsEveryDimension(t *testing.T) {
 	}
 }
 
+func mustTimestamp(t *testing.T, s string) Value {
+	t.Helper()
+	v, err := NewTimestampValue(s)
+	if err != nil {
+		t.Fatalf("NewTimestampValue(%q): %v", s, err)
+	}
+	return v
+}
+
+func mustDecimal(t *testing.T, s string) Value {
+	t.Helper()
+	v, err := NewDecimalValue(s)
+	if err != nil {
+		t.Fatalf("NewDecimalValue(%q): %v", s, err)
+	}
+	return v
+}
+
+func mustDate(t *testing.T, s string) Value {
+	t.Helper()
+	v, err := NewDateValue(s)
+	if err != nil {
+		t.Fatalf("NewDateValue(%q): %v", s, err)
+	}
+	return v
+}
+
 // Refusals, each of which is a way a stored value could come back as something else.
 //
 // "int64:+5" is deliberately absent: strconv.ParseInt accepts a leading plus, so the decoder
@@ -171,7 +216,7 @@ func TestValueTextFormRoundTripsEveryDimension(t *testing.T) {
 func TestValueTextFormRefusesWhatItCannotRebuild(t *testing.T) {
 	for name, text := range map[string]string{
 		"no separator":            "certified",
-		"unknown kind":            "decimal:1.5",
+		"unknown kind":            "float:1.5",
 		"empty kind":              ":5",
 		"integer with spaces":     "int64: 5",
 		"integer in hexadecimal":  "int64:0x10",
@@ -179,6 +224,9 @@ func TestValueTextFormRefusesWhatItCannotRebuild(t *testing.T) {
 		"integer past the range":  "int64:9223372036854775808",
 		"invalid utf8 string":     "string:\xff",
 		"invalid utf8 atom":       "atom:\xff",
+		"invalid timestamp":       "timestamp:not-a-timestamp",
+		"invalid date":            "date:2026-02-29",
+		"invalid decimal":         "decimal:abc",
 	} {
 		t.Run(name, func(t *testing.T) {
 			var value Value

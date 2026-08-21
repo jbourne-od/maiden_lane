@@ -21,30 +21,6 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
-// Defines values for AggregatePredicateKind.
-const (
-	AggregatePredicateKindCompleteTuple           AggregatePredicateKind = "complete_tuple"
-	AggregatePredicateKindEqualFieldAcrossSources AggregatePredicateKind = "equal_field_across_sources"
-	AggregatePredicateKindLessOrEqualFields       AggregatePredicateKind = "less_or_equal_fields"
-	AggregatePredicateKindNonNegativeInt          AggregatePredicateKind = "non_negative_int"
-)
-
-// Valid indicates whether the value is a known member of the AggregatePredicateKind enum.
-func (e AggregatePredicateKind) Valid() bool {
-	switch e {
-	case AggregatePredicateKindCompleteTuple:
-		return true
-	case AggregatePredicateKindEqualFieldAcrossSources:
-		return true
-	case AggregatePredicateKindLessOrEqualFields:
-		return true
-	case AggregatePredicateKindNonNegativeInt:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for CardinalityKind.
 const (
 	CardinalityKindAny     CardinalityKind = "any"
@@ -158,27 +134,43 @@ func (e ExecutionStatus) Valid() bool {
 
 // Defines values for ExprKind.
 const (
-	ExprKindAdd        ExprKind = "add"
-	ExprKindAll        ExprKind = "all"
-	ExprKindAllEqual   ExprKind = "all_equal"
-	ExprKindAllMembers ExprKind = "all_members"
-	ExprKindAny        ExprKind = "any"
-	ExprKindAnyMembers ExprKind = "any_members"
-	ExprKindCount      ExprKind = "count"
-	ExprKindEqual      ExprKind = "equal"
-	ExprKindExists     ExprKind = "exists"
-	ExprKindField      ExprKind = "field"
-	ExprKindLess       ExprKind = "less"
-	ExprKindLiteral    ExprKind = "literal"
-	ExprKindMax        ExprKind = "max"
-	ExprKindMin        ExprKind = "min"
-	ExprKindNot        ExprKind = "not"
-	ExprKindSum        ExprKind = "sum"
+	ExprKindAbs           ExprKind = "abs"
+	ExprKindAdd           ExprKind = "add"
+	ExprKindAll           ExprKind = "all"
+	ExprKindAllEqual      ExprKind = "all_equal"
+	ExprKindAllMembers    ExprKind = "all_members"
+	ExprKindAny           ExprKind = "any"
+	ExprKindAnyMembers    ExprKind = "any_members"
+	ExprKindClamp         ExprKind = "clamp"
+	ExprKindCoalesce      ExprKind = "coalesce"
+	ExprKindConcat        ExprKind = "concat"
+	ExprKindCount         ExprKind = "count"
+	ExprKindDateExtract   ExprKind = "date_extract"
+	ExprKindDivide        ExprKind = "divide"
+	ExprKindEqual         ExprKind = "equal"
+	ExprKindExists        ExprKind = "exists"
+	ExprKindField         ExprKind = "field"
+	ExprKindIf            ExprKind = "if"
+	ExprKindLess          ExprKind = "less"
+	ExprKindLiteral       ExprKind = "literal"
+	ExprKindMax           ExprKind = "max"
+	ExprKindMin           ExprKind = "min"
+	ExprKindModulo        ExprKind = "modulo"
+	ExprKindMultiply      ExprKind = "multiply"
+	ExprKindNot           ExprKind = "not"
+	ExprKindSubstring     ExprKind = "substring"
+	ExprKindSubtract      ExprKind = "subtract"
+	ExprKindSum           ExprKind = "sum"
+	ExprKindTimestampAdd  ExprKind = "timestamp_add"
+	ExprKindTimestampDiff ExprKind = "timestamp_diff"
+	ExprKindTrim          ExprKind = "trim"
 )
 
 // Valid indicates whether the value is a known member of the ExprKind enum.
 func (e ExprKind) Valid() bool {
 	switch e {
+	case ExprKindAbs:
+		return true
 	case ExprKindAdd:
 		return true
 	case ExprKindAll:
@@ -191,13 +183,25 @@ func (e ExprKind) Valid() bool {
 		return true
 	case ExprKindAnyMembers:
 		return true
+	case ExprKindClamp:
+		return true
+	case ExprKindCoalesce:
+		return true
+	case ExprKindConcat:
+		return true
 	case ExprKindCount:
+		return true
+	case ExprKindDateExtract:
+		return true
+	case ExprKindDivide:
 		return true
 	case ExprKindEqual:
 		return true
 	case ExprKindExists:
 		return true
 	case ExprKindField:
+		return true
+	case ExprKindIf:
 		return true
 	case ExprKindLess:
 		return true
@@ -207,24 +211,23 @@ func (e ExprKind) Valid() bool {
 		return true
 	case ExprKindMin:
 		return true
+	case ExprKindModulo:
+		return true
+	case ExprKindMultiply:
+		return true
 	case ExprKindNot:
+		return true
+	case ExprKindSubstring:
+		return true
+	case ExprKindSubtract:
 		return true
 	case ExprKindSum:
 		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for FieldReductionKind.
-const (
-	FieldReductionKindReduceInt64Max FieldReductionKind = "reduce_int64_max"
-)
-
-// Valid indicates whether the value is a known member of the FieldReductionKind enum.
-func (e FieldReductionKind) Valid() bool {
-	switch e {
-	case FieldReductionKindReduceInt64Max:
+	case ExprKindTimestampAdd:
+		return true
+	case ExprKindTimestampDiff:
+		return true
+	case ExprKindTrim:
 		return true
 	default:
 		return false
@@ -306,21 +309,6 @@ func (e GateVerdict) Valid() bool {
 	case GateVerdictNotEvaluated:
 		return true
 	case GateVerdictPass:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for OutputKeyExpressionKind.
-const (
-	OutputKeyExpressionKindCommonSourceField OutputKeyExpressionKind = "common_source_field"
-)
-
-// Valid indicates whether the value is a known member of the OutputKeyExpressionKind enum.
-func (e OutputKeyExpressionKind) Valid() bool {
-	switch e {
-	case OutputKeyExpressionKindCommonSourceField:
 		return true
 	default:
 		return false
@@ -452,19 +440,31 @@ func (e SemanticFailureKind) Valid() bool {
 
 // Defines values for TransformationDeclarationOperator.
 const (
-	TransformationDeclarationOperatorAggregateRelatedFields TransformationDeclarationOperator = "aggregate_related_fields"
-	TransformationDeclarationOperatorFormRelatedEntity      TransformationDeclarationOperator = "form_related_entity"
-	TransformationDeclarationOperatorSelectAndAssign        TransformationDeclarationOperator = "select_and_assign"
+	TransformationDeclarationOperatorDeleteEntity     TransformationDeclarationOperator = "delete_entity"
+	TransformationDeclarationOperatorInsertEntity     TransformationDeclarationOperator = "insert_entity"
+	TransformationDeclarationOperatorMergeEntities    TransformationDeclarationOperator = "merge_entities"
+	TransformationDeclarationOperatorRelateEntities   TransformationDeclarationOperator = "relate_entities"
+	TransformationDeclarationOperatorSelectAndAssign  TransformationDeclarationOperator = "select_and_assign"
+	TransformationDeclarationOperatorSplitEntity      TransformationDeclarationOperator = "split_entity"
+	TransformationDeclarationOperatorUnrelateEntities TransformationDeclarationOperator = "unrelate_entities"
 )
 
 // Valid indicates whether the value is a known member of the TransformationDeclarationOperator enum.
 func (e TransformationDeclarationOperator) Valid() bool {
 	switch e {
-	case TransformationDeclarationOperatorAggregateRelatedFields:
+	case TransformationDeclarationOperatorDeleteEntity:
 		return true
-	case TransformationDeclarationOperatorFormRelatedEntity:
+	case TransformationDeclarationOperatorInsertEntity:
+		return true
+	case TransformationDeclarationOperatorMergeEntities:
+		return true
+	case TransformationDeclarationOperatorRelateEntities:
 		return true
 	case TransformationDeclarationOperatorSelectAndAssign:
+		return true
+	case TransformationDeclarationOperatorSplitEntity:
+		return true
+	case TransformationDeclarationOperatorUnrelateEntities:
 		return true
 	default:
 		return false
@@ -473,9 +473,13 @@ func (e TransformationDeclarationOperator) Valid() bool {
 
 // Defines values for ValueKind.
 const (
-	ValueKindAtom   ValueKind = "atom"
-	ValueKindInt64  ValueKind = "int64"
-	ValueKindString ValueKind = "string"
+	ValueKindAtom      ValueKind = "atom"
+	ValueKindDate      ValueKind = "date"
+	ValueKindDecimal   ValueKind = "decimal"
+	ValueKindDuration  ValueKind = "duration"
+	ValueKindInt64     ValueKind = "int64"
+	ValueKindString    ValueKind = "string"
+	ValueKindTimestamp ValueKind = "timestamp"
 )
 
 // Valid indicates whether the value is a known member of the ValueKind enum.
@@ -483,9 +487,17 @@ func (e ValueKind) Valid() bool {
 	switch e {
 	case ValueKindAtom:
 		return true
+	case ValueKindDate:
+		return true
+	case ValueKindDecimal:
+		return true
+	case ValueKindDuration:
+		return true
 	case ValueKindInt64:
 		return true
 	case ValueKindString:
+		return true
+	case ValueKindTimestamp:
 		return true
 	default:
 		return false
@@ -508,27 +520,6 @@ func (e WorldReferenceKind) Valid() bool {
 	default:
 		return false
 	}
-}
-
-// AggregatePredicate defines model for AggregatePredicate.
-type AggregatePredicate struct {
-	Fields []string               `json:"fields"`
-	Kind   AggregatePredicateKind `json:"kind"`
-}
-
-// AggregatePredicateKind defines model for AggregatePredicate.Kind.
-type AggregatePredicateKind string
-
-// AggregateRelatedFields The closed related-field aggregation payload.
-type AggregateRelatedFields struct {
-	Anchor              FieldCopy             `json:"anchor"`
-	Predicates          *[]AggregatePredicate `json:"predicates,omitempty"`
-	Reductions          *[]FieldReduction     `json:"reductions,omitempty"`
-	RelationKind        string                `json:"relationKind"`
-	RequiredSourceTuple []string              `json:"requiredSourceTuple"`
-	ResultPredicates    *[]AggregatePredicate `json:"resultPredicates,omitempty"`
-	SourceKind          string                `json:"sourceKind"`
-	Target              OutputSlotReference   `json:"target"`
 }
 
 // Assessment defines model for Assessment.
@@ -661,6 +652,22 @@ type CompilerDiagnostic struct {
 // CompilerDiagnosticCode A closed compilation diagnostic code.
 type CompilerDiagnosticCode string
 
+// Corpus The canonical projection of a stored replay corpus.
+type Corpus struct {
+	CaseCount int      `json:"caseCount"`
+	Cases     []Digest `json:"cases"`
+
+	// CorpusID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CorpusID Digest `json:"corpusID"`
+}
+
+// CorpusCaseInput One initial state case within a replay corpus.
+type CorpusCaseInput struct {
+	// Schema Declaration order is not semantic; the compiler canonicalizes it.
+	Schema SchemaDeclaration `json:"schema"`
+	State  StateInput        `json:"state"`
+}
+
 // CreateComparisonRequest A request to define and store a comparison contract.
 type CreateComparisonRequest struct {
 	// BaselineCheckpoint The checkpoint key in the baseline plan to compare.
@@ -686,6 +693,12 @@ type CreateComparisonRequest struct {
 
 	// WorldID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
 	WorldID Digest `json:"worldID"`
+}
+
+// CreateCorpusRequest Request to register a replay corpus.
+type CreateCorpusRequest struct {
+	// Cases The set of initial state cases comprising the corpus.
+	Cases []CorpusCaseInput `json:"cases"`
 }
 
 // CreateExecutionRequest defines model for CreateExecutionRequest.
@@ -731,6 +744,24 @@ type CreatePublicationRequest struct {
 
 	// Target The publication target.
 	Target string `json:"target"`
+}
+
+// DeleteEntityDeclaration Deletes selected entities that satisfy the guard.
+type DeleteEntityDeclaration struct {
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard Expr `json:"guard"`
+
+	// Selector What a rule applies to.
+	Selector Selector `json:"selector"`
 }
 
 // Digest A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
@@ -792,6 +823,27 @@ type ExecutionAccepted struct {
 
 	// SemanticRunID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
 	SemanticRunID Digest `json:"semanticRunID"`
+}
+
+// ExecutionCheckpointDetail Complete artifact details and assessments for one sealed checkpoint of a finished execution.
+type ExecutionCheckpointDetail struct {
+	Assessments []Assessment `json:"assessments"`
+
+	// CheckpointArtifactID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CheckpointArtifactID Digest `json:"checkpointArtifactID"`
+
+	// CheckpointID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CheckpointID  Digest `json:"checkpointID"`
+	CheckpointKey string `json:"checkpointKey"`
+
+	// Digest A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	Digest Digest `json:"digest"`
+
+	// InvariantResultDigest A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	InvariantResultDigest Digest `json:"invariantResultDigest"`
+
+	// StateDigest A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	StateDigest Digest `json:"stateDigest"`
 }
 
 // ExecutionResult The complete answer of a finished execution. Present only once the
@@ -883,15 +935,6 @@ type FieldAssignment struct {
 	Value Expr `json:"value"`
 }
 
-// FieldCopy defines model for FieldCopy.
-type FieldCopy struct {
-	// Destination A field path of the form kind.field.
-	Destination string `json:"destination"`
-
-	// Source A field path of the form kind.field.
-	Source string `json:"source"`
-}
-
 // FieldDeclaration defines model for FieldDeclaration.
 type FieldDeclaration struct {
 	// Kind The closed typed-value vocabulary.
@@ -903,29 +946,6 @@ type FieldDeclaration struct {
 	// value type; rule-level presence obligations are enforced by the
 	// transformations that read the field, not here.
 	RequiredAtConstruction *bool `json:"requiredAtConstruction,omitempty"`
-}
-
-// FieldReduction defines model for FieldReduction.
-type FieldReduction struct {
-	Destination string             `json:"destination"`
-	Kind        FieldReductionKind `json:"kind"`
-	Source      string             `json:"source"`
-}
-
-// FieldReductionKind defines model for FieldReduction.Kind.
-type FieldReductionKind string
-
-// FormRelatedEntity The closed related-entity transformation payload.
-type FormRelatedEntity struct {
-	CopiedFields  *[]FieldCopy         `json:"copiedFields,omitempty"`
-	GroupingField string               `json:"groupingField"`
-	OutputKey     *OutputKeyExpression `json:"outputKey,omitempty"`
-	OutputKind    string               `json:"outputKind"`
-	OutputSlot    string               `json:"outputSlot"`
-	RelationKind  string               `json:"relationKind"`
-	SourceCount   int64                `json:"sourceCount"`
-	SourceKind    string               `json:"sourceKind"`
-	Sources       []SourceReference    `json:"sources"`
 }
 
 // GateClauseResult One clause of HLD §14.1's nine-clause gate.
@@ -967,19 +987,89 @@ type InputLineage struct {
 	RootKey   string `json:"rootKey"`
 }
 
-// OutputKeyExpression defines model for OutputKeyExpression.
-type OutputKeyExpression struct {
-	Field string                  `json:"field"`
-	Kind  OutputKeyExpressionKind `json:"kind"`
+// InsertEntityDeclaration Inserts a new entity synthesised from a selected population or group.
+type InsertEntityDeclaration struct {
+	Assignments []FieldAssignment `json:"assignments"`
+
+	// Discriminator One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Discriminator Expr `json:"discriminator"`
+
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard Expr `json:"guard"`
+
+	// Selector What a rule applies to.
+	Selector   Selector `json:"selector"`
+	TargetKind string   `json:"targetKind"`
 }
 
-// OutputKeyExpressionKind defines model for OutputKeyExpression.Kind.
-type OutputKeyExpressionKind string
+// MergeEntitiesDeclaration Merges a group of source entities into a single target entity.
+type MergeEntitiesDeclaration struct {
+	Assignments []FieldAssignment `json:"assignments"`
 
-// OutputSlotReference defines model for OutputSlotReference.
-type OutputSlotReference struct {
-	Rule string `json:"rule"`
-	Slot string `json:"slot"`
+	// Discriminator One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Discriminator Expr `json:"discriminator"`
+
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard             Expr `json:"guard"`
+	ReanchorRelations bool `json:"reanchorRelations"`
+	RetainSources     bool `json:"retainSources"`
+
+	// Selector What a rule applies to.
+	Selector   Selector `json:"selector"`
+	TargetKind string   `json:"targetKind"`
+}
+
+// PartitionDeclaration One partition specification within a split entity operator.
+type PartitionDeclaration struct {
+	Assignments []FieldAssignment `json:"assignments"`
+
+	// Discriminator One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Discriminator Expr `json:"discriminator"`
 }
 
 // Plan defines model for Plan.
@@ -1140,8 +1230,39 @@ type PublicationState struct {
 // `published`, and any lower version is `superseded`.
 type PublicationStatus string
 
+// PutPolicyRequest Request to create or advance a target promotion policy.
+type PutPolicyRequest struct {
+	// RequiredProfileID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	RequiredProfileID Digest `json:"requiredProfileID"`
+
+	// Version The expected target policy version to record (must be current version + 1, or 1 for new targets).
+	Version int `json:"version"`
+}
+
 // ReadinessVerdict A readiness answer. `needs_input` is a successful assessment, not a failure.
 type ReadinessVerdict string
+
+// RelateEntitiesDeclaration Creates a relation between pairs of entities matching the endpoints and guard.
+type RelateEntitiesDeclaration struct {
+	// FromSelector What a rule applies to.
+	FromSelector Selector `json:"fromSelector"`
+
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard        Expr   `json:"guard"`
+	RelationKind string `json:"relationKind"`
+
+	// ToSelector What a rule applies to.
+	ToSelector Selector `json:"toSelector"`
+}
 
 // RelationDeclaration defines model for RelationDeclaration.
 type RelationDeclaration struct {
@@ -1230,10 +1351,25 @@ type SemanticFailure struct {
 // SemanticFailureKind defines model for SemanticFailure.Kind.
 type SemanticFailureKind string
 
-// SourceReference defines model for SourceReference.
-type SourceReference struct {
-	CanonicalSourceKey string `json:"canonicalSourceKey"`
-	Kind               string `json:"kind"`
+// SplitEntityDeclaration Splits each selected entity into multiple partitioned target entities.
+type SplitEntityDeclaration struct {
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard        Expr                   `json:"guard"`
+	Partitions   []PartitionDeclaration `json:"partitions"`
+	RetainSource bool                   `json:"retainSource"`
+
+	// Selector What a rule applies to.
+	Selector   Selector `json:"selector"`
+	TargetKind string   `json:"targetKind"`
 }
 
 // StateInput defines model for StateInput.
@@ -1245,32 +1381,85 @@ type StateInput struct {
 	Relations *[]RelationInput `json:"relations,omitempty"`
 }
 
+// TargetPolicy An immutable, versioned statement of what a destination target requires before promotion.
+type TargetPolicy struct {
+	CustomerID string `json:"customerID"`
+
+	// RequiredProfileID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	RequiredProfileID Digest `json:"requiredProfileID"`
+	Target            string `json:"target"`
+	Version           int    `json:"version"`
+}
+
 // TransformationDeclaration A closed tagged union. Exactly one payload must be present and must agree with `operator`.
 type TransformationDeclaration struct {
-	After *[]string `json:"after,omitempty"`
+	After          *[]string `json:"after,omitempty"`
+	DeclaredReads  *[]string `json:"declaredReads,omitempty"`
+	DeclaredWrites *[]string `json:"declaredWrites,omitempty"`
 
-	// Aggregate The closed related-field aggregation payload.
-	Aggregate      *AggregateRelatedFields `json:"aggregate,omitempty"`
-	DeclaredReads  *[]string               `json:"declaredReads,omitempty"`
-	DeclaredWrites *[]string               `json:"declaredWrites,omitempty"`
+	// DeleteEntity Deletes selected entities that satisfy the guard.
+	DeleteEntity *DeleteEntityDeclaration `json:"deleteEntity,omitempty"`
+	Id           string                   `json:"id"`
 
-	// Form The closed related-entity transformation payload.
-	Form     *FormRelatedEntity                `json:"form,omitempty"`
-	Id       string                            `json:"id"`
-	Operator TransformationDeclarationOperator `json:"operator"`
+	// InsertEntity Inserts a new entity synthesised from a selected population or group.
+	InsertEntity *InsertEntityDeclaration `json:"insertEntity,omitempty"`
+
+	// MergeEntities Merges a group of source entities into a single target entity.
+	MergeEntities *MergeEntitiesDeclaration         `json:"mergeEntities,omitempty"`
+	Operator      TransformationDeclarationOperator `json:"operator"`
+
+	// RelateEntities Creates a relation between pairs of entities matching the endpoints and guard.
+	RelateEntities *RelateEntitiesDeclaration `json:"relateEntities,omitempty"`
 
 	// SelectAssign The selector-scoped transformation payload: a rule applied to a
 	// population rather than to entities named one by one.
 	SelectAssign *SelectAndAssign `json:"selectAssign,omitempty"`
+
+	// SplitEntity Splits each selected entity into multiple partitioned target entities.
+	SplitEntity *SplitEntityDeclaration `json:"splitEntity,omitempty"`
+
+	// UnrelateEntities Removes an existing relation between pairs of entities matching the endpoints and guard.
+	UnrelateEntities *UnrelateEntitiesDeclaration `json:"unrelateEntities,omitempty"`
 }
 
 // TransformationDeclarationOperator defines model for TransformationDeclaration.Operator.
 type TransformationDeclarationOperator string
 
+// UnrelateEntitiesDeclaration Removes an existing relation between pairs of entities matching the endpoints and guard.
+type UnrelateEntitiesDeclaration struct {
+	// FromSelector What a rule applies to.
+	FromSelector Selector `json:"fromSelector"`
+
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard        Expr   `json:"guard"`
+	RelationKind string `json:"relationKind"`
+
+	// ToSelector What a rule applies to.
+	ToSelector Selector `json:"toSelector"`
+}
+
 // Value One typed scalar value. Exactly one of the payload fields must match `kind`.
 type Value struct {
 	// Atom Present when kind is atom.
 	Atom *string `json:"atom,omitempty"`
+
+	// Date Present when kind is date. ISO-8601 calendar date YYYY-MM-DD.
+	Date *string `json:"date,omitempty"`
+
+	// Decimal Present when kind is decimal. Normalized base-10 ASCII string.
+	Decimal *string `json:"decimal,omitempty"`
+
+	// Duration Present when kind is duration. Integer elapsed seconds.
+	Duration *int64 `json:"duration,omitempty"`
 
 	// Int64 Present when kind is int64.
 	Int64 *int64 `json:"int64,omitempty"`
@@ -1280,6 +1469,9 @@ type Value struct {
 
 	// String Present when kind is string. Exact UTF-8 bytes, never normalized.
 	String *string `json:"string,omitempty"`
+
+	// Timestamp Present when kind is timestamp. RFC 3339 UTC representation.
+	Timestamp *string `json:"timestamp,omitempty"`
 }
 
 // ValueKind The closed typed-value vocabulary.
@@ -1309,6 +1501,9 @@ type BadRequest = Problem
 // DependencyUnavailable An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type DependencyUnavailable = Problem
 
+// ExecutionConflict An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
+type ExecutionConflict = Problem
+
 // InternalError An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type InternalError = Problem
 
@@ -1317,6 +1512,9 @@ type MethodNotAllowed = Problem
 
 // NotFound An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type NotFound = Problem
+
+// PolicyConflict An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
+type PolicyConflict = Problem
 
 // PublicationConflict An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type PublicationConflict = Problem
@@ -1341,6 +1539,20 @@ type GetComparisonParams struct {
 	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
 }
 
+// CreateCorpusParams defines parameters for CreateCorpus.
+type CreateCorpusParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
+// GetCorpusParams defines parameters for GetCorpus.
+type GetCorpusParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
 // CreateExecutionParams defines parameters for CreateExecution.
 type CreateExecutionParams struct {
 	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
@@ -1355,6 +1567,20 @@ type GetExecutionParams struct {
 	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
 }
 
+// GetExecutionCheckpointParams defines parameters for GetExecutionCheckpoint.
+type GetExecutionCheckpointParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
+// ReattemptExecutionParams defines parameters for ReattemptExecution.
+type ReattemptExecutionParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
 // CreatePlanParams defines parameters for CreatePlan.
 type CreatePlanParams struct {
 	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
@@ -1364,6 +1590,23 @@ type CreatePlanParams struct {
 
 // GetPlanParams defines parameters for GetPlan.
 type GetPlanParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
+// GetPolicyParams defines parameters for GetPolicy.
+type GetPolicyParams struct {
+	// Version Optional historical policy version to retrieve.
+	Version *int `form:"version,omitempty" json:"version,omitempty"`
+
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
+// PutPolicyParams defines parameters for PutPolicy.
+type PutPolicyParams struct {
 	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
 	// mandatory; an identifier from another tenant is reported as absent.
 	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
@@ -1390,11 +1633,17 @@ type GetPublicationParams struct {
 // CreateComparisonJSONRequestBody defines body for CreateComparison for application/json ContentType.
 type CreateComparisonJSONRequestBody = CreateComparisonRequest
 
+// CreateCorpusJSONRequestBody defines body for CreateCorpus for application/json ContentType.
+type CreateCorpusJSONRequestBody = CreateCorpusRequest
+
 // CreateExecutionJSONRequestBody defines body for CreateExecution for application/json ContentType.
 type CreateExecutionJSONRequestBody = CreateExecutionRequest
 
 // CreatePlanJSONRequestBody defines body for CreatePlan for application/json ContentType.
 type CreatePlanJSONRequestBody = PlanDeclarations
+
+// PutPolicyJSONRequestBody defines body for PutPolicy for application/json ContentType.
+type PutPolicyJSONRequestBody = PutPolicyRequest
 
 // CreatePublicationJSONRequestBody defines body for CreatePublication for application/json ContentType.
 type CreatePublicationJSONRequestBody = CreatePublicationRequest
@@ -1413,18 +1662,36 @@ type ServerInterface interface {
 	// GetComparison Retrieve a comparison contract
 	// (GET /v1/comparisons/{comparisonID})
 	GetComparison(w http.ResponseWriter, r *http.Request, comparisonID Digest, params GetComparisonParams)
+	// CreateCorpus Register a replay corpus
+	// (POST /v1/corpora)
+	CreateCorpus(w http.ResponseWriter, r *http.Request, params CreateCorpusParams)
+	// GetCorpus Retrieve a replay corpus
+	// (GET /v1/corpora/{corpusID})
+	GetCorpus(w http.ResponseWriter, r *http.Request, corpusID Digest, params GetCorpusParams)
 	// CreateExecution Execute a compiled plan
 	// (POST /v1/executions)
 	CreateExecution(w http.ResponseWriter, r *http.Request, params CreateExecutionParams)
 	// GetExecution Retrieve an execution
 	// (GET /v1/executions/{executionID})
 	GetExecution(w http.ResponseWriter, r *http.Request, executionID Digest, params GetExecutionParams)
+	// GetExecutionCheckpoint Retrieve an execution checkpoint record
+	// (GET /v1/executions/{executionID}/checkpoints/{checkpointKey})
+	GetExecutionCheckpoint(w http.ResponseWriter, r *http.Request, executionID Digest, checkpointKey string, params GetExecutionCheckpointParams)
+	// ReattemptExecution Reattempt a failed execution
+	// (POST /v1/executions/{executionID}/reattempt)
+	ReattemptExecution(w http.ResponseWriter, r *http.Request, executionID Digest, params ReattemptExecutionParams)
 	// CreatePlan Compile declarations into a semantic plan
 	// (POST /v1/plans)
 	CreatePlan(w http.ResponseWriter, r *http.Request, params CreatePlanParams)
 	// GetPlan Retrieve a compiled plan
 	// (GET /v1/plans/{planID})
 	GetPlan(w http.ResponseWriter, r *http.Request, planID Digest, params GetPlanParams)
+	// GetPolicy Retrieve a target policy
+	// (GET /v1/policies/{customerID}/{target})
+	GetPolicy(w http.ResponseWriter, r *http.Request, customerID string, target string, params GetPolicyParams)
+	// PutPolicy Create or advance a target policy
+	// (PUT /v1/policies/{customerID}/{target})
+	PutPolicy(w http.ResponseWriter, r *http.Request, customerID string, target string, params PutPolicyParams)
 	// CreatePublication Evaluate the promotion gate and publish if it authorizes
 	// (POST /v1/publications)
 	CreatePublication(w http.ResponseWriter, r *http.Request, params CreatePublicationParams)
@@ -1461,6 +1728,18 @@ func (_ Unimplemented) GetComparison(w http.ResponseWriter, r *http.Request, com
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// CreateCorpus Register a replay corpus
+// (POST /v1/corpora)
+func (_ Unimplemented) CreateCorpus(w http.ResponseWriter, r *http.Request, params CreateCorpusParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetCorpus Retrieve a replay corpus
+// (GET /v1/corpora/{corpusID})
+func (_ Unimplemented) GetCorpus(w http.ResponseWriter, r *http.Request, corpusID Digest, params GetCorpusParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // CreateExecution Execute a compiled plan
 // (POST /v1/executions)
 func (_ Unimplemented) CreateExecution(w http.ResponseWriter, r *http.Request, params CreateExecutionParams) {
@@ -1473,6 +1752,18 @@ func (_ Unimplemented) GetExecution(w http.ResponseWriter, r *http.Request, exec
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
+// GetExecutionCheckpoint Retrieve an execution checkpoint record
+// (GET /v1/executions/{executionID}/checkpoints/{checkpointKey})
+func (_ Unimplemented) GetExecutionCheckpoint(w http.ResponseWriter, r *http.Request, executionID Digest, checkpointKey string, params GetExecutionCheckpointParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// ReattemptExecution Reattempt a failed execution
+// (POST /v1/executions/{executionID}/reattempt)
+func (_ Unimplemented) ReattemptExecution(w http.ResponseWriter, r *http.Request, executionID Digest, params ReattemptExecutionParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
 // CreatePlan Compile declarations into a semantic plan
 // (POST /v1/plans)
 func (_ Unimplemented) CreatePlan(w http.ResponseWriter, r *http.Request, params CreatePlanParams) {
@@ -1482,6 +1773,18 @@ func (_ Unimplemented) CreatePlan(w http.ResponseWriter, r *http.Request, params
 // GetPlan Retrieve a compiled plan
 // (GET /v1/plans/{planID})
 func (_ Unimplemented) GetPlan(w http.ResponseWriter, r *http.Request, planID Digest, params GetPlanParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// GetPolicy Retrieve a target policy
+// (GET /v1/policies/{customerID}/{target})
+func (_ Unimplemented) GetPolicy(w http.ResponseWriter, r *http.Request, customerID string, target string, params GetPolicyParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// PutPolicy Create or advance a target policy
+// (PUT /v1/policies/{customerID}/{target})
+func (_ Unimplemented) PutPolicy(w http.ResponseWriter, r *http.Request, customerID string, target string, params PutPolicyParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -1633,6 +1936,105 @@ func (siw *ServerInterfaceWrapper) GetComparison(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
+// CreateCorpus operation middleware
+func (siw *ServerInterfaceWrapper) CreateCorpus(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateCorpusParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Maiden-Lane-Tenant" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Maiden-Lane-Tenant")]; found {
+		var XMaidenLaneTenant TenantHeader
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Maiden-Lane-Tenant", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Maiden-Lane-Tenant", valueList[0], &XMaidenLaneTenant, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+			return
+		}
+
+		params.XMaidenLaneTenant = XMaidenLaneTenant
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Maiden-Lane-Tenant is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateCorpus(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetCorpus operation middleware
+func (siw *ServerInterfaceWrapper) GetCorpus(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "corpusID" -------------
+	var corpusID Digest
+
+	err = runtime.BindStyledParameterWithOptions("simple", "corpusID", chi.URLParam(r, "corpusID"), &corpusID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "corpusID", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetCorpusParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Maiden-Lane-Tenant" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Maiden-Lane-Tenant")]; found {
+		var XMaidenLaneTenant TenantHeader
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Maiden-Lane-Tenant", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Maiden-Lane-Tenant", valueList[0], &XMaidenLaneTenant, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+			return
+		}
+
+		params.XMaidenLaneTenant = XMaidenLaneTenant
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Maiden-Lane-Tenant is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCorpus(w, r, corpusID, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // CreateExecution operation middleware
 func (siw *ServerInterfaceWrapper) CreateExecution(w http.ResponseWriter, r *http.Request) {
 
@@ -1732,6 +2134,123 @@ func (siw *ServerInterfaceWrapper) GetExecution(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// GetExecutionCheckpoint operation middleware
+func (siw *ServerInterfaceWrapper) GetExecutionCheckpoint(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "executionID" -------------
+	var executionID Digest
+
+	err = runtime.BindStyledParameterWithOptions("simple", "executionID", chi.URLParam(r, "executionID"), &executionID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "executionID", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "checkpointKey" -------------
+	var checkpointKey string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "checkpointKey", chi.URLParam(r, "checkpointKey"), &checkpointKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "checkpointKey", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetExecutionCheckpointParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Maiden-Lane-Tenant" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Maiden-Lane-Tenant")]; found {
+		var XMaidenLaneTenant TenantHeader
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Maiden-Lane-Tenant", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Maiden-Lane-Tenant", valueList[0], &XMaidenLaneTenant, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+			return
+		}
+
+		params.XMaidenLaneTenant = XMaidenLaneTenant
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Maiden-Lane-Tenant is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetExecutionCheckpoint(w, r, executionID, checkpointKey, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ReattemptExecution operation middleware
+func (siw *ServerInterfaceWrapper) ReattemptExecution(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "executionID" -------------
+	var executionID Digest
+
+	err = runtime.BindStyledParameterWithOptions("simple", "executionID", chi.URLParam(r, "executionID"), &executionID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "executionID", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ReattemptExecutionParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Maiden-Lane-Tenant" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Maiden-Lane-Tenant")]; found {
+		var XMaidenLaneTenant TenantHeader
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Maiden-Lane-Tenant", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Maiden-Lane-Tenant", valueList[0], &XMaidenLaneTenant, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+			return
+		}
+
+		params.XMaidenLaneTenant = XMaidenLaneTenant
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Maiden-Lane-Tenant is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ReattemptExecution(w, r, executionID, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // CreatePlan operation middleware
 func (siw *ServerInterfaceWrapper) CreatePlan(w http.ResponseWriter, r *http.Request) {
 
@@ -1822,6 +2341,145 @@ func (siw *ServerInterfaceWrapper) GetPlan(w http.ResponseWriter, r *http.Reques
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetPlan(w, r, planID, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetPolicy operation middleware
+func (siw *ServerInterfaceWrapper) GetPolicy(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "customerID" -------------
+	var customerID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "customerID", chi.URLParam(r, "customerID"), &customerID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "customerID", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "target" -------------
+	var target string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "target", chi.URLParam(r, "target"), &target, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "target", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetPolicyParams
+
+	// ------------- Optional query parameter "version" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "version", r.URL.Query(), &params.Version, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "version"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "version", Err: err})
+		}
+		return
+	}
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Maiden-Lane-Tenant" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Maiden-Lane-Tenant")]; found {
+		var XMaidenLaneTenant TenantHeader
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Maiden-Lane-Tenant", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Maiden-Lane-Tenant", valueList[0], &XMaidenLaneTenant, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+			return
+		}
+
+		params.XMaidenLaneTenant = XMaidenLaneTenant
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Maiden-Lane-Tenant is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetPolicy(w, r, customerID, target, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutPolicy operation middleware
+func (siw *ServerInterfaceWrapper) PutPolicy(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "customerID" -------------
+	var customerID string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "customerID", chi.URLParam(r, "customerID"), &customerID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "customerID", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "target" -------------
+	var target string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "target", chi.URLParam(r, "target"), &target, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: r.URL.RawPath == ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "target", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PutPolicyParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Maiden-Lane-Tenant" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Maiden-Lane-Tenant")]; found {
+		var XMaidenLaneTenant TenantHeader
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Maiden-Lane-Tenant", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Maiden-Lane-Tenant", valueList[0], &XMaidenLaneTenant, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+			return
+		}
+
+		params.XMaidenLaneTenant = XMaidenLaneTenant
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Maiden-Lane-Tenant is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Maiden-Lane-Tenant", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutPolicy(w, r, customerID, target, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2095,6 +2753,24 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/v1/comparisons/{comparisonID}", wrapper.GetComparison)
 	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/v1/policies/{customerID}/{target}", wrapper.GetPolicy)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/v1/policies/{customerID}/{target}", wrapper.PutPolicy)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/v1/corpora", wrapper.CreateCorpus)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/v1/corpora/{corpusID}", wrapper.GetCorpus)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/v1/executions/{executionID}/reattempt", wrapper.ReattemptExecution)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/v1/executions/{executionID}/checkpoints/{checkpointKey}", wrapper.GetExecutionCheckpoint)
+	})
 
 	return r
 }
@@ -2103,11 +2779,15 @@ type BadRequestApplicationProblemPlusJSONResponse Problem
 
 type DependencyUnavailableApplicationProblemPlusJSONResponse Problem
 
+type ExecutionConflictApplicationProblemPlusJSONResponse Problem
+
 type InternalErrorApplicationProblemPlusJSONResponse Problem
 
 type MethodNotAllowedApplicationProblemPlusJSONResponse Problem
 
 type NotFoundApplicationProblemPlusJSONResponse Problem
+
+type PolicyConflictApplicationProblemPlusJSONResponse Problem
 
 type PublicationConflictApplicationProblemPlusJSONResponse Problem
 
@@ -2413,6 +3093,228 @@ func (response GetComparison503ApplicationProblemPlusJSONResponse) VisitGetCompa
 	return err
 }
 
+type CreateCorpusRequestObject struct {
+	Params CreateCorpusParams
+	Body   *CreateCorpusJSONRequestBody
+}
+
+type CreateCorpusResponseObject interface {
+	VisitCreateCorpusResponse(w http.ResponseWriter) error
+}
+
+type CreateCorpus201JSONResponse Corpus
+
+func (response CreateCorpus201JSONResponse) VisitCreateCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCorpus400ApplicationProblemPlusJSONResponse struct {
+	BadRequestApplicationProblemPlusJSONResponse
+}
+
+func (response CreateCorpus400ApplicationProblemPlusJSONResponse) VisitCreateCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCorpus405ApplicationProblemPlusJSONResponse struct {
+	MethodNotAllowedApplicationProblemPlusJSONResponse
+}
+
+func (response CreateCorpus405ApplicationProblemPlusJSONResponse) VisitCreateCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(405)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCorpus415ApplicationProblemPlusJSONResponse struct {
+	UnsupportedMediaTypeApplicationProblemPlusJSONResponse
+}
+
+func (response CreateCorpus415ApplicationProblemPlusJSONResponse) VisitCreateCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(415)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCorpus422ApplicationProblemPlusJSONResponse struct {
+	UnprocessableEntityApplicationProblemPlusJSONResponse
+}
+
+func (response CreateCorpus422ApplicationProblemPlusJSONResponse) VisitCreateCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCorpus500ApplicationProblemPlusJSONResponse struct {
+	InternalErrorApplicationProblemPlusJSONResponse
+}
+
+func (response CreateCorpus500ApplicationProblemPlusJSONResponse) VisitCreateCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCorpus503ApplicationProblemPlusJSONResponse struct {
+	DependencyUnavailableApplicationProblemPlusJSONResponse
+}
+
+func (response CreateCorpus503ApplicationProblemPlusJSONResponse) VisitCreateCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCorpusRequestObject struct {
+	CorpusID Digest `json:"corpusID"`
+	Params   GetCorpusParams
+}
+
+type GetCorpusResponseObject interface {
+	VisitGetCorpusResponse(w http.ResponseWriter) error
+}
+
+type GetCorpus200JSONResponse Corpus
+
+func (response GetCorpus200JSONResponse) VisitGetCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCorpus400ApplicationProblemPlusJSONResponse struct {
+	BadRequestApplicationProblemPlusJSONResponse
+}
+
+func (response GetCorpus400ApplicationProblemPlusJSONResponse) VisitGetCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCorpus404ApplicationProblemPlusJSONResponse struct {
+	NotFoundApplicationProblemPlusJSONResponse
+}
+
+func (response GetCorpus404ApplicationProblemPlusJSONResponse) VisitGetCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCorpus405ApplicationProblemPlusJSONResponse struct {
+	MethodNotAllowedApplicationProblemPlusJSONResponse
+}
+
+func (response GetCorpus405ApplicationProblemPlusJSONResponse) VisitGetCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(405)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCorpus500ApplicationProblemPlusJSONResponse struct {
+	InternalErrorApplicationProblemPlusJSONResponse
+}
+
+func (response GetCorpus500ApplicationProblemPlusJSONResponse) VisitGetCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCorpus503ApplicationProblemPlusJSONResponse struct {
+	DependencyUnavailableApplicationProblemPlusJSONResponse
+}
+
+func (response GetCorpus503ApplicationProblemPlusJSONResponse) VisitGetCorpusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CreateExecutionRequestObject struct {
 	Params CreateExecutionParams
 	Body   *CreateExecutionJSONRequestBody
@@ -2635,6 +3537,229 @@ func (response GetExecution500ApplicationProblemPlusJSONResponse) VisitGetExecut
 	return err
 }
 
+type GetExecutionCheckpointRequestObject struct {
+	ExecutionID   Digest `json:"executionID"`
+	CheckpointKey string `json:"checkpointKey"`
+	Params        GetExecutionCheckpointParams
+}
+
+type GetExecutionCheckpointResponseObject interface {
+	VisitGetExecutionCheckpointResponse(w http.ResponseWriter) error
+}
+
+type GetExecutionCheckpoint200JSONResponse ExecutionCheckpointDetail
+
+func (response GetExecutionCheckpoint200JSONResponse) VisitGetExecutionCheckpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExecutionCheckpoint400ApplicationProblemPlusJSONResponse struct {
+	BadRequestApplicationProblemPlusJSONResponse
+}
+
+func (response GetExecutionCheckpoint400ApplicationProblemPlusJSONResponse) VisitGetExecutionCheckpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExecutionCheckpoint404ApplicationProblemPlusJSONResponse struct {
+	NotFoundApplicationProblemPlusJSONResponse
+}
+
+func (response GetExecutionCheckpoint404ApplicationProblemPlusJSONResponse) VisitGetExecutionCheckpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExecutionCheckpoint405ApplicationProblemPlusJSONResponse struct {
+	MethodNotAllowedApplicationProblemPlusJSONResponse
+}
+
+func (response GetExecutionCheckpoint405ApplicationProblemPlusJSONResponse) VisitGetExecutionCheckpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(405)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExecutionCheckpoint500ApplicationProblemPlusJSONResponse struct {
+	InternalErrorApplicationProblemPlusJSONResponse
+}
+
+func (response GetExecutionCheckpoint500ApplicationProblemPlusJSONResponse) VisitGetExecutionCheckpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetExecutionCheckpoint503ApplicationProblemPlusJSONResponse struct {
+	DependencyUnavailableApplicationProblemPlusJSONResponse
+}
+
+func (response GetExecutionCheckpoint503ApplicationProblemPlusJSONResponse) VisitGetExecutionCheckpointResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReattemptExecutionRequestObject struct {
+	ExecutionID Digest `json:"executionID"`
+	Params      ReattemptExecutionParams
+}
+
+type ReattemptExecutionResponseObject interface {
+	VisitReattemptExecutionResponse(w http.ResponseWriter) error
+}
+
+type ReattemptExecution202JSONResponse ExecutionAccepted
+
+func (response ReattemptExecution202JSONResponse) VisitReattemptExecutionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReattemptExecution400ApplicationProblemPlusJSONResponse struct {
+	BadRequestApplicationProblemPlusJSONResponse
+}
+
+func (response ReattemptExecution400ApplicationProblemPlusJSONResponse) VisitReattemptExecutionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReattemptExecution404ApplicationProblemPlusJSONResponse struct {
+	NotFoundApplicationProblemPlusJSONResponse
+}
+
+func (response ReattemptExecution404ApplicationProblemPlusJSONResponse) VisitReattemptExecutionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReattemptExecution405ApplicationProblemPlusJSONResponse struct {
+	MethodNotAllowedApplicationProblemPlusJSONResponse
+}
+
+func (response ReattemptExecution405ApplicationProblemPlusJSONResponse) VisitReattemptExecutionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(405)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReattemptExecution409ApplicationProblemPlusJSONResponse struct {
+	ExecutionConflictApplicationProblemPlusJSONResponse
+}
+
+func (response ReattemptExecution409ApplicationProblemPlusJSONResponse) VisitReattemptExecutionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReattemptExecution500ApplicationProblemPlusJSONResponse struct {
+	InternalErrorApplicationProblemPlusJSONResponse
+}
+
+func (response ReattemptExecution500ApplicationProblemPlusJSONResponse) VisitReattemptExecutionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReattemptExecution503ApplicationProblemPlusJSONResponse struct {
+	DependencyUnavailableApplicationProblemPlusJSONResponse
+}
+
+func (response ReattemptExecution503ApplicationProblemPlusJSONResponse) VisitReattemptExecutionResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type CreatePlanRequestObject struct {
 	Params CreatePlanParams
 	Body   *CreatePlanJSONRequestBody
@@ -2821,6 +3946,261 @@ func (response GetPlan500ApplicationProblemPlusJSONResponse) VisitGetPlanRespons
 	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPolicyRequestObject struct {
+	CustomerID string `json:"customerID"`
+	Target     string `json:"target"`
+	Params     GetPolicyParams
+}
+
+type GetPolicyResponseObject interface {
+	VisitGetPolicyResponse(w http.ResponseWriter) error
+}
+
+type GetPolicy200JSONResponse TargetPolicy
+
+func (response GetPolicy200JSONResponse) VisitGetPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPolicy400ApplicationProblemPlusJSONResponse struct {
+	BadRequestApplicationProblemPlusJSONResponse
+}
+
+func (response GetPolicy400ApplicationProblemPlusJSONResponse) VisitGetPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPolicy404ApplicationProblemPlusJSONResponse struct {
+	NotFoundApplicationProblemPlusJSONResponse
+}
+
+func (response GetPolicy404ApplicationProblemPlusJSONResponse) VisitGetPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPolicy405ApplicationProblemPlusJSONResponse struct {
+	MethodNotAllowedApplicationProblemPlusJSONResponse
+}
+
+func (response GetPolicy405ApplicationProblemPlusJSONResponse) VisitGetPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(405)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPolicy500ApplicationProblemPlusJSONResponse struct {
+	InternalErrorApplicationProblemPlusJSONResponse
+}
+
+func (response GetPolicy500ApplicationProblemPlusJSONResponse) VisitGetPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPolicy503ApplicationProblemPlusJSONResponse struct {
+	DependencyUnavailableApplicationProblemPlusJSONResponse
+}
+
+func (response GetPolicy503ApplicationProblemPlusJSONResponse) VisitGetPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutPolicyRequestObject struct {
+	CustomerID string `json:"customerID"`
+	Target     string `json:"target"`
+	Params     PutPolicyParams
+	Body       *PutPolicyJSONRequestBody
+}
+
+type PutPolicyResponseObject interface {
+	VisitPutPolicyResponse(w http.ResponseWriter) error
+}
+
+type PutPolicy200JSONResponse TargetPolicy
+
+func (response PutPolicy200JSONResponse) VisitPutPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutPolicy201JSONResponse TargetPolicy
+
+func (response PutPolicy201JSONResponse) VisitPutPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutPolicy400ApplicationProblemPlusJSONResponse struct {
+	BadRequestApplicationProblemPlusJSONResponse
+}
+
+func (response PutPolicy400ApplicationProblemPlusJSONResponse) VisitPutPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutPolicy405ApplicationProblemPlusJSONResponse struct {
+	MethodNotAllowedApplicationProblemPlusJSONResponse
+}
+
+func (response PutPolicy405ApplicationProblemPlusJSONResponse) VisitPutPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(405)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutPolicy409ApplicationProblemPlusJSONResponse struct {
+	PolicyConflictApplicationProblemPlusJSONResponse
+}
+
+func (response PutPolicy409ApplicationProblemPlusJSONResponse) VisitPutPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutPolicy415ApplicationProblemPlusJSONResponse struct {
+	UnsupportedMediaTypeApplicationProblemPlusJSONResponse
+}
+
+func (response PutPolicy415ApplicationProblemPlusJSONResponse) VisitPutPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(415)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutPolicy422ApplicationProblemPlusJSONResponse struct {
+	UnprocessableEntityApplicationProblemPlusJSONResponse
+}
+
+func (response PutPolicy422ApplicationProblemPlusJSONResponse) VisitPutPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutPolicy500ApplicationProblemPlusJSONResponse struct {
+	InternalErrorApplicationProblemPlusJSONResponse
+}
+
+func (response PutPolicy500ApplicationProblemPlusJSONResponse) VisitPutPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(500)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutPolicy503ApplicationProblemPlusJSONResponse struct {
+	DependencyUnavailableApplicationProblemPlusJSONResponse
+}
+
+func (response PutPolicy503ApplicationProblemPlusJSONResponse) VisitPutPolicyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3088,18 +4468,36 @@ type StrictServerInterface interface {
 	// GetComparison Retrieve a comparison contract
 	// (GET /v1/comparisons/{comparisonID})
 	GetComparison(ctx context.Context, request GetComparisonRequestObject) (GetComparisonResponseObject, error)
+	// CreateCorpus Register a replay corpus
+	// (POST /v1/corpora)
+	CreateCorpus(ctx context.Context, request CreateCorpusRequestObject) (CreateCorpusResponseObject, error)
+	// GetCorpus Retrieve a replay corpus
+	// (GET /v1/corpora/{corpusID})
+	GetCorpus(ctx context.Context, request GetCorpusRequestObject) (GetCorpusResponseObject, error)
 	// CreateExecution Execute a compiled plan
 	// (POST /v1/executions)
 	CreateExecution(ctx context.Context, request CreateExecutionRequestObject) (CreateExecutionResponseObject, error)
 	// GetExecution Retrieve an execution
 	// (GET /v1/executions/{executionID})
 	GetExecution(ctx context.Context, request GetExecutionRequestObject) (GetExecutionResponseObject, error)
+	// GetExecutionCheckpoint Retrieve an execution checkpoint record
+	// (GET /v1/executions/{executionID}/checkpoints/{checkpointKey})
+	GetExecutionCheckpoint(ctx context.Context, request GetExecutionCheckpointRequestObject) (GetExecutionCheckpointResponseObject, error)
+	// ReattemptExecution Reattempt a failed execution
+	// (POST /v1/executions/{executionID}/reattempt)
+	ReattemptExecution(ctx context.Context, request ReattemptExecutionRequestObject) (ReattemptExecutionResponseObject, error)
 	// CreatePlan Compile declarations into a semantic plan
 	// (POST /v1/plans)
 	CreatePlan(ctx context.Context, request CreatePlanRequestObject) (CreatePlanResponseObject, error)
 	// GetPlan Retrieve a compiled plan
 	// (GET /v1/plans/{planID})
 	GetPlan(ctx context.Context, request GetPlanRequestObject) (GetPlanResponseObject, error)
+	// GetPolicy Retrieve a target policy
+	// (GET /v1/policies/{customerID}/{target})
+	GetPolicy(ctx context.Context, request GetPolicyRequestObject) (GetPolicyResponseObject, error)
+	// PutPolicy Create or advance a target policy
+	// (PUT /v1/policies/{customerID}/{target})
+	PutPolicy(ctx context.Context, request PutPolicyRequestObject) (PutPolicyResponseObject, error)
 	// CreatePublication Evaluate the promotion gate and publish if it authorizes
 	// (POST /v1/publications)
 	CreatePublication(ctx context.Context, request CreatePublicationRequestObject) (CreatePublicationResponseObject, error)
@@ -3255,6 +4653,66 @@ func (sh *strictHandler) GetComparison(w http.ResponseWriter, r *http.Request, c
 	}
 }
 
+// CreateCorpus operation middleware
+func (sh *strictHandler) CreateCorpus(w http.ResponseWriter, r *http.Request, params CreateCorpusParams) {
+	var request CreateCorpusRequestObject
+
+	request.Params = params
+
+	var body CreateCorpusJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateCorpus(ctx, request.(CreateCorpusRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateCorpus")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateCorpusResponseObject); ok {
+		if err := validResponse.VisitCreateCorpusResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetCorpus operation middleware
+func (sh *strictHandler) GetCorpus(w http.ResponseWriter, r *http.Request, corpusID Digest, params GetCorpusParams) {
+	var request GetCorpusRequestObject
+
+	request.CorpusID = corpusID
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetCorpus(ctx, request.(GetCorpusRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetCorpus")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetCorpusResponseObject); ok {
+		if err := validResponse.VisitGetCorpusResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // CreateExecution operation middleware
 func (sh *strictHandler) CreateExecution(w http.ResponseWriter, r *http.Request, params CreateExecutionParams) {
 	var request CreateExecutionRequestObject
@@ -3315,6 +4773,61 @@ func (sh *strictHandler) GetExecution(w http.ResponseWriter, r *http.Request, ex
 	}
 }
 
+// GetExecutionCheckpoint operation middleware
+func (sh *strictHandler) GetExecutionCheckpoint(w http.ResponseWriter, r *http.Request, executionID Digest, checkpointKey string, params GetExecutionCheckpointParams) {
+	var request GetExecutionCheckpointRequestObject
+
+	request.ExecutionID = executionID
+	request.CheckpointKey = checkpointKey
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetExecutionCheckpoint(ctx, request.(GetExecutionCheckpointRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetExecutionCheckpoint")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetExecutionCheckpointResponseObject); ok {
+		if err := validResponse.VisitGetExecutionCheckpointResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ReattemptExecution operation middleware
+func (sh *strictHandler) ReattemptExecution(w http.ResponseWriter, r *http.Request, executionID Digest, params ReattemptExecutionParams) {
+	var request ReattemptExecutionRequestObject
+
+	request.ExecutionID = executionID
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ReattemptExecution(ctx, request.(ReattemptExecutionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ReattemptExecution")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ReattemptExecutionResponseObject); ok {
+		if err := validResponse.VisitReattemptExecutionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // CreatePlan operation middleware
 func (sh *strictHandler) CreatePlan(w http.ResponseWriter, r *http.Request, params CreatePlanParams) {
 	var request CreatePlanRequestObject
@@ -3368,6 +4881,69 @@ func (sh *strictHandler) GetPlan(w http.ResponseWriter, r *http.Request, planID 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetPlanResponseObject); ok {
 		if err := validResponse.VisitGetPlanResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetPolicy operation middleware
+func (sh *strictHandler) GetPolicy(w http.ResponseWriter, r *http.Request, customerID string, target string, params GetPolicyParams) {
+	var request GetPolicyRequestObject
+
+	request.CustomerID = customerID
+	request.Target = target
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetPolicy(ctx, request.(GetPolicyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetPolicy")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetPolicyResponseObject); ok {
+		if err := validResponse.VisitGetPolicyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PutPolicy operation middleware
+func (sh *strictHandler) PutPolicy(w http.ResponseWriter, r *http.Request, customerID string, target string, params PutPolicyParams) {
+	var request PutPolicyRequestObject
+
+	request.CustomerID = customerID
+	request.Target = target
+	request.Params = params
+
+	var body PutPolicyJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PutPolicy(ctx, request.(PutPolicyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PutPolicy")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PutPolicyResponseObject); ok {
+		if err := validResponse.VisitPutPolicyResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -3441,185 +5017,209 @@ func (sh *strictHandler) GetPublication(w http.ResponseWriter, r *http.Request, 
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"XfGnZvDw88P/DwAA//8=",
+	"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",
+	"8P6X9/8vAAD//w==",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

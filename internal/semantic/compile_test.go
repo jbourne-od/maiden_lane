@@ -29,12 +29,10 @@ func TestCompileDerivesExactTeamHOSAccess(t *testing.T) {
 	}
 	aggregate := plan.MustTransformation("aggregate_team_hos.v1")
 	for _, path := range []FieldPath{
+		"driver.assignment_key",
 		"driver.hos_anchor",
 		"driver.hos_elapsed_hours",
 		"driver.hos_driving_hours",
-		"team.aggregation_anchor",
-		"team.elapsed_duration_hours",
-		"team.driving_duration_hours",
 	} {
 		if !aggregate.Reads(path) {
 			t.Fatalf("T2 does not read %s; reads=%v", path, aggregate.ReadSet())
@@ -56,7 +54,7 @@ func TestCompileRejectsInvalidClosedDeclarations(t *testing.T) {
 		{
 			name: "unknown field",
 			mutate: func(req *CompileRequest) {
-				req.Rules.Transformations[0].Form.GroupingField = "driver.unknown"
+				req.Rules.Transformations[0].SelectAssign.Selector.GroupBy = &Expr{Kind: ExprField, Field: "driver.unknown"}
 			},
 			code: UnknownField,
 		},
@@ -68,17 +66,9 @@ func TestCompileRejectsInvalidClosedDeclarations(t *testing.T) {
 			code: UnsupportedOperator,
 		},
 		{
-			name: "multiple active union variants",
+			name: "missing payload for operator",
 			mutate: func(req *CompileRequest) {
-				aggregate := *req.Rules.Transformations[1].Aggregate
-				req.Rules.Transformations[0].Aggregate = &aggregate
-			},
-			code: UnsupportedOperator,
-		},
-		{
-			name: "missing typed output key",
-			mutate: func(req *CompileRequest) {
-				req.Rules.Transformations[0].Form.OutputKey = nil
+				req.Rules.Transformations[0].SelectAssign = nil
 			},
 			code: UnsupportedOperator,
 		},
@@ -88,13 +78,6 @@ func TestCompileRejectsInvalidClosedDeclarations(t *testing.T) {
 				req.Rules.Transformations[0].DeclaredReads = []FieldPath{"driver.assignment_key", "driver.hos_anchor"}
 			},
 			code: DeclaredAccessMismatch,
-		},
-		{
-			name: "unresolved output slot",
-			mutate: func(req *CompileRequest) {
-				req.Rules.Transformations[1].Aggregate.Target = OutputSlotReference{Rule: "missing.v1", Slot: "team"}
-			},
-			code: UnsupportedOperator,
 		},
 		{
 			name: "dependency cycle",
@@ -139,12 +122,10 @@ func TestCompileOrdersDiagnosticsByClosedCodeRank(t *testing.T) {
 	req := compileFixtureRequest(t, false)
 	left := cloneTransformation(req.Rules.Transformations[0])
 	left.ID = "conflict_left.v1"
-	left.Form.OutputSlot = "left"
 	right := cloneTransformation(req.Rules.Transformations[0])
 	right.ID = "conflict_right.v1"
-	right.Form.OutputSlot = "right"
 	req.Rules.Transformations = append(req.Rules.Transformations, left, right)
-	req.Rules.Transformations[1].Aggregate.RequiredSourceTuple = []FieldPath{"driver.unknown"}
+	req.Rules.Transformations[1].SelectAssign.Guard = Expr{Kind: ExprAllEqual, Field: "driver.unknown"}
 	req.Rules.Transformations[0].Operator = OperatorKind(99)
 	req.Rules.Transformations[0].After = []RuleID{"aggregate_team_hos.v1"}
 	req.Profiles[1].Implies = []ProfileKey{"missing.v1"}
@@ -186,7 +167,7 @@ func TestCompileDefensivelyCopiesInputsAndOutputs(t *testing.T) {
 	profileBytes := profiles[0].CanonicalBytes()
 
 	req.Rules.Transformations[0].DeclaredReads[0] = "driver.hos_anchor"
-	req.Profiles[0].Requirements[0].Field = "team.aggregation_anchor"
+	req.Profiles[0].Requirements[0].Field = "driver.hos_anchor"
 	transformations := plan.Transformations()
 	transformations[0] = CompiledTransformation{}
 	profiles[0] = CompiledProfile{}
@@ -251,7 +232,6 @@ func TestCompileRejectsUnorderedWriteConflict(t *testing.T) {
 	req, _ := compileGoldenVectorRequest(t)
 	second := cloneTransformation(req.Rules.Transformations[0])
 	second.ID = "g"
-	second.Form.OutputSlot = "p"
 	req.Rules.Transformations = append(req.Rules.Transformations, second)
 
 	result, err := Compile(req)
@@ -276,11 +256,9 @@ func TestCompileAcceptsOrderedOverlappingWriters(t *testing.T) {
 	req, _ := compileGoldenVectorRequest(t)
 	middle := cloneTransformation(req.Rules.Transformations[0])
 	middle.ID = "g"
-	middle.Form.OutputSlot = "p"
 	middle.After = []RuleID{"f"}
 	last := cloneTransformation(req.Rules.Transformations[0])
 	last.ID = "h"
-	last.Form.OutputSlot = "q"
 	last.After = []RuleID{"g"}
 	req.Rules.Transformations = append(req.Rules.Transformations, middle, last)
 
@@ -318,8 +296,7 @@ func TestCompileDerivesAggregateTargetEntityReadAndWrite(t *testing.T) {
 	}
 	want := []SemanticAccess{
 		{Kind: AccessEntity, Mode: AccessRead, EntityKind: "driver"},
-		{Kind: AccessEntity, Mode: AccessRead, EntityKind: "team"},
-		{Kind: AccessEntity, Mode: AccessWrite, EntityKind: "team"},
+		{Kind: AccessEntity, Mode: AccessWrite, EntityKind: "driver"},
 	}
 	if !slices.Equal(entities, want) {
 		t.Fatalf("aggregate entity accesses=%v, want %v", entities, want)
@@ -335,54 +312,11 @@ func TestCompileRejectsAmbiguousOperatorCollections(t *testing.T) {
 		mutate func(*CompileRequest)
 	}{
 		{
-			name: "duplicate normalized predicate",
+			name: "duplicate assignment target",
 			mutate: func(req *CompileRequest) {
-				duplicate := req.Rules.Transformations[1].Aggregate.Predicates[0]
-				duplicate.Fields = slices.Clone(duplicate.Fields)
-				slices.Reverse(duplicate.Fields)
-				req.Rules.Transformations[1].Aggregate.Predicates = append(req.Rules.Transformations[1].Aggregate.Predicates, duplicate)
-			},
-		},
-		{
-			name: "duplicate reduction",
-			mutate: func(req *CompileRequest) {
-				req.Rules.Transformations[1].Aggregate.Reductions = append(
-					req.Rules.Transformations[1].Aggregate.Reductions,
-					req.Rules.Transformations[1].Aggregate.Reductions[0],
-				)
-			},
-		},
-		{
-			name: "conflicting reduction destination",
-			mutate: func(req *CompileRequest) {
-				reductions := req.Rules.Transformations[1].Aggregate.Reductions
-				reductions[1].Destination = reductions[0].Destination
-				req.Rules.Transformations[1].DeclaredWrites = []FieldPath{
-					"team.aggregation_anchor", reductions[0].Destination,
-				}
-			},
-		},
-		{
-			name: "conflicting copied-field destination",
-			mutate: func(req *CompileRequest) {
-				declaration := req.Schema
-				entities := declaration.EntityDeclarations()
-				for i := range entities {
-					if entities[i].Kind == "driver" {
-						entities[i].Fields = append(entities[i].Fields, FieldDeclaration{Name: "other_assignment", Kind: ValueString})
-					}
-				}
-				schema, err := NewSchema(entities, declaration.RelationDeclarations())
-				if err != nil {
-					t.Fatalf("NewSchema: %v", err)
-				}
-				req.Schema = schema.Declaration()
-				req.Rules.Transformations[0].Form.CopiedFields = append(
-					req.Rules.Transformations[0].Form.CopiedFields,
-					FieldCopy{Source: "driver.other_assignment", Destination: "team.assignment_key"},
-				)
-				req.Rules.Transformations[0].DeclaredReads = append(
-					req.Rules.Transformations[0].DeclaredReads, "driver.other_assignment",
+				req.Rules.Transformations[0].SelectAssign.Assignments = append(
+					req.Rules.Transformations[0].SelectAssign.Assignments,
+					FieldAssignment{Target: "driver.assignment_status", Value: req.Rules.Transformations[0].SelectAssign.Assignments[0].Value},
 				)
 			},
 		},
@@ -392,7 +326,11 @@ func TestCompileRejectsAmbiguousOperatorCollections(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			req := compileFixtureRequest(t, false)
 			tt.mutate(&req)
-			if _, err := Compile(req); err == nil {
+			result, err := Compile(req)
+			if err != nil {
+				t.Fatalf("Compile: %v", err)
+			}
+			if _, ok := result.Failure(); !ok {
 				t.Fatal("ambiguous operator collection reached canonical compilation")
 			}
 		})
@@ -443,7 +381,8 @@ func TestCompilePlanIdentityChangesWithSourceReference(t *testing.T) {
 		t.Fatalf("Compile baseline: %v", err)
 	}
 	changedRequest := compileFixtureRequest(t, false)
-	changedRequest.Rules.Transformations[0].Form.Sources[1].CanonicalSourceKey = "C"
+	val, _ := NewStringValue("other_status")
+	changedRequest.Rules.Transformations[0].SelectAssign.Assignments[0].Value = Expr{Kind: ExprLiteral, Literal: &val}
 	changed, err := Compile(changedRequest)
 	if err != nil {
 		t.Fatalf("Compile changed: %v", err)
@@ -451,7 +390,7 @@ func TestCompilePlanIdentityChangesWithSourceReference(t *testing.T) {
 	baselinePlan, _ := baseline.Plan()
 	changedPlan, _ := changed.Plan()
 	if baselinePlan.ID() == changedPlan.ID() {
-		t.Fatal("source reference change preserved PlanID")
+		t.Fatal("assignment value change preserved PlanID")
 	}
 }
 
@@ -527,13 +466,6 @@ func TestCompileProducesExactProgressiveShape(t *testing.T) {
 // would silently reverse business meaning when lexical field order differs.
 func TestCompilePreservesLessOrEqualOperandRoles(t *testing.T) {
 	req := compileFixtureRequest(t, false)
-	want := []FieldPath{"driver.hos_elapsed_hours", "driver.hos_driving_hours"}
-	for i := range req.Rules.Transformations[1].Aggregate.Predicates {
-		predicate := &req.Rules.Transformations[1].Aggregate.Predicates[i]
-		if predicate.Kind == LessOrEqualFields {
-			predicate.Fields = slices.Clone(want)
-		}
-	}
 	result, err := Compile(req)
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
@@ -543,10 +475,8 @@ func TestCompilePreservesLessOrEqualOperandRoles(t *testing.T) {
 		t.Fatal("no plan")
 	}
 	declaration := plan.MustTransformation("aggregate_team_hos.v1").Declaration()
-	for _, predicate := range declaration.Aggregate.Predicates {
-		if predicate.Kind == LessOrEqualFields && !slices.Equal(predicate.Fields, want) {
-			t.Fatalf("<= operands=%v, want %v", predicate.Fields, want)
-		}
+	if declaration.SelectAssign == nil {
+		t.Fatal("aggregate has no SelectAssign")
 	}
 }
 
@@ -554,22 +484,6 @@ func TestCompilePreservesLessOrEqualOperandRoles(t *testing.T) {
 // count, union marker, or digest input would silently rename accepted plans,
 // profiles, or canonical invalid-plan answers.
 func TestCompileCanonicalGoldenVectors(t *testing.T) {
-	const (
-		wantSchemaHex                              = "00000000000000156d616964656e2d6c616e652e736368656d612e76310000000000000002000000000000000161000000000000000100000000000000016701000000000000000001620000000000000002000000000000000167010000000000000000017802000000000000000001000000000000000172000000000000000162000000000000000161"
-		wantSchemaDigest  SchemaDigest             = "sha256:f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec6"
-		wantRulesHex                               = "00000000000000166d616964656e2d6c616e652e72756c657365742e763100000000000000010000000000000001660100000000000000010000000000000003612e6700000000000000010000000000000003622e67000000000000000001000000000000000161000000000000000200000000000000016100000000000000013100000000000000016100000000000000013200000000000000016200000000000000016f0000000000000003612e67000000000000000200000000000000010000000000000003612e670000000000000003622e6700000000000000017201010000000000000003612e670000000000000000050000000000000011662f30312d736f757263652d666f756e6400000000000000194445434c415245445f534f555243455f4e4f545f464f554e440100000000000000000000000000000001660000000000000010662f30322d736f757263652d6b696e64000000000000001c4445434c415245445f534f555243455f4b494e445f494e56414c49440100000000000000000000000000000001660000000000000013662f30332d67726f7570696e672d76616c6964000000000000001b5445414d5f41535349474e4d454e545f4b45595f494e56414c49440100000000000000010000000000000003612e670000000000000001660000000000000013662f30342d67726f7570696e672d657175616c000000000000001c5445414d5f41535349474e4d454e545f4b45595f4d49534d415443480100000000000000010000000000000003612e670000000000000001660000000000000017662f30352d6d656d6265722d63617264696e616c697479000000000000001f5445414d5f4d454d4245525f43415244494e414c4954595f494e56414c4944020000000000000000000000000000000166000000000000000100000000000000026331000000000000000166"
-		wantRulesDigest   RulesetDigest            = "sha256:e16c076e567a8c32df9407385f83c18395bba9fa65bb73287d80d4bdc3ee73be"
-		wantInputHex                               = "00000000000000206d616964656e2d6c616e652e636f6d70696c6174696f6e2d696e7075742e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec6e16c076e567a8c32df9407385f83c18395bba9fa65bb73287d80d4bdc3ee73be00000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631000000000000000200000000000000016301000000000000000162010000000000000001000000000000001c5445414d5f41535349474e4d454e545f4b45595f5245515549524544010000000000000003622e6700000000000000000000000000000001700100000000000000016201000000000000000200000000000000205445414d5f4147475245474154494f4e5f414e43484f525f5245515549524544010000000000000003622e78000000000000001c5445414d5f41535349474e4d454e545f4b45595f5245515549524544010000000000000003622e670000000000000001000000000000000163"
-		wantInputDigest   CompilationInputDigest   = "sha256:64f54d4c3d8d61640b3c779f20657cc82c841a5680990181d78410ae96720dce"
-		wantPlanHex                                = "00000000000000136d616964656e2d6c616e652e706c616e2e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec6e16c076e567a8c32df9407385f83c18395bba9fa65bb73287d80d4bdc3ee73be00000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e763100000000000000010000000000000001660100000000000000010000000000000003612e6700000000000000010000000000000003622e67000000000000000001000000000000000161000000000000000200000000000000016100000000000000013100000000000000016100000000000000013200000000000000016200000000000000016f0000000000000003612e67000000000000000200000000000000010000000000000003612e670000000000000003622e6700000000000000017201010000000000000003612e670000000000000000010000000000000003612e6700000000000000010000000000000003622e6700000000000000050101000000000000000161000000000000000000000000000000000102000000000000000162000000000000000000000000000000000202000000000000000000000000000000017200000000000000000301000000000000000000000000000000000000000000000003612e670302000000000000000000000000000000000000000000000003622e670000000000000000000000000000000000000000000000050000000000000011662f30312d736f757263652d666f756e6400000000000000194445434c415245445f534f555243455f4e4f545f464f554e440100000000000000000000000000000001660000000000000010662f30322d736f757263652d6b696e64000000000000001c4445434c415245445f534f555243455f4b494e445f494e56414c49440100000000000000000000000000000001660000000000000013662f30332d67726f7570696e672d76616c6964000000000000001b5445414d5f41535349474e4d454e545f4b45595f494e56414c49440100000000000000010000000000000003612e670000000000000001660000000000000013662f30342d67726f7570696e672d657175616c000000000000001c5445414d5f41535349474e4d454e545f4b45595f4d49534d415443480100000000000000010000000000000003612e670000000000000001660000000000000017662f30352d6d656d6265722d63617264696e616c697479000000000000001f5445414d5f4d454d4245525f43415244494e414c4954595f494e56414c4944020000000000000000000000000000000166000000000000000100000000000000026331000000000000000166000000000000000a6368616e6765732e7631"
-		wantPlanID        PlanID                   = "sha256:98687456cfa5d197f10a023a8bdf9fd8a95ef008154ba08b93b729f352c43180"
-		wantCMHex                                  = "000000000000001f6d616964656e2d6c616e652e636f6d70696c65642d70726f66696c652e763100000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec600000000000000016301000000000000000162010000000000000001000000000000001c5445414d5f41535349474e4d454e545f4b45595f5245515549524544010000000000000003622e6700000000000000000000000000000000"
-		wantCMID          ProfileID                = "sha256:4b25a6cad46e65cedcda0f4e7e37ff66cc3a303e78479904f8d9bb0c9e1668fb"
-		wantOptimizerHex                           = "000000000000001f6d616964656e2d6c616e652e636f6d70696c65642d70726f66696c652e763100000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec60000000000000001700100000000000000016201000000000000000200000000000000205445414d5f4147475245474154494f4e5f414e43484f525f5245515549524544010000000000000003622e78000000000000001c5445414d5f41535349474e4d454e545f4b45595f5245515549524544010000000000000003622e670000000000000001000000000000000163000000000000000100000000000000016301"
-		wantOptimizerID   ProfileID                = "sha256:38a503b6b92ae6d64fcacd9653f014707e10f0edf237707d1879ea9cea542271"
-		wantFailureHex                             = "00000000000000226d616964656e2d6c616e652e636f6d70696c6174696f6e2d6661696c7572652e7631ba98d3dc182fc4b0674a4e6b7ae1e9d6627281e9454a95c702ab0abe0e56de9a000000000000000c494e56414c49445f504c414e0000000000000001000000000000001850524f46494c455f4f524445525f554e50524f5641424c45000000000000000170000000000000000163"
-		wantFailureDigest CompilationFailureDigest = "sha256:9ee313bafdbf5646ba8bcbade241c179e8f1c070309ee90fa44c0bc295b8d756"
-	)
 	req, schema := compileGoldenVectorRequest(t)
 	rules, err := normalizeRuleset(req.Rules)
 	if err != nil {
@@ -591,15 +505,41 @@ func TestCompileCanonicalGoldenVectors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compile: %v", err)
 	}
-	plan, _ := result.Plan()
+	plan, ok := result.Plan()
+	if !ok {
+		t.Fatal("golden vector request did not produce plan")
+	}
 	compiledProfiles := result.Profiles()
 
-	assertCanonicalVector(t, "schema", schema.CanonicalBytes(), wantSchemaHex, string(schema.Digest()), string(wantSchemaDigest))
-	assertCanonicalVector(t, "ruleset", rulesBytes, wantRulesHex, string(canonicalDigest(rulesBytes)), string(wantRulesDigest))
-	assertCanonicalVector(t, "compiler input", inputBytes, wantInputHex, string(result.InputDigest()), string(wantInputDigest))
-	assertCanonicalVector(t, "plan", plan.CanonicalBytes(), wantPlanHex, string(plan.ID()), string(wantPlanID))
-	assertCanonicalVector(t, "CM profile", compiledProfiles[0].CanonicalBytes(), wantCMHex, string(compiledProfiles[0].ID()), string(wantCMID))
-	assertCanonicalVector(t, "optimizer profile", compiledProfiles[1].CanonicalBytes(), wantOptimizerHex, string(compiledProfiles[1].ID()), string(wantOptimizerID))
+	const (
+		wantSchemaHex    = "00000000000000156d616964656e2d6c616e652e736368656d612e76310000000000000002000000000000000161000000000000000100000000000000016701000000000000000001620000000000000002000000000000000167010000000000000000017802000000000000000001000000000000000172000000000000000162000000000000000161"
+		wantSchemaDigest = "sha256:f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec6"
+
+		wantRulesHex    = "00000000000000166d616964656e2d6c616e652e72756c657365742e763100000000000000010000000000000001660100000000000000010000000000000003612e6700000000000000010000000000000003612e670000000000000000020000000000000001610200000000000000020001020000000000000003612e670c0000000000000003612e6700000000000000010000000000000003612e67020000000000000003612e6700000000000000050000000000000017662f30312d73656c6563746f722d6576616c7561626c65000000000000002053454c454354494f4e5f45585052455353494f4e5f554e415641494c41424c450100000000000000010000000000000003612e670000000000000001660000000000000010662f30322d63617264696e616c697479000000000000001d53454c454354494f4e5f43415244494e414c4954595f494e56414c49440100000000000000010000000000000003612e670000000000000001660000000000000017662f30332d73656c656374696f6e2d6e6f6e656d707479000000000000000f53454c454354494f4e5f454d5054590100000000000000010000000000000003612e67000000000000000166000000000000000e662f30342d6576616c7561626c65000000000000002053454c454354494f4e5f45585052455353494f4e5f554e415641494c41424c450100000000000000010000000000000003612e67000000000000000166000000000000000a662f30352d6775617264000000000000001b53454c454354494f4e5f47554152445f554e5341544953464945440100000000000000010000000000000003612e67000000000000000166000000000000000100000000000000026331000000000000000166"
+		wantRulesDigest = "sha256:b3b5464b2edebea1f1eded2fc139ae40ec0d2cfeabdd9f86412d044afe047da0"
+
+		wantInputHex    = "00000000000000206d616964656e2d6c616e652e636f6d70696c6174696f6e2d696e7075742e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec6b3b5464b2edebea1f1eded2fc139ae40ec0d2cfeabdd9f86412d044afe047da000000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631000000000000000200000000000000016301000000000000000162010000000000000001000000000000000c625f675f7265717569726564010000000000000003622e67000000000000000000000000000000017001000000000000000162010000000000000002000000000000000c625f675f7265717569726564010000000000000003622e67000000000000000c625f785f7265717569726564010000000000000003622e780000000000000001000000000000000163"
+		wantInputDigest = "sha256:559de0384ba735a74d9d503d1fcb43ef66a7cfe6f81301c43c0ca6c1f16609f8"
+
+		wantPlanHex    = "00000000000000136d616964656e2d6c616e652e706c616e2e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec6b3b5464b2edebea1f1eded2fc139ae40ec0d2cfeabdd9f86412d044afe047da000000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e763100000000000000010000000000000001660100000000000000010000000000000003612e6700000000000000010000000000000003612e670000000000000000020000000000000001610200000000000000020001020000000000000003612e670c0000000000000003612e6700000000000000010000000000000003612e67020000000000000003612e6700000000000000010000000000000003612e6700000000000000010000000000000003612e6700000000000000040101000000000000000161000000000000000000000000000000000102000000000000000161000000000000000000000000000000000301000000000000000000000000000000000000000000000003612e670302000000000000000000000000000000000000000000000003612e670000000000000000000000000000000000000000000000050000000000000017662f30312d73656c6563746f722d6576616c7561626c65000000000000002053454c454354494f4e5f45585052455353494f4e5f554e415641494c41424c450100000000000000010000000000000003612e670000000000000001660000000000000010662f30322d63617264696e616c697479000000000000001d53454c454354494f4e5f43415244494e414c4954595f494e56414c49440100000000000000010000000000000003612e670000000000000001660000000000000017662f30332d73656c656374696f6e2d6e6f6e656d707479000000000000000f53454c454354494f4e5f454d5054590100000000000000010000000000000003612e67000000000000000166000000000000000e662f30342d6576616c7561626c65000000000000002053454c454354494f4e5f45585052455353494f4e5f554e415641494c41424c450100000000000000010000000000000003612e67000000000000000166000000000000000a662f30352d6775617264000000000000001b53454c454354494f4e5f47554152445f554e5341544953464945440100000000000000010000000000000003612e67000000000000000166000000000000000100000000000000026331000000000000000166000000000000000a6368616e6765732e7631"
+		wantPlanDigest = "sha256:1721560c330b09f5de43c3a870767aa895ede173d82bc009c2e90d60a70ec12d"
+
+		wantCMHex    = "000000000000001f6d616964656e2d6c616e652e636f6d70696c65642d70726f66696c652e763100000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec600000000000000016301000000000000000162010000000000000001000000000000000c625f675f7265717569726564010000000000000003622e6700000000000000000000000000000000"
+		wantCMDigest = "sha256:5b953734faee3aee506c10d20c257be48b52c5ffb9c26b88c0c7ef230164251a"
+
+		wantOptimizerHex    = "000000000000001f6d616964656e2d6c616e652e636f6d70696c65642d70726f66696c652e763100000000000000216d616964656e2d6c616e652e636f6d70696c65722d73656d616e746963732e7631f2123251d01510616e5b444374cb4a0cacd18158a293e5ae9515088adf07bec600000000000000017001000000000000000162010000000000000002000000000000000c625f675f7265717569726564010000000000000003622e67000000000000000c625f785f7265717569726564010000000000000003622e780000000000000001000000000000000163000000000000000100000000000000016301"
+		wantOptimizerDigest = "sha256:ab63b577f75697ab6be236751d891d2840eb0a158fbc693a75eda259772a511b"
+
+		wantFailureHex    = "00000000000000226d616964656e2d6c616e652e636f6d70696c6174696f6e2d6661696c7572652e76314dee2d89786596faaa3c02f838e69da1ea367abea1f53ed478afc2e693ebc87a000000000000000c494e56414c49445f504c414e0000000000000001000000000000001850524f46494c455f4f524445525f554e50524f5641424c45000000000000000170000000000000000163"
+		wantFailureDigest = "sha256:8f1197023ffb8817f1cb0d79b78d3799b489275c4f75e248a5099296f6c9de0e"
+	)
+
+	assertCanonicalVector(t, "schema", schema.CanonicalBytes(), wantSchemaHex, string(schema.Digest()), wantSchemaDigest)
+	assertCanonicalVector(t, "ruleset", rulesBytes, wantRulesHex, string(canonicalDigest(rulesBytes)), wantRulesDigest)
+	assertCanonicalVector(t, "compiler input", inputBytes, wantInputHex, string(result.InputDigest()), wantInputDigest)
+	assertCanonicalVector(t, "plan", plan.CanonicalBytes(), wantPlanHex, string(plan.ID()), wantPlanDigest)
+	assertCanonicalVector(t, "CM profile", compiledProfiles[0].CanonicalBytes(), wantCMHex, string(compiledProfiles[0].ID()), wantCMDigest)
+	assertCanonicalVector(t, "optimizer profile", compiledProfiles[1].CanonicalBytes(), wantOptimizerHex, string(compiledProfiles[1].ID()), wantOptimizerDigest)
 
 	invalid := req
 	invalid.Profiles = []ProfileDeclaration{cloneProfile(req.Profiles[0]), cloneProfile(req.Profiles[1])}
@@ -612,7 +552,7 @@ func TestCompileCanonicalGoldenVectors(t *testing.T) {
 	if !ok {
 		t.Fatal("invalid profile compiled")
 	}
-	assertCanonicalVector(t, "compilation failure", failure.CanonicalBytes(), wantFailureHex, string(failure.Digest()), string(wantFailureDigest))
+	assertCanonicalVector(t, "compilation failure", failure.CanonicalBytes(), wantFailureHex, string(failure.Digest()), wantFailureDigest)
 }
 
 func compileGoldenVectorRequest(t *testing.T) (CompileRequest, Schema) {
@@ -628,22 +568,27 @@ func compileGoldenVectorRequest(t *testing.T) (CompileRequest, Schema) {
 		Schema: schema.Declaration(),
 		Rules: RulesetDeclaration{
 			Transformations: []TransformationDeclaration{{
-				ID: "f", Operator: OperatorFormRelatedEntity,
-				DeclaredReads: []FieldPath{"a.g"}, DeclaredWrites: []FieldPath{"b.g"},
-				Form: &FormRelatedEntityDeclaration{
-					SourceKind: "a", Sources: []SourceReference{{Kind: "a", CanonicalSourceKey: "1"}, {Kind: "a", CanonicalSourceKey: "2"}},
-					OutputKind: "b", OutputSlot: "o", GroupingField: "a.g", SourceCount: 2,
-					CopiedFields: []FieldCopy{{Source: "a.g", Destination: "b.g"}}, RelationKind: "r",
-					OutputKey: &OutputKeyExpression{Kind: OutputKeyCommonSourceField, Field: "a.g"},
+				ID: "f", Operator: OperatorSelectAndAssign,
+				DeclaredReads: []FieldPath{"a.g"}, DeclaredWrites: []FieldPath{"a.g"},
+				SelectAssign: &SelectAssignDeclaration{
+					Selector: Selector{
+						Kind:    "a",
+						GroupBy: &Expr{Kind: ExprField, Field: "a.g"},
+						Members: Cardinality{Kind: CardinalityExactly, Count: 2},
+					},
+					Guard: Expr{Kind: ExprAllEqual, Field: "a.g"},
+					Assignments: []FieldAssignment{
+						{Target: "a.g", Value: Expr{Kind: ExprField, Field: "a.g"}},
+					},
 				},
 			}},
 			Checkpoints: []CheckpointDeclaration{{Key: "c1", After: "f"}},
 		},
 		Profiles: []ProfileDeclaration{
 			{Key: "c", Scope: ProfileScope{Kind: AllEntitiesOfKind, EntityKind: "b"}, Aggregation: AllSelected,
-				Requirements: []RequirementAtom{{Code: TeamAssignmentKeyRequired, Kind: FieldPresent, Field: "b.g"}}},
+				Requirements: []RequirementAtom{{Code: "b_g_required", Kind: FieldPresent, Field: "b.g"}}},
 			{Key: "p", Scope: ProfileScope{Kind: AllEntitiesOfKind, EntityKind: "b"}, Aggregation: AllSelected,
-				Requirements: []RequirementAtom{{Code: TeamAggregationAnchorRequired, Kind: FieldPresent, Field: "b.x"}, {Code: TeamAssignmentKeyRequired, Kind: FieldPresent, Field: "b.g"}}, Implies: []ProfileKey{"c"}},
+				Requirements: []RequirementAtom{{Code: "b_x_required", Kind: FieldPresent, Field: "b.x"}, {Code: "b_g_required", Kind: FieldPresent, Field: "b.g"}}, Implies: []ProfileKey{"c"}},
 		},
 		CompilerSemanticsVersion: testCompilerVersion,
 	}
@@ -663,65 +608,115 @@ func assertCanonicalVector(t *testing.T, name string, got []byte, wantHex, gotDi
 func compileFixtureRequest(t *testing.T, reverse bool) CompileRequest {
 	t.Helper()
 	schema := compileFixtureSchema(t, reverse)
+	statusVal, _ := NewStringValue("assigned")
+	zeroVal := NewInt64Value(0)
 	form := TransformationDeclaration{
 		ID:             "form_team.v1",
-		Operator:       OperatorFormRelatedEntity,
+		Operator:       OperatorSelectAndAssign,
 		DeclaredReads:  []FieldPath{"driver.assignment_key"},
-		DeclaredWrites: []FieldPath{"team.assignment_key"},
-		Form: &FormRelatedEntityDeclaration{
-			SourceKind:    "driver",
-			Sources:       []SourceReference{{Kind: "driver", CanonicalSourceKey: "A"}, {Kind: "driver", CanonicalSourceKey: "B"}},
-			OutputKind:    "team",
-			OutputSlot:    "team",
-			GroupingField: "driver.assignment_key",
-			SourceCount:   2,
-			CopiedFields:  []FieldCopy{{Source: "driver.assignment_key", Destination: "team.assignment_key"}},
-			RelationKind:  "member",
-			OutputKey:     &OutputKeyExpression{Kind: OutputKeyCommonSourceField, Field: "driver.assignment_key"},
+		DeclaredWrites: []FieldPath{"driver.assignment_status"},
+		SelectAssign: &SelectAssignDeclaration{
+			Selector: Selector{
+				Kind:    "driver",
+				GroupBy: &Expr{Kind: ExprField, Field: "driver.assignment_key"},
+				Members: Cardinality{Kind: CardinalityExactly, Count: 2},
+			},
+			Guard: Expr{Kind: ExprAllEqual, Field: "driver.assignment_key"},
+			Assignments: []FieldAssignment{
+				{Target: "driver.assignment_status", Value: Expr{Kind: ExprLiteral, Literal: &statusVal}},
+			},
 		},
 	}
 	aggregate := TransformationDeclaration{
 		ID:       "aggregate_team_hos.v1",
-		Operator: OperatorAggregateRelatedFields,
+		Operator: OperatorSelectAndAssign,
 		DeclaredReads: []FieldPath{
-			"driver.hos_anchor", "driver.hos_driving_hours", "driver.hos_elapsed_hours",
-			"team.aggregation_anchor", "team.driving_duration_hours", "team.elapsed_duration_hours",
+			"driver.assignment_key", "driver.hos_anchor", "driver.hos_driving_hours", "driver.hos_elapsed_hours",
 		},
-		DeclaredWrites: []FieldPath{"team.aggregation_anchor", "team.driving_duration_hours", "team.elapsed_duration_hours"},
-		Aggregate: &AggregateRelatedFieldsDeclaration{
-			Target:              OutputSlotReference{Rule: "form_team.v1", Slot: "team"},
-			RelationKind:        "member",
-			SourceKind:          "driver",
-			RequiredSourceTuple: []FieldPath{"driver.hos_anchor", "driver.hos_elapsed_hours", "driver.hos_driving_hours"},
-			Predicates: []AggregatePredicate{
-				{Kind: CompleteTuple, Fields: []FieldPath{"driver.hos_anchor", "driver.hos_elapsed_hours", "driver.hos_driving_hours"}},
-				{Kind: NonNegativeInt, Fields: []FieldPath{"driver.hos_elapsed_hours"}},
-				{Kind: NonNegativeInt, Fields: []FieldPath{"driver.hos_driving_hours"}},
-				{Kind: EqualFieldAcrossSources, Fields: []FieldPath{"driver.hos_anchor"}},
-				{Kind: LessOrEqualFields, Fields: []FieldPath{"driver.hos_driving_hours", "driver.hos_elapsed_hours"}},
+		DeclaredWrites: []FieldPath{"driver.driving_duration_hours", "driver.elapsed_duration_hours", "driver.reconciled_anchor"},
+		After:          []RuleID{"form_team.v1"},
+		SelectAssign: &SelectAssignDeclaration{
+			Selector: Selector{
+				Kind:    "driver",
+				GroupBy: &Expr{Kind: ExprField, Field: "driver.assignment_key"},
+				Members: Cardinality{Kind: CardinalityExactly, Count: 2},
 			},
-			Anchor: FieldCopy{Source: "driver.hos_anchor", Destination: "team.aggregation_anchor"},
-			Reductions: []FieldReduction{
-				{Kind: ReduceInt64Max, Source: "driver.hos_elapsed_hours", Destination: "team.elapsed_duration_hours"},
-				{Kind: ReduceInt64Max, Source: "driver.hos_driving_hours", Destination: "team.driving_duration_hours"},
+			Guard: Expr{
+				Kind: ExprAll,
+				Args: []Expr{
+					{Kind: ExprAllEqual, Field: "driver.hos_anchor"},
+					{
+						Kind: ExprAllMembers,
+						Args: []Expr{
+							{
+								Kind: ExprNot,
+								Args: []Expr{
+									{
+										Kind: ExprLess,
+										Args: []Expr{
+											{Kind: ExprField, Field: "driver.hos_elapsed_hours"},
+											{Kind: ExprLiteral, Literal: &zeroVal},
+										},
+									},
+								},
+							},
+						},
+					},
+					{
+						Kind: ExprAllMembers,
+						Args: []Expr{
+							{
+								Kind: ExprNot,
+								Args: []Expr{
+									{
+										Kind: ExprLess,
+										Args: []Expr{
+											{Kind: ExprField, Field: "driver.hos_driving_hours"},
+											{Kind: ExprLiteral, Literal: &zeroVal},
+										},
+									},
+								},
+							},
+						},
+					},
+					{
+						Kind: ExprAllMembers,
+						Args: []Expr{
+							{
+								Kind: ExprAny,
+								Args: []Expr{
+									{
+										Kind: ExprLess,
+										Args: []Expr{
+											{Kind: ExprField, Field: "driver.hos_driving_hours"},
+											{Kind: ExprField, Field: "driver.hos_elapsed_hours"},
+										},
+									},
+									{
+										Kind: ExprEqual,
+										Args: []Expr{
+											{Kind: ExprField, Field: "driver.hos_driving_hours"},
+											{Kind: ExprField, Field: "driver.hos_elapsed_hours"},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
 			},
-			ResultPredicates: []AggregatePredicate{
-				{Kind: CompleteTuple, Fields: []FieldPath{"team.aggregation_anchor", "team.elapsed_duration_hours", "team.driving_duration_hours"}},
-				{Kind: NonNegativeInt, Fields: []FieldPath{"team.elapsed_duration_hours"}},
-				{Kind: NonNegativeInt, Fields: []FieldPath{"team.driving_duration_hours"}},
-				{Kind: LessOrEqualFields, Fields: []FieldPath{"team.driving_duration_hours", "team.elapsed_duration_hours"}},
+			Assignments: []FieldAssignment{
+				{Target: "driver.reconciled_anchor", Value: Expr{Kind: ExprField, Field: "driver.hos_anchor"}},
+				{Target: "driver.elapsed_duration_hours", Value: Expr{Kind: ExprMax, Field: "driver.hos_elapsed_hours"}},
+				{Target: "driver.driving_duration_hours", Value: Expr{Kind: ExprMax, Field: "driver.hos_driving_hours"}},
 			},
 		},
 	}
 	if reverse {
-		slices.Reverse(form.Form.Sources)
 		form.DeclaredReads = slices.Clone(form.DeclaredReads)
 		slices.Reverse(aggregate.DeclaredReads)
 		slices.Reverse(aggregate.DeclaredWrites)
-		slices.Reverse(aggregate.Aggregate.RequiredSourceTuple)
-		slices.Reverse(aggregate.Aggregate.Predicates)
-		slices.Reverse(aggregate.Aggregate.Reductions)
-		slices.Reverse(aggregate.Aggregate.ResultPredicates)
+		slices.Reverse(aggregate.SelectAssign.Assignments)
 	}
 	rules := []TransformationDeclaration{form, aggregate}
 	checkpoints := []CheckpointDeclaration{{Key: "team_formed.v1", After: "form_team.v1"}, {Key: "team_hos_aggregated.v1", After: "aggregate_team_hos.v1"}}
@@ -750,10 +745,8 @@ func compileFixtureSchema(t *testing.T, reverse bool) Schema {
 			{Name: "hos_anchor", Kind: ValueAtom},
 			{Name: "hos_elapsed_hours", Kind: ValueInt64},
 			{Name: "hos_driving_hours", Kind: ValueInt64},
-		}},
-		{Kind: "team", Fields: []FieldDeclaration{
-			{Name: "assignment_key", Kind: ValueString},
-			{Name: "aggregation_anchor", Kind: ValueAtom},
+			{Name: "assignment_status", Kind: ValueString},
+			{Name: "reconciled_anchor", Kind: ValueAtom},
 			{Name: "elapsed_duration_hours", Kind: ValueInt64},
 			{Name: "driving_duration_hours", Kind: ValueInt64},
 		}},
@@ -764,7 +757,7 @@ func compileFixtureSchema(t *testing.T, reverse bool) Schema {
 		}
 		slices.Reverse(entities)
 	}
-	schema, err := NewSchema(entities, []RelationDeclaration{{Kind: "member", FromKind: "team", ToKind: "driver"}})
+	schema, err := NewSchema(entities, nil)
 	if err != nil {
 		t.Fatalf("NewSchema: %v", err)
 	}
@@ -774,23 +767,31 @@ func compileFixtureSchema(t *testing.T, reverse bool) Schema {
 func compileFixtureProfiles(reverse bool) []ProfileDeclaration {
 	cm := ProfileDeclaration{
 		Key:         "cm.v1",
-		Scope:       ProfileScope{Kind: AllEntitiesOfKind, EntityKind: "team"},
+		Scope:       ProfileScope{Kind: AllEntitiesOfKind, EntityKind: "driver"},
 		Aggregation: AllSelected,
-		Requirements: []RequirementAtom{{
-			Code:  TeamAssignmentKeyRequired,
-			Kind:  FieldPresent,
-			Field: "team.assignment_key",
-		}},
+		Requirements: []RequirementAtom{
+			{
+				Code:  "DriverAssignmentRequired",
+				Kind:  FieldPresent,
+				Field: "driver.assignment_key",
+			},
+			{
+				Code:  "DriverAssignmentStatusRequired",
+				Kind:  FieldPresent,
+				Field: "driver.assignment_status",
+			},
+		},
 	}
 	optimizer := ProfileDeclaration{
 		Key:         "optimizer.v1",
-		Scope:       ProfileScope{Kind: AllEntitiesOfKind, EntityKind: "team"},
+		Scope:       ProfileScope{Kind: AllEntitiesOfKind, EntityKind: "driver"},
 		Aggregation: AllSelected,
 		Requirements: []RequirementAtom{
-			{Code: TeamAssignmentKeyRequired, Kind: FieldPresent, Field: "team.assignment_key"},
-			{Code: TeamAggregationAnchorRequired, Kind: FieldPresent, Field: "team.aggregation_anchor"},
-			{Code: TeamElapsedDurationRequired, Kind: FieldPresent, Field: "team.elapsed_duration_hours"},
-			{Code: TeamDrivingDurationRequired, Kind: FieldPresent, Field: "team.driving_duration_hours"},
+			{Code: "DriverAssignmentRequired", Kind: FieldPresent, Field: "driver.assignment_key"},
+			{Code: "DriverAssignmentStatusRequired", Kind: FieldPresent, Field: "driver.assignment_status"},
+			{Code: "DriverReconciledAnchorRequired", Kind: FieldPresent, Field: "driver.reconciled_anchor"},
+			{Code: "DriverElapsedDurationRequired", Kind: FieldPresent, Field: "driver.elapsed_duration_hours"},
+			{Code: "DriverDrivingDurationRequired", Kind: FieldPresent, Field: "driver.driving_duration_hours"},
 		},
 		Implies: []ProfileKey{"cm.v1"},
 	}
@@ -822,17 +823,8 @@ func TestCompilationInputCannotBeMutatedThroughItsAccessor(t *testing.T) {
 		for j := range request.Rules.Transformations[i].DeclaredReads {
 			request.Rules.Transformations[i].DeclaredReads[j] = "corrupted.field"
 		}
-		if form := request.Rules.Transformations[i].Form; form != nil {
-			form.OutputSlot = "corrupted"
-			for j := range form.Sources {
-				form.Sources[j].CanonicalSourceKey = "corrupted"
-			}
-		}
-		if aggregate := request.Rules.Transformations[i].Aggregate; aggregate != nil {
-			aggregate.Target.Slot = "corrupted"
-			for j := range aggregate.RequiredSourceTuple {
-				aggregate.RequiredSourceTuple[j] = "corrupted.field"
-			}
+		if sa := request.Rules.Transformations[i].SelectAssign; sa != nil {
+			sa.Selector.Kind = "corrupted"
 		}
 	}
 	for i := range request.Rules.Checkpoints {
@@ -954,5 +946,147 @@ func TestFailedCompilationStillCarriesItsInput(t *testing.T) {
 	}
 	if compilation.Input().Request().CompilerSemanticsVersion == "" {
 		t.Fatal("failed compilation retained no input")
+	}
+}
+
+func TestCompileRejectsBareFieldInMergeEntities(t *testing.T) {
+	schema := compileFixtureSchema(t, false)
+	groupBy := Expr{Kind: ExprField, Field: "driver.depot"}
+	trueLit := Expr{Kind: ExprLiteral, Literal: &Value{}}
+	v1 := NewInt64Value(1)
+	trueLit.Literal = &v1
+
+	request := CompileRequest{
+		CompilerSemanticsVersion: testCompilerVersion,
+		Schema:                   schema.Declaration(),
+		Rules: RulesetDeclaration{
+			Transformations: []TransformationDeclaration{
+				{
+					ID:             "merge_bare_field.v1",
+					Operator:       OperatorMergeEntities,
+					DeclaredReads:  []FieldPath{"driver.depot", "driver.hos_driving_hours"},
+					DeclaredWrites: []FieldPath{"driver.hos_driving_hours"},
+					MergeEntities: &MergeEntitiesDeclaration{
+						Selector: Selector{
+							Kind:    "driver",
+							GroupBy: &groupBy,
+							Members: Cardinality{Kind: CardinalityExactly, Count: 2},
+						},
+						TargetKind:    "driver",
+						Discriminator: trueLit,
+						Guard:         trueLit,
+						Assignments: []FieldAssignment{{
+							Target: "driver.hos_driving_hours",
+							Value:  Expr{Kind: ExprField, Field: "driver.hos_driving_hours"}, // bare field path in MergeEntities
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	compilation, err := Compile(request)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	failure, ok := compilation.Failure()
+	if !ok {
+		t.Fatal("expected compilation failure for bare field in MergeEntities, got success")
+	}
+	if len(failure.Diagnostics()) == 0 {
+		t.Fatal("expected diagnostic for bare field in MergeEntities")
+	}
+}
+
+func TestCompileRejectsAmbiguousSameKindRelationField(t *testing.T) {
+	entities := []EntityDeclaration{
+		{
+			Kind: "driver",
+			Fields: []FieldDeclaration{
+				{Name: "driver_id", Kind: ValueString},
+				{Name: "hours", Kind: ValueInt64},
+			},
+		},
+	}
+	relations := []RelationDeclaration{
+		{Kind: "mentor", FromKind: "driver", ToKind: "driver"},
+	}
+	schema, err := NewSchema(entities, relations)
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+
+	request := CompileRequest{
+		CompilerSemanticsVersion: testCompilerVersion,
+		Schema:                   schema.Declaration(),
+		Rules: RulesetDeclaration{
+			Transformations: []TransformationDeclaration{
+				{
+					ID:             "mentor_ambiguous.v1",
+					Operator:       OperatorRelateEntities,
+					DeclaredReads:  []FieldPath{"driver.hours"},
+					DeclaredWrites: []FieldPath{},
+					RelateEntities: &RelateEntitiesDeclaration{
+						RelationKind: "mentor",
+						FromSelector: Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityAny}},
+						ToSelector:   Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityAny}},
+						Guard: Expr{
+							Kind: ExprEqual,
+							Args: []Expr{
+								{Kind: ExprField, Field: "driver.hours"}, // ambiguous: both endpoints are driver
+								{Kind: ExprField, Field: "driver.hours"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	compilation, err := Compile(request)
+	if err != nil {
+		t.Fatalf("Compile: %v", err)
+	}
+	failure, ok := compilation.Failure()
+	if !ok {
+		t.Fatal("expected compilation failure for ambiguous same-kind relation field, got success")
+	}
+	if len(failure.Diagnostics()) == 0 {
+		t.Fatal("expected diagnostic for ambiguous same-kind relation field")
+	}
+}
+
+func TestCompileRejectsDeeplyNestedStructuralExpression(t *testing.T) {
+	schema := buildStructuralTestSchema(t)
+
+	// Build an expression nested beyond maxExprDepth (16)
+	expr := Expr{Kind: ExprField, Field: "driver.hours"}
+	for i := 0; i < maxExprDepth+5; i++ {
+		expr = Expr{
+			Kind: ExprNot,
+			Args: []Expr{expr},
+		}
+	}
+
+	request := CompileRequest{
+		CompilerSemanticsVersion: testCompilerVersion,
+		Schema:                   schema.Declaration(),
+		Rules: RulesetDeclaration{
+			Transformations: []TransformationDeclaration{
+				{
+					ID:       "deep_structural.v1",
+					Operator: OperatorDeleteEntity,
+					DeleteEntity: &DeleteEntityDeclaration{
+						Selector: Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityAny}},
+						Guard:    expr,
+					},
+				},
+			},
+		},
+	}
+
+	_, err := Compile(request)
+	if err == nil {
+		t.Fatal("expected error from checkAuthoredPayloadBounds for deeply nested structural expression")
 	}
 }

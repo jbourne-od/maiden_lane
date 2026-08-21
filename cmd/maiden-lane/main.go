@@ -102,12 +102,49 @@ func main() {
 	os.Exit(processMain(os.Args[1:], os.Stdout, os.Stderr, productionDeps()))
 }
 
-// processMain returns an exit code instead of exiting directly. Its deferred
-// signal cleanup therefore runs before main calls os.Exit, whose abrupt process
-// termination does not execute Go defers.
 func processMain(args []string, stdout, stderr io.Writer, deps processDeps) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if len(args) > 0 {
+		switch args[0] {
+		case "compile":
+			if err := runCompile(ctx, args[1:], stdout, stderr); err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+		case "run":
+			if err := runExecute(ctx, args[1:], stdout, stderr); err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+		case "transpile":
+			if err := runTranspile(ctx, args[1:], stdout, stderr); err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+		case "diff":
+			if err := runDiff(ctx, args[1:], stdout, stderr); err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+		case "gate":
+			if err := runGate(ctx, args[1:], stdout, stderr); err != nil {
+				fmt.Fprintf(stderr, "Error: %v\n", err)
+				return 1
+			}
+			return 0
+		case "version":
+			fmt.Fprintf(stdout, "maiden-lane version %s\n", version)
+			return 0
+		case "serve":
+			args = args[1:]
+		}
+	}
 
 	if err := execute(ctx, args, stdout, stderr, deps); err != nil {
 		observability.NewLogger(stdout, slog.LevelInfo).Error("command failed", "code", "command_failed")

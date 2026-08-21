@@ -27,10 +27,16 @@ var wantOperations = []string{
 	"GetPlan",
 	"CreateExecution",
 	"GetExecution",
+	"ReattemptExecution",
+	"GetExecutionCheckpoint",
 	"CreatePublication",
 	"GetPublication",
 	"CreateComparison",
 	"GetComparison",
+	"PutPolicy",
+	"GetPolicy",
+	"CreateCorpus",
+	"GetCorpus",
 }
 
 // Production break caught: adding an operation to the contract without
@@ -57,17 +63,11 @@ func TestGeneratedServerInterfaceMatchesTheContract(t *testing.T) {
 // silently remove the scoping boundary from that route while the handler kept
 // compiling.
 func TestEveryVersionedOperationRequiresTheTenantHeader(t *testing.T) {
-	tenanted := map[string]bool{
-		"CreatePlanParams":        true,
-		"GetPlanParams":           true,
-		"CreateExecutionParams":   true,
-		"GetExecutionParams":      true,
-		"CreatePublicationParams": true,
-		"GetPublicationParams":    true,
-		"CreateComparisonParams":  true,
-		"GetComparisonParams":     true,
-	}
-	for name := range tenanted {
+	for _, op := range wantOperations {
+		if op == "GetHealth" || op == "GetReadiness" {
+			continue
+		}
+		name := op + "Params"
 		params, ok := paramsTypeByName(name)
 		if !ok {
 			t.Errorf("generated code has no %s type; the operation lost its parameters", name)
@@ -199,6 +199,10 @@ func paramsTypeByName(name string) (reflect.Type, bool) {
 		return reflect.TypeFor[openapiv1.CreateExecutionParams](), true
 	case "GetExecutionParams":
 		return reflect.TypeFor[openapiv1.GetExecutionParams](), true
+	case "ReattemptExecutionParams":
+		return reflect.TypeFor[openapiv1.ReattemptExecutionParams](), true
+	case "GetExecutionCheckpointParams":
+		return reflect.TypeFor[openapiv1.GetExecutionCheckpointParams](), true
 	case "CreatePublicationParams":
 		return reflect.TypeFor[openapiv1.CreatePublicationParams](), true
 	case "GetPublicationParams":
@@ -207,6 +211,14 @@ func paramsTypeByName(name string) (reflect.Type, bool) {
 		return reflect.TypeFor[openapiv1.CreateComparisonParams](), true
 	case "GetComparisonParams":
 		return reflect.TypeFor[openapiv1.GetComparisonParams](), true
+	case "PutPolicyParams":
+		return reflect.TypeFor[openapiv1.PutPolicyParams](), true
+	case "GetPolicyParams":
+		return reflect.TypeFor[openapiv1.GetPolicyParams](), true
+	case "CreateCorpusParams":
+		return reflect.TypeFor[openapiv1.CreateCorpusParams](), true
+	case "GetCorpusParams":
+		return reflect.TypeFor[openapiv1.GetCorpusParams](), true
 	default:
 		return nil, false
 	}

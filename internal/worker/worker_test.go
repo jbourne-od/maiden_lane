@@ -85,7 +85,7 @@ func TestWorkerCompletesARejectedExecution(t *testing.T) {
 	if record.Result.Failure == nil {
 		t.Fatal("a rejected execution records no typed failure")
 	}
-	if record.Result.Failure.Code != "HOS_ANCHOR_MISMATCH" {
+	if record.Result.Failure.Code != "SELECTION_GUARD_UNSATISFIED" {
 		t.Fatalf("failure code = %q", record.Result.Failure.Code)
 	}
 	// The verified prefix survives the refusal.

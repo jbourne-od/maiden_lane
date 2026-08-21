@@ -16,30 +16,6 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
-// Defines values for AggregatePredicateKind.
-const (
-	AggregatePredicateKindCompleteTuple           AggregatePredicateKind = "complete_tuple"
-	AggregatePredicateKindEqualFieldAcrossSources AggregatePredicateKind = "equal_field_across_sources"
-	AggregatePredicateKindLessOrEqualFields       AggregatePredicateKind = "less_or_equal_fields"
-	AggregatePredicateKindNonNegativeInt          AggregatePredicateKind = "non_negative_int"
-)
-
-// Valid indicates whether the value is a known member of the AggregatePredicateKind enum.
-func (e AggregatePredicateKind) Valid() bool {
-	switch e {
-	case AggregatePredicateKindCompleteTuple:
-		return true
-	case AggregatePredicateKindEqualFieldAcrossSources:
-		return true
-	case AggregatePredicateKindLessOrEqualFields:
-		return true
-	case AggregatePredicateKindNonNegativeInt:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for CardinalityKind.
 const (
 	CardinalityKindAny     CardinalityKind = "any"
@@ -153,27 +129,43 @@ func (e ExecutionStatus) Valid() bool {
 
 // Defines values for ExprKind.
 const (
-	ExprKindAdd        ExprKind = "add"
-	ExprKindAll        ExprKind = "all"
-	ExprKindAllEqual   ExprKind = "all_equal"
-	ExprKindAllMembers ExprKind = "all_members"
-	ExprKindAny        ExprKind = "any"
-	ExprKindAnyMembers ExprKind = "any_members"
-	ExprKindCount      ExprKind = "count"
-	ExprKindEqual      ExprKind = "equal"
-	ExprKindExists     ExprKind = "exists"
-	ExprKindField      ExprKind = "field"
-	ExprKindLess       ExprKind = "less"
-	ExprKindLiteral    ExprKind = "literal"
-	ExprKindMax        ExprKind = "max"
-	ExprKindMin        ExprKind = "min"
-	ExprKindNot        ExprKind = "not"
-	ExprKindSum        ExprKind = "sum"
+	ExprKindAbs           ExprKind = "abs"
+	ExprKindAdd           ExprKind = "add"
+	ExprKindAll           ExprKind = "all"
+	ExprKindAllEqual      ExprKind = "all_equal"
+	ExprKindAllMembers    ExprKind = "all_members"
+	ExprKindAny           ExprKind = "any"
+	ExprKindAnyMembers    ExprKind = "any_members"
+	ExprKindClamp         ExprKind = "clamp"
+	ExprKindCoalesce      ExprKind = "coalesce"
+	ExprKindConcat        ExprKind = "concat"
+	ExprKindCount         ExprKind = "count"
+	ExprKindDateExtract   ExprKind = "date_extract"
+	ExprKindDivide        ExprKind = "divide"
+	ExprKindEqual         ExprKind = "equal"
+	ExprKindExists        ExprKind = "exists"
+	ExprKindField         ExprKind = "field"
+	ExprKindIf            ExprKind = "if"
+	ExprKindLess          ExprKind = "less"
+	ExprKindLiteral       ExprKind = "literal"
+	ExprKindMax           ExprKind = "max"
+	ExprKindMin           ExprKind = "min"
+	ExprKindModulo        ExprKind = "modulo"
+	ExprKindMultiply      ExprKind = "multiply"
+	ExprKindNot           ExprKind = "not"
+	ExprKindSubstring     ExprKind = "substring"
+	ExprKindSubtract      ExprKind = "subtract"
+	ExprKindSum           ExprKind = "sum"
+	ExprKindTimestampAdd  ExprKind = "timestamp_add"
+	ExprKindTimestampDiff ExprKind = "timestamp_diff"
+	ExprKindTrim          ExprKind = "trim"
 )
 
 // Valid indicates whether the value is a known member of the ExprKind enum.
 func (e ExprKind) Valid() bool {
 	switch e {
+	case ExprKindAbs:
+		return true
 	case ExprKindAdd:
 		return true
 	case ExprKindAll:
@@ -186,13 +178,25 @@ func (e ExprKind) Valid() bool {
 		return true
 	case ExprKindAnyMembers:
 		return true
+	case ExprKindClamp:
+		return true
+	case ExprKindCoalesce:
+		return true
+	case ExprKindConcat:
+		return true
 	case ExprKindCount:
+		return true
+	case ExprKindDateExtract:
+		return true
+	case ExprKindDivide:
 		return true
 	case ExprKindEqual:
 		return true
 	case ExprKindExists:
 		return true
 	case ExprKindField:
+		return true
+	case ExprKindIf:
 		return true
 	case ExprKindLess:
 		return true
@@ -202,24 +206,23 @@ func (e ExprKind) Valid() bool {
 		return true
 	case ExprKindMin:
 		return true
+	case ExprKindModulo:
+		return true
+	case ExprKindMultiply:
+		return true
 	case ExprKindNot:
+		return true
+	case ExprKindSubstring:
+		return true
+	case ExprKindSubtract:
 		return true
 	case ExprKindSum:
 		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for FieldReductionKind.
-const (
-	FieldReductionKindReduceInt64Max FieldReductionKind = "reduce_int64_max"
-)
-
-// Valid indicates whether the value is a known member of the FieldReductionKind enum.
-func (e FieldReductionKind) Valid() bool {
-	switch e {
-	case FieldReductionKindReduceInt64Max:
+	case ExprKindTimestampAdd:
+		return true
+	case ExprKindTimestampDiff:
+		return true
+	case ExprKindTrim:
 		return true
 	default:
 		return false
@@ -301,21 +304,6 @@ func (e GateVerdict) Valid() bool {
 	case GateVerdictNotEvaluated:
 		return true
 	case GateVerdictPass:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for OutputKeyExpressionKind.
-const (
-	OutputKeyExpressionKindCommonSourceField OutputKeyExpressionKind = "common_source_field"
-)
-
-// Valid indicates whether the value is a known member of the OutputKeyExpressionKind enum.
-func (e OutputKeyExpressionKind) Valid() bool {
-	switch e {
-	case OutputKeyExpressionKindCommonSourceField:
 		return true
 	default:
 		return false
@@ -447,19 +435,31 @@ func (e SemanticFailureKind) Valid() bool {
 
 // Defines values for TransformationDeclarationOperator.
 const (
-	TransformationDeclarationOperatorAggregateRelatedFields TransformationDeclarationOperator = "aggregate_related_fields"
-	TransformationDeclarationOperatorFormRelatedEntity      TransformationDeclarationOperator = "form_related_entity"
-	TransformationDeclarationOperatorSelectAndAssign        TransformationDeclarationOperator = "select_and_assign"
+	TransformationDeclarationOperatorDeleteEntity     TransformationDeclarationOperator = "delete_entity"
+	TransformationDeclarationOperatorInsertEntity     TransformationDeclarationOperator = "insert_entity"
+	TransformationDeclarationOperatorMergeEntities    TransformationDeclarationOperator = "merge_entities"
+	TransformationDeclarationOperatorRelateEntities   TransformationDeclarationOperator = "relate_entities"
+	TransformationDeclarationOperatorSelectAndAssign  TransformationDeclarationOperator = "select_and_assign"
+	TransformationDeclarationOperatorSplitEntity      TransformationDeclarationOperator = "split_entity"
+	TransformationDeclarationOperatorUnrelateEntities TransformationDeclarationOperator = "unrelate_entities"
 )
 
 // Valid indicates whether the value is a known member of the TransformationDeclarationOperator enum.
 func (e TransformationDeclarationOperator) Valid() bool {
 	switch e {
-	case TransformationDeclarationOperatorAggregateRelatedFields:
+	case TransformationDeclarationOperatorDeleteEntity:
 		return true
-	case TransformationDeclarationOperatorFormRelatedEntity:
+	case TransformationDeclarationOperatorInsertEntity:
+		return true
+	case TransformationDeclarationOperatorMergeEntities:
+		return true
+	case TransformationDeclarationOperatorRelateEntities:
 		return true
 	case TransformationDeclarationOperatorSelectAndAssign:
+		return true
+	case TransformationDeclarationOperatorSplitEntity:
+		return true
+	case TransformationDeclarationOperatorUnrelateEntities:
 		return true
 	default:
 		return false
@@ -468,9 +468,13 @@ func (e TransformationDeclarationOperator) Valid() bool {
 
 // Defines values for ValueKind.
 const (
-	ValueKindAtom   ValueKind = "atom"
-	ValueKindInt64  ValueKind = "int64"
-	ValueKindString ValueKind = "string"
+	ValueKindAtom      ValueKind = "atom"
+	ValueKindDate      ValueKind = "date"
+	ValueKindDecimal   ValueKind = "decimal"
+	ValueKindDuration  ValueKind = "duration"
+	ValueKindInt64     ValueKind = "int64"
+	ValueKindString    ValueKind = "string"
+	ValueKindTimestamp ValueKind = "timestamp"
 )
 
 // Valid indicates whether the value is a known member of the ValueKind enum.
@@ -478,9 +482,17 @@ func (e ValueKind) Valid() bool {
 	switch e {
 	case ValueKindAtom:
 		return true
+	case ValueKindDate:
+		return true
+	case ValueKindDecimal:
+		return true
+	case ValueKindDuration:
+		return true
 	case ValueKindInt64:
 		return true
 	case ValueKindString:
+		return true
+	case ValueKindTimestamp:
 		return true
 	default:
 		return false
@@ -503,27 +515,6 @@ func (e WorldReferenceKind) Valid() bool {
 	default:
 		return false
 	}
-}
-
-// AggregatePredicate defines model for AggregatePredicate.
-type AggregatePredicate struct {
-	Fields []string               `json:"fields"`
-	Kind   AggregatePredicateKind `json:"kind"`
-}
-
-// AggregatePredicateKind defines model for AggregatePredicate.Kind.
-type AggregatePredicateKind string
-
-// AggregateRelatedFields The closed related-field aggregation payload.
-type AggregateRelatedFields struct {
-	Anchor              FieldCopy             `json:"anchor"`
-	Predicates          *[]AggregatePredicate `json:"predicates,omitempty"`
-	Reductions          *[]FieldReduction     `json:"reductions,omitempty"`
-	RelationKind        string                `json:"relationKind"`
-	RequiredSourceTuple []string              `json:"requiredSourceTuple"`
-	ResultPredicates    *[]AggregatePredicate `json:"resultPredicates,omitempty"`
-	SourceKind          string                `json:"sourceKind"`
-	Target              OutputSlotReference   `json:"target"`
 }
 
 // Assessment defines model for Assessment.
@@ -656,6 +647,22 @@ type CompilerDiagnostic struct {
 // CompilerDiagnosticCode A closed compilation diagnostic code.
 type CompilerDiagnosticCode string
 
+// Corpus The canonical projection of a stored replay corpus.
+type Corpus struct {
+	CaseCount int      `json:"caseCount"`
+	Cases     []Digest `json:"cases"`
+
+	// CorpusID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CorpusID Digest `json:"corpusID"`
+}
+
+// CorpusCaseInput One initial state case within a replay corpus.
+type CorpusCaseInput struct {
+	// Schema Declaration order is not semantic; the compiler canonicalizes it.
+	Schema SchemaDeclaration `json:"schema"`
+	State  StateInput        `json:"state"`
+}
+
 // CreateComparisonRequest A request to define and store a comparison contract.
 type CreateComparisonRequest struct {
 	// BaselineCheckpoint The checkpoint key in the baseline plan to compare.
@@ -681,6 +688,12 @@ type CreateComparisonRequest struct {
 
 	// WorldID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
 	WorldID Digest `json:"worldID"`
+}
+
+// CreateCorpusRequest Request to register a replay corpus.
+type CreateCorpusRequest struct {
+	// Cases The set of initial state cases comprising the corpus.
+	Cases []CorpusCaseInput `json:"cases"`
 }
 
 // CreateExecutionRequest defines model for CreateExecutionRequest.
@@ -726,6 +739,24 @@ type CreatePublicationRequest struct {
 
 	// Target The publication target.
 	Target string `json:"target"`
+}
+
+// DeleteEntityDeclaration Deletes selected entities that satisfy the guard.
+type DeleteEntityDeclaration struct {
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard Expr `json:"guard"`
+
+	// Selector What a rule applies to.
+	Selector Selector `json:"selector"`
 }
 
 // Digest A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
@@ -787,6 +818,27 @@ type ExecutionAccepted struct {
 
 	// SemanticRunID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
 	SemanticRunID Digest `json:"semanticRunID"`
+}
+
+// ExecutionCheckpointDetail Complete artifact details and assessments for one sealed checkpoint of a finished execution.
+type ExecutionCheckpointDetail struct {
+	Assessments []Assessment `json:"assessments"`
+
+	// CheckpointArtifactID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CheckpointArtifactID Digest `json:"checkpointArtifactID"`
+
+	// CheckpointID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	CheckpointID  Digest `json:"checkpointID"`
+	CheckpointKey string `json:"checkpointKey"`
+
+	// Digest A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	Digest Digest `json:"digest"`
+
+	// InvariantResultDigest A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	InvariantResultDigest Digest `json:"invariantResultDigest"`
+
+	// StateDigest A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	StateDigest Digest `json:"stateDigest"`
 }
 
 // ExecutionResult The complete answer of a finished execution. Present only once the
@@ -878,15 +930,6 @@ type FieldAssignment struct {
 	Value Expr `json:"value"`
 }
 
-// FieldCopy defines model for FieldCopy.
-type FieldCopy struct {
-	// Destination A field path of the form kind.field.
-	Destination string `json:"destination"`
-
-	// Source A field path of the form kind.field.
-	Source string `json:"source"`
-}
-
 // FieldDeclaration defines model for FieldDeclaration.
 type FieldDeclaration struct {
 	// Kind The closed typed-value vocabulary.
@@ -898,29 +941,6 @@ type FieldDeclaration struct {
 	// value type; rule-level presence obligations are enforced by the
 	// transformations that read the field, not here.
 	RequiredAtConstruction *bool `json:"requiredAtConstruction,omitempty"`
-}
-
-// FieldReduction defines model for FieldReduction.
-type FieldReduction struct {
-	Destination string             `json:"destination"`
-	Kind        FieldReductionKind `json:"kind"`
-	Source      string             `json:"source"`
-}
-
-// FieldReductionKind defines model for FieldReduction.Kind.
-type FieldReductionKind string
-
-// FormRelatedEntity The closed related-entity transformation payload.
-type FormRelatedEntity struct {
-	CopiedFields  *[]FieldCopy         `json:"copiedFields,omitempty"`
-	GroupingField string               `json:"groupingField"`
-	OutputKey     *OutputKeyExpression `json:"outputKey,omitempty"`
-	OutputKind    string               `json:"outputKind"`
-	OutputSlot    string               `json:"outputSlot"`
-	RelationKind  string               `json:"relationKind"`
-	SourceCount   int64                `json:"sourceCount"`
-	SourceKind    string               `json:"sourceKind"`
-	Sources       []SourceReference    `json:"sources"`
 }
 
 // GateClauseResult One clause of HLD §14.1's nine-clause gate.
@@ -962,19 +982,89 @@ type InputLineage struct {
 	RootKey   string `json:"rootKey"`
 }
 
-// OutputKeyExpression defines model for OutputKeyExpression.
-type OutputKeyExpression struct {
-	Field string                  `json:"field"`
-	Kind  OutputKeyExpressionKind `json:"kind"`
+// InsertEntityDeclaration Inserts a new entity synthesised from a selected population or group.
+type InsertEntityDeclaration struct {
+	Assignments []FieldAssignment `json:"assignments"`
+
+	// Discriminator One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Discriminator Expr `json:"discriminator"`
+
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard Expr `json:"guard"`
+
+	// Selector What a rule applies to.
+	Selector   Selector `json:"selector"`
+	TargetKind string   `json:"targetKind"`
 }
 
-// OutputKeyExpressionKind defines model for OutputKeyExpression.Kind.
-type OutputKeyExpressionKind string
+// MergeEntitiesDeclaration Merges a group of source entities into a single target entity.
+type MergeEntitiesDeclaration struct {
+	Assignments []FieldAssignment `json:"assignments"`
 
-// OutputSlotReference defines model for OutputSlotReference.
-type OutputSlotReference struct {
-	Rule string `json:"rule"`
-	Slot string `json:"slot"`
+	// Discriminator One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Discriminator Expr `json:"discriminator"`
+
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard             Expr `json:"guard"`
+	ReanchorRelations bool `json:"reanchorRelations"`
+	RetainSources     bool `json:"retainSources"`
+
+	// Selector What a rule applies to.
+	Selector   Selector `json:"selector"`
+	TargetKind string   `json:"targetKind"`
+}
+
+// PartitionDeclaration One partition specification within a split entity operator.
+type PartitionDeclaration struct {
+	Assignments []FieldAssignment `json:"assignments"`
+
+	// Discriminator One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Discriminator Expr `json:"discriminator"`
 }
 
 // Plan defines model for Plan.
@@ -1135,8 +1225,39 @@ type PublicationState struct {
 // `published`, and any lower version is `superseded`.
 type PublicationStatus string
 
+// PutPolicyRequest Request to create or advance a target promotion policy.
+type PutPolicyRequest struct {
+	// RequiredProfileID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	RequiredProfileID Digest `json:"requiredProfileID"`
+
+	// Version The expected target policy version to record (must be current version + 1, or 1 for new targets).
+	Version int `json:"version"`
+}
+
 // ReadinessVerdict A readiness answer. `needs_input` is a successful assessment, not a failure.
 type ReadinessVerdict string
+
+// RelateEntitiesDeclaration Creates a relation between pairs of entities matching the endpoints and guard.
+type RelateEntitiesDeclaration struct {
+	// FromSelector What a rule applies to.
+	FromSelector Selector `json:"fromSelector"`
+
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard        Expr   `json:"guard"`
+	RelationKind string `json:"relationKind"`
+
+	// ToSelector What a rule applies to.
+	ToSelector Selector `json:"toSelector"`
+}
 
 // RelationDeclaration defines model for RelationDeclaration.
 type RelationDeclaration struct {
@@ -1225,10 +1346,25 @@ type SemanticFailure struct {
 // SemanticFailureKind defines model for SemanticFailure.Kind.
 type SemanticFailureKind string
 
-// SourceReference defines model for SourceReference.
-type SourceReference struct {
-	CanonicalSourceKey string `json:"canonicalSourceKey"`
-	Kind               string `json:"kind"`
+// SplitEntityDeclaration Splits each selected entity into multiple partitioned target entities.
+type SplitEntityDeclaration struct {
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard        Expr                   `json:"guard"`
+	Partitions   []PartitionDeclaration `json:"partitions"`
+	RetainSource bool                   `json:"retainSource"`
+
+	// Selector What a rule applies to.
+	Selector   Selector `json:"selector"`
+	TargetKind string   `json:"targetKind"`
 }
 
 // StateInput defines model for StateInput.
@@ -1240,32 +1376,85 @@ type StateInput struct {
 	Relations *[]RelationInput `json:"relations,omitempty"`
 }
 
+// TargetPolicy An immutable, versioned statement of what a destination target requires before promotion.
+type TargetPolicy struct {
+	CustomerID string `json:"customerID"`
+
+	// RequiredProfileID A content identity produced by the semantic kernel, rendered as sha256:<64 lowercase hex>. Clients must treat it as opaque and must never recompute it.
+	RequiredProfileID Digest `json:"requiredProfileID"`
+	Target            string `json:"target"`
+	Version           int    `json:"version"`
+}
+
 // TransformationDeclaration A closed tagged union. Exactly one payload must be present and must agree with `operator`.
 type TransformationDeclaration struct {
-	After *[]string `json:"after,omitempty"`
+	After          *[]string `json:"after,omitempty"`
+	DeclaredReads  *[]string `json:"declaredReads,omitempty"`
+	DeclaredWrites *[]string `json:"declaredWrites,omitempty"`
 
-	// Aggregate The closed related-field aggregation payload.
-	Aggregate      *AggregateRelatedFields `json:"aggregate,omitempty"`
-	DeclaredReads  *[]string               `json:"declaredReads,omitempty"`
-	DeclaredWrites *[]string               `json:"declaredWrites,omitempty"`
+	// DeleteEntity Deletes selected entities that satisfy the guard.
+	DeleteEntity *DeleteEntityDeclaration `json:"deleteEntity,omitempty"`
+	Id           string                   `json:"id"`
 
-	// Form The closed related-entity transformation payload.
-	Form     *FormRelatedEntity                `json:"form,omitempty"`
-	Id       string                            `json:"id"`
-	Operator TransformationDeclarationOperator `json:"operator"`
+	// InsertEntity Inserts a new entity synthesised from a selected population or group.
+	InsertEntity *InsertEntityDeclaration `json:"insertEntity,omitempty"`
+
+	// MergeEntities Merges a group of source entities into a single target entity.
+	MergeEntities *MergeEntitiesDeclaration         `json:"mergeEntities,omitempty"`
+	Operator      TransformationDeclarationOperator `json:"operator"`
+
+	// RelateEntities Creates a relation between pairs of entities matching the endpoints and guard.
+	RelateEntities *RelateEntitiesDeclaration `json:"relateEntities,omitempty"`
 
 	// SelectAssign The selector-scoped transformation payload: a rule applied to a
 	// population rather than to entities named one by one.
 	SelectAssign *SelectAndAssign `json:"selectAssign,omitempty"`
+
+	// SplitEntity Splits each selected entity into multiple partitioned target entities.
+	SplitEntity *SplitEntityDeclaration `json:"splitEntity,omitempty"`
+
+	// UnrelateEntities Removes an existing relation between pairs of entities matching the endpoints and guard.
+	UnrelateEntities *UnrelateEntitiesDeclaration `json:"unrelateEntities,omitempty"`
 }
 
 // TransformationDeclarationOperator defines model for TransformationDeclaration.Operator.
 type TransformationDeclarationOperator string
 
+// UnrelateEntitiesDeclaration Removes an existing relation between pairs of entities matching the endpoints and guard.
+type UnrelateEntitiesDeclaration struct {
+	// FromSelector What a rule applies to.
+	FromSelector Selector `json:"fromSelector"`
+
+	// Guard One expression node. Recursive through `args`.
+	//
+	// THE SHAPE IS NOT VALIDATED HERE. Which operand a kind carries -- a
+	// literal, a field path, a fixed or variadic argument list -- is a
+	// semantic rule the compiler owns, and stating it a second time in this
+	// contract would be one proposition enforced in two places with nothing
+	// forcing them to agree. This schema therefore admits any combination and
+	// the compiler refuses the ones that are not legal, so a rejected rule is
+	// rejected for a reason the author can read in a diagnostic rather than
+	// in a schema violation.
+	Guard        Expr   `json:"guard"`
+	RelationKind string `json:"relationKind"`
+
+	// ToSelector What a rule applies to.
+	ToSelector Selector `json:"toSelector"`
+}
+
 // Value One typed scalar value. Exactly one of the payload fields must match `kind`.
 type Value struct {
 	// Atom Present when kind is atom.
 	Atom *string `json:"atom,omitempty"`
+
+	// Date Present when kind is date. ISO-8601 calendar date YYYY-MM-DD.
+	Date *string `json:"date,omitempty"`
+
+	// Decimal Present when kind is decimal. Normalized base-10 ASCII string.
+	Decimal *string `json:"decimal,omitempty"`
+
+	// Duration Present when kind is duration. Integer elapsed seconds.
+	Duration *int64 `json:"duration,omitempty"`
 
 	// Int64 Present when kind is int64.
 	Int64 *int64 `json:"int64,omitempty"`
@@ -1275,6 +1464,9 @@ type Value struct {
 
 	// String Present when kind is string. Exact UTF-8 bytes, never normalized.
 	String *string `json:"string,omitempty"`
+
+	// Timestamp Present when kind is timestamp. RFC 3339 UTC representation.
+	Timestamp *string `json:"timestamp,omitempty"`
 }
 
 // ValueKind The closed typed-value vocabulary.
@@ -1304,6 +1496,9 @@ type BadRequest = Problem
 // DependencyUnavailable An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type DependencyUnavailable = Problem
 
+// ExecutionConflict An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
+type ExecutionConflict = Problem
+
 // InternalError An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type InternalError = Problem
 
@@ -1312,6 +1507,9 @@ type MethodNotAllowed = Problem
 
 // NotFound An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type NotFound = Problem
+
+// PolicyConflict An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
+type PolicyConflict = Problem
 
 // PublicationConflict An RFC 9457 problem document. It never carries payloads, entity references, evidence, or internal error text.
 type PublicationConflict = Problem
@@ -1336,6 +1534,20 @@ type GetComparisonParams struct {
 	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
 }
 
+// CreateCorpusParams defines parameters for CreateCorpus.
+type CreateCorpusParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
+// GetCorpusParams defines parameters for GetCorpus.
+type GetCorpusParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
 // CreateExecutionParams defines parameters for CreateExecution.
 type CreateExecutionParams struct {
 	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
@@ -1350,6 +1562,20 @@ type GetExecutionParams struct {
 	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
 }
 
+// GetExecutionCheckpointParams defines parameters for GetExecutionCheckpoint.
+type GetExecutionCheckpointParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
+// ReattemptExecutionParams defines parameters for ReattemptExecution.
+type ReattemptExecutionParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
 // CreatePlanParams defines parameters for CreatePlan.
 type CreatePlanParams struct {
 	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
@@ -1359,6 +1585,23 @@ type CreatePlanParams struct {
 
 // GetPlanParams defines parameters for GetPlan.
 type GetPlanParams struct {
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
+// GetPolicyParams defines parameters for GetPolicy.
+type GetPolicyParams struct {
+	// Version Optional historical policy version to retrieve.
+	Version *int `form:"version,omitempty" json:"version,omitempty"`
+
+	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
+	// mandatory; an identifier from another tenant is reported as absent.
+	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
+}
+
+// PutPolicyParams defines parameters for PutPolicy.
+type PutPolicyParams struct {
 	// XMaidenLaneTenant The tenant that owns every artifact touched by this request. Scoping is
 	// mandatory; an identifier from another tenant is reported as absent.
 	XMaidenLaneTenant TenantHeader `json:"X-Maiden-Lane-Tenant"`
@@ -1385,11 +1628,17 @@ type GetPublicationParams struct {
 // CreateComparisonJSONRequestBody defines body for CreateComparison for application/json ContentType.
 type CreateComparisonJSONRequestBody = CreateComparisonRequest
 
+// CreateCorpusJSONRequestBody defines body for CreateCorpus for application/json ContentType.
+type CreateCorpusJSONRequestBody = CreateCorpusRequest
+
 // CreateExecutionJSONRequestBody defines body for CreateExecution for application/json ContentType.
 type CreateExecutionJSONRequestBody = CreateExecutionRequest
 
 // CreatePlanJSONRequestBody defines body for CreatePlan for application/json ContentType.
 type CreatePlanJSONRequestBody = PlanDeclarations
+
+// PutPolicyJSONRequestBody defines body for PutPolicy for application/json ContentType.
+type PutPolicyJSONRequestBody = PutPolicyRequest
 
 // CreatePublicationJSONRequestBody defines body for CreatePublication for application/json ContentType.
 type CreatePublicationJSONRequestBody = CreatePublicationRequest
@@ -1516,6 +1765,29 @@ type ClientInterface interface {
 	// Corresponds with GET /v1/comparisons/{comparisonID} (the `GetComparison` operationId).
 	GetComparison(ctx context.Context, comparisonID Digest, params *GetComparisonParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// CreateCorpusWithBody Register a replay corpus
+	//
+	// Accepts a set of distinct initial states and registers an immutable, content-addressed replay corpus.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /v1/corpora (the `CreateCorpus` operationId).
+	CreateCorpusWithBody(ctx context.Context, params *CreateCorpusParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateCorpus Register a replay corpus
+	//
+	// Accepts a set of distinct initial states and registers an immutable, content-addressed replay corpus.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /v1/corpora (the `CreateCorpus` operationId).
+	CreateCorpus(ctx context.Context, params *CreateCorpusParams, body CreateCorpusJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetCorpus Retrieve a replay corpus
+	//
+	// Corresponds with GET /v1/corpora/{corpusID} (the `GetCorpus` operationId).
+	GetCorpus(ctx context.Context, corpusID Digest, params *GetCorpusParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CreateExecutionWithBody Execute a compiled plan
 	//
 	// Accepts a previously compiled plan for execution over a pinned initial
@@ -1573,6 +1845,20 @@ type ClientInterface interface {
 	// Corresponds with GET /v1/executions/{executionID} (the `GetExecution` operationId).
 	GetExecution(ctx context.Context, executionID Digest, params *GetExecutionParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// GetExecutionCheckpoint Retrieve an execution checkpoint record
+	//
+	// Retrieves the sealed checkpoint artifact details and assessments for a specific checkpoint key in a finished execution.
+	//
+	// Corresponds with GET /v1/executions/{executionID}/checkpoints/{checkpointKey} (the `GetExecutionCheckpoint` operationId).
+	GetExecutionCheckpoint(ctx context.Context, executionID Digest, checkpointKey string, params *GetExecutionCheckpointParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ReattemptExecution Reattempt a failed execution
+	//
+	// Unblocks an execution whose attempt failed for retry by workers.
+	//
+	// Corresponds with POST /v1/executions/{executionID}/reattempt (the `ReattemptExecution` operationId).
+	ReattemptExecution(ctx context.Context, executionID Digest, params *ReattemptExecutionParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// CreatePlanWithBody Compile declarations into a semantic plan
 	//
 	// Compiles a schema, ruleset, and completeness profiles into an immutable
@@ -1605,6 +1891,35 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /v1/plans/{planID} (the `GetPlan` operationId).
 	GetPlan(ctx context.Context, planID Digest, params *GetPlanParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetPolicy Retrieve a target policy
+	//
+	// Retrieves the active policy for a customer target, or a historical policy if `version` query parameter is supplied.
+	//
+	// Corresponds with GET /v1/policies/{customerID}/{target} (the `GetPolicy` operationId).
+	GetPolicy(ctx context.Context, customerID string, target string, params *GetPolicyParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PutPolicyWithBody Create or advance a target policy
+	//
+	// Appends a versioned target promotion policy for a customer target destination.
+	// Writing a policy is a compare-and-swap on `version` (must be `current + 1`, or 1 for new targets).
+	// Submitting identical content under an existing version is idempotent.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with PUT /v1/policies/{customerID}/{target} (the `PutPolicy` operationId).
+	PutPolicyWithBody(ctx context.Context, customerID string, target string, params *PutPolicyParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PutPolicy Create or advance a target policy
+	//
+	// Appends a versioned target promotion policy for a customer target destination.
+	// Writing a policy is a compare-and-swap on `version` (must be `current + 1`, or 1 for new targets).
+	// Submitting identical content under an existing version is idempotent.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with PUT /v1/policies/{customerID}/{target} (the `PutPolicy` operationId).
+	PutPolicy(ctx context.Context, customerID string, target string, params *PutPolicyParams, body PutPolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreatePublicationWithBody Evaluate the promotion gate and publish if it authorizes
 	//
@@ -1787,6 +2102,59 @@ func (c *Client) GetComparison(ctx context.Context, comparisonID Digest, params 
 	return c.Client.Do(req)
 }
 
+// CreateCorpusWithBody Register a replay corpus
+//
+// Accepts a set of distinct initial states and registers an immutable, content-addressed replay corpus.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /v1/corpora (the `CreateCorpus` operationId).
+func (c *Client) CreateCorpusWithBody(ctx context.Context, params *CreateCorpusParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCorpusRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateCorpus Register a replay corpus
+//
+// Accepts a set of distinct initial states and registers an immutable, content-addressed replay corpus.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /v1/corpora (the `CreateCorpus` operationId).
+func (c *Client) CreateCorpus(ctx context.Context, params *CreateCorpusParams, body CreateCorpusJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCorpusRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetCorpus Retrieve a replay corpus
+//
+// Corresponds with GET /v1/corpora/{corpusID} (the `GetCorpus` operationId).
+func (c *Client) GetCorpus(ctx context.Context, corpusID Digest, params *GetCorpusParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetCorpusRequest(c.Server, corpusID, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // CreateExecutionWithBody Execute a compiled plan
 //
 // Accepts a previously compiled plan for execution over a pinned initial
@@ -1874,6 +2242,40 @@ func (c *Client) GetExecution(ctx context.Context, executionID Digest, params *G
 	return c.Client.Do(req)
 }
 
+// GetExecutionCheckpoint Retrieve an execution checkpoint record
+//
+// Retrieves the sealed checkpoint artifact details and assessments for a specific checkpoint key in a finished execution.
+//
+// Corresponds with GET /v1/executions/{executionID}/checkpoints/{checkpointKey} (the `GetExecutionCheckpoint` operationId).
+func (c *Client) GetExecutionCheckpoint(ctx context.Context, executionID Digest, checkpointKey string, params *GetExecutionCheckpointParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetExecutionCheckpointRequest(c.Server, executionID, checkpointKey, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ReattemptExecution Reattempt a failed execution
+//
+// Unblocks an execution whose attempt failed for retry by workers.
+//
+// Corresponds with POST /v1/executions/{executionID}/reattempt (the `ReattemptExecution` operationId).
+func (c *Client) ReattemptExecution(ctx context.Context, executionID Digest, params *ReattemptExecutionParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewReattemptExecutionRequest(c.Server, executionID, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // CreatePlanWithBody Compile declarations into a semantic plan
 //
 // Compiles a schema, ruleset, and completeness profiles into an immutable
@@ -1927,6 +2329,65 @@ func (c *Client) CreatePlan(ctx context.Context, params *CreatePlanParams, body 
 // Corresponds with GET /v1/plans/{planID} (the `GetPlan` operationId).
 func (c *Client) GetPlan(ctx context.Context, planID Digest, params *GetPlanParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetPlanRequest(c.Server, planID, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// GetPolicy Retrieve a target policy
+//
+// Retrieves the active policy for a customer target, or a historical policy if `version` query parameter is supplied.
+//
+// Corresponds with GET /v1/policies/{customerID}/{target} (the `GetPolicy` operationId).
+func (c *Client) GetPolicy(ctx context.Context, customerID string, target string, params *GetPolicyParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetPolicyRequest(c.Server, customerID, target, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PutPolicyWithBody Create or advance a target policy
+//
+// Appends a versioned target promotion policy for a customer target destination.
+// Writing a policy is a compare-and-swap on `version` (must be `current + 1`, or 1 for new targets).
+// Submitting identical content under an existing version is idempotent.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with PUT /v1/policies/{customerID}/{target} (the `PutPolicy` operationId).
+func (c *Client) PutPolicyWithBody(ctx context.Context, customerID string, target string, params *PutPolicyParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPutPolicyRequestWithBody(c.Server, customerID, target, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// PutPolicy Create or advance a target policy
+//
+// Appends a versioned target promotion policy for a customer target destination.
+// Writing a policy is a compare-and-swap on `version` (must be `current + 1`, or 1 for new targets).
+// Submitting identical content under an existing version is idempotent.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with PUT /v1/policies/{customerID}/{target} (the `PutPolicy` operationId).
+func (c *Client) PutPolicy(ctx context.Context, customerID string, target string, params *PutPolicyParams, body PutPolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPutPolicyRequest(c.Server, customerID, target, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2203,6 +2664,106 @@ func NewGetComparisonRequest(server string, comparisonID Digest, params *GetComp
 	return req, nil
 }
 
+// NewCreateCorpusRequest calls the generic CreateCorpus builder with application/json body
+func NewCreateCorpusRequest(server string, params *CreateCorpusParams, body CreateCorpusJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateCorpusRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreateCorpusRequestWithBody constructs an http.Request for the CreateCorpus method, with any body, and a specified content type
+func NewCreateCorpusRequestWithBody(server string, params *CreateCorpusParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/corpora")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Maiden-Lane-Tenant", params.XMaidenLaneTenant, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Maiden-Lane-Tenant", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetCorpusRequest constructs an http.Request for the GetCorpus method
+func NewGetCorpusRequest(server string, corpusID Digest, params *GetCorpusParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "corpusID", corpusID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/corpora/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Maiden-Lane-Tenant", params.XMaidenLaneTenant, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Maiden-Lane-Tenant", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewCreateExecutionRequest calls the generic CreateExecution builder with application/json body
 func NewCreateExecutionRequest(server string, params *CreateExecutionParams, body CreateExecutionJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
@@ -2283,6 +2844,107 @@ func NewGetExecutionRequest(server string, executionID Digest, params *GetExecut
 	}
 
 	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Maiden-Lane-Tenant", params.XMaidenLaneTenant, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Maiden-Lane-Tenant", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetExecutionCheckpointRequest constructs an http.Request for the GetExecutionCheckpoint method
+func NewGetExecutionCheckpointRequest(server string, executionID Digest, checkpointKey string, params *GetExecutionCheckpointParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "executionID", executionID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "checkpointKey", checkpointKey, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/executions/%s/checkpoints/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Maiden-Lane-Tenant", params.XMaidenLaneTenant, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Maiden-Lane-Tenant", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewReattemptExecutionRequest constructs an http.Request for the ReattemptExecution method
+func NewReattemptExecutionRequest(server string, executionID Digest, params *ReattemptExecutionParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "executionID", executionID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/executions/%s/reattempt", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -2386,6 +3048,154 @@ func NewGetPlanRequest(server string, planID Digest, params *GetPlanParams) (*ht
 	if err != nil {
 		return nil, err
 	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Maiden-Lane-Tenant", params.XMaidenLaneTenant, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Maiden-Lane-Tenant", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetPolicyRequest constructs an http.Request for the GetPolicy method
+func NewGetPolicyRequest(server string, customerID string, target string, params *GetPolicyParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "customerID", customerID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "target", target, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/policies/%s/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Version != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "version", *params.Version, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Maiden-Lane-Tenant", params.XMaidenLaneTenant, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Maiden-Lane-Tenant", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewPutPolicyRequest calls the generic PutPolicy builder with application/json body
+func NewPutPolicyRequest(server string, customerID string, target string, params *PutPolicyParams, body PutPolicyJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPutPolicyRequestWithBody(server, customerID, target, params, "application/json", bodyReader)
+}
+
+// NewPutPolicyRequestWithBody constructs an http.Request for the PutPolicy method, with any body, and a specified content type
+func NewPutPolicyRequestWithBody(server string, customerID string, target string, params *PutPolicyParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "customerID", customerID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "target", target, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v1/policies/%s/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPut, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	if params != nil {
 
@@ -2635,6 +3445,31 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /v1/comparisons/{comparisonID} (the `GetComparison` operationId).
 	GetComparisonWithResponse(ctx context.Context, comparisonID Digest, params *GetComparisonParams, reqEditors ...RequestEditorFn) (*GetComparisonResponse, error)
 
+	// CreateCorpusWithBodyWithResponse Register a replay corpus
+	//
+	// Accepts a set of distinct initial states and registers an immutable, content-addressed replay corpus.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /v1/corpora (the `CreateCorpus` operationId).
+	CreateCorpusWithBodyWithResponse(ctx context.Context, params *CreateCorpusParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCorpusResponse, error)
+
+	// CreateCorpusWithResponse Register a replay corpus
+	//
+	// Accepts a set of distinct initial states and registers an immutable, content-addressed replay corpus.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /v1/corpora (the `CreateCorpus` operationId).
+	CreateCorpusWithResponse(ctx context.Context, params *CreateCorpusParams, body CreateCorpusJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCorpusResponse, error)
+
+	// GetCorpusWithResponse Retrieve a replay corpus
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /v1/corpora/{corpusID} (the `GetCorpus` operationId).
+	GetCorpusWithResponse(ctx context.Context, corpusID Digest, params *GetCorpusParams, reqEditors ...RequestEditorFn) (*GetCorpusResponse, error)
+
 	// CreateExecutionWithBodyWithResponse Execute a compiled plan
 	//
 	// Accepts a previously compiled plan for execution over a pinned initial
@@ -2694,6 +3529,24 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /v1/executions/{executionID} (the `GetExecution` operationId).
 	GetExecutionWithResponse(ctx context.Context, executionID Digest, params *GetExecutionParams, reqEditors ...RequestEditorFn) (*GetExecutionResponse, error)
 
+	// GetExecutionCheckpointWithResponse Retrieve an execution checkpoint record
+	//
+	// Retrieves the sealed checkpoint artifact details and assessments for a specific checkpoint key in a finished execution.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /v1/executions/{executionID}/checkpoints/{checkpointKey} (the `GetExecutionCheckpoint` operationId).
+	GetExecutionCheckpointWithResponse(ctx context.Context, executionID Digest, checkpointKey string, params *GetExecutionCheckpointParams, reqEditors ...RequestEditorFn) (*GetExecutionCheckpointResponse, error)
+
+	// ReattemptExecutionWithResponse Reattempt a failed execution
+	//
+	// Unblocks an execution whose attempt failed for retry by workers.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /v1/executions/{executionID}/reattempt (the `ReattemptExecution` operationId).
+	ReattemptExecutionWithResponse(ctx context.Context, executionID Digest, params *ReattemptExecutionParams, reqEditors ...RequestEditorFn) (*ReattemptExecutionResponse, error)
+
 	// CreatePlanWithBodyWithResponse Compile declarations into a semantic plan
 	//
 	// Compiles a schema, ruleset, and completeness profiles into an immutable
@@ -2728,6 +3581,37 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /v1/plans/{planID} (the `GetPlan` operationId).
 	GetPlanWithResponse(ctx context.Context, planID Digest, params *GetPlanParams, reqEditors ...RequestEditorFn) (*GetPlanResponse, error)
+
+	// GetPolicyWithResponse Retrieve a target policy
+	//
+	// Retrieves the active policy for a customer target, or a historical policy if `version` query parameter is supplied.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /v1/policies/{customerID}/{target} (the `GetPolicy` operationId).
+	GetPolicyWithResponse(ctx context.Context, customerID string, target string, params *GetPolicyParams, reqEditors ...RequestEditorFn) (*GetPolicyResponse, error)
+
+	// PutPolicyWithBodyWithResponse Create or advance a target policy
+	//
+	// Appends a versioned target promotion policy for a customer target destination.
+	// Writing a policy is a compare-and-swap on `version` (must be `current + 1`, or 1 for new targets).
+	// Submitting identical content under an existing version is idempotent.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /v1/policies/{customerID}/{target} (the `PutPolicy` operationId).
+	PutPolicyWithBodyWithResponse(ctx context.Context, customerID string, target string, params *PutPolicyParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutPolicyResponse, error)
+
+	// PutPolicyWithResponse Create or advance a target policy
+	//
+	// Appends a versioned target promotion policy for a customer target destination.
+	// Writing a policy is a compare-and-swap on `version` (must be `current + 1`, or 1 for new targets).
+	// Submitting identical content under an existing version is idempotent.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with PUT /v1/policies/{customerID}/{target} (the `PutPolicy` operationId).
+	PutPolicyWithResponse(ctx context.Context, customerID string, target string, params *PutPolicyParams, body PutPolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*PutPolicyResponse, error)
 
 	// CreatePublicationWithBodyWithResponse Evaluate the promotion gate and publish if it authorizes
 	//
@@ -3062,6 +3946,165 @@ func (r GetComparisonResponse) ContentType() string {
 	return ""
 }
 
+type CreateCorpusResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *Corpus
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON405 the response for an HTTP 405 `application/problem+json` response
+	ApplicationproblemJSON405 *MethodNotAllowed
+	// ApplicationproblemJSON415 the response for an HTTP 415 `application/problem+json` response
+	ApplicationproblemJSON415 *UnsupportedMediaType
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *UnprocessableEntity
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *DependencyUnavailable
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r CreateCorpusResponse) GetJSON201() *Corpus {
+	return r.JSON201
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r CreateCorpusResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON405 returns the response for an HTTP 405 `application/problem+json` response
+func (r CreateCorpusResponse) GetApplicationproblemJSON405() *MethodNotAllowed {
+	return r.ApplicationproblemJSON405
+}
+
+// GetApplicationproblemJSON415 returns the response for an HTTP 415 `application/problem+json` response
+func (r CreateCorpusResponse) GetApplicationproblemJSON415() *UnsupportedMediaType {
+	return r.ApplicationproblemJSON415
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r CreateCorpusResponse) GetApplicationproblemJSON422() *UnprocessableEntity {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r CreateCorpusResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r CreateCorpusResponse) GetApplicationproblemJSON503() *DependencyUnavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r CreateCorpusResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateCorpusResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateCorpusResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateCorpusResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetCorpusResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *Corpus
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON405 the response for an HTTP 405 `application/problem+json` response
+	ApplicationproblemJSON405 *MethodNotAllowed
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *DependencyUnavailable
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetCorpusResponse) GetJSON200() *Corpus {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r GetCorpusResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r GetCorpusResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON405 returns the response for an HTTP 405 `application/problem+json` response
+func (r GetCorpusResponse) GetApplicationproblemJSON405() *MethodNotAllowed {
+	return r.ApplicationproblemJSON405
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r GetCorpusResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r GetCorpusResponse) GetApplicationproblemJSON503() *DependencyUnavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r GetCorpusResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetCorpusResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetCorpusResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetCorpusResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type CreateExecutionResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3221,6 +4264,165 @@ func (r GetExecutionResponse) ContentType() string {
 	return ""
 }
 
+type GetExecutionCheckpointResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ExecutionCheckpointDetail
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON405 the response for an HTTP 405 `application/problem+json` response
+	ApplicationproblemJSON405 *MethodNotAllowed
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *DependencyUnavailable
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetExecutionCheckpointResponse) GetJSON200() *ExecutionCheckpointDetail {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r GetExecutionCheckpointResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r GetExecutionCheckpointResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON405 returns the response for an HTTP 405 `application/problem+json` response
+func (r GetExecutionCheckpointResponse) GetApplicationproblemJSON405() *MethodNotAllowed {
+	return r.ApplicationproblemJSON405
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r GetExecutionCheckpointResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r GetExecutionCheckpointResponse) GetApplicationproblemJSON503() *DependencyUnavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r GetExecutionCheckpointResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetExecutionCheckpointResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetExecutionCheckpointResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetExecutionCheckpointResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ReattemptExecutionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON202 the response for an HTTP 202 `application/json` response
+	JSON202 *ExecutionAccepted
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON405 the response for an HTTP 405 `application/problem+json` response
+	ApplicationproblemJSON405 *MethodNotAllowed
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *ExecutionConflict
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *DependencyUnavailable
+}
+
+// GetJSON202 returns the response for an HTTP 202 `application/json` response
+func (r ReattemptExecutionResponse) GetJSON202() *ExecutionAccepted {
+	return r.JSON202
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r ReattemptExecutionResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r ReattemptExecutionResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON405 returns the response for an HTTP 405 `application/problem+json` response
+func (r ReattemptExecutionResponse) GetApplicationproblemJSON405() *MethodNotAllowed {
+	return r.ApplicationproblemJSON405
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r ReattemptExecutionResponse) GetApplicationproblemJSON409() *ExecutionConflict {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r ReattemptExecutionResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r ReattemptExecutionResponse) GetApplicationproblemJSON503() *DependencyUnavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r ReattemptExecutionResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ReattemptExecutionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ReattemptExecutionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ReattemptExecutionResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type CreatePlanResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3360,6 +4562,179 @@ func (r GetPlanResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r GetPlanResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type GetPolicyResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *TargetPolicy
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON404 the response for an HTTP 404 `application/problem+json` response
+	ApplicationproblemJSON404 *NotFound
+	// ApplicationproblemJSON405 the response for an HTTP 405 `application/problem+json` response
+	ApplicationproblemJSON405 *MethodNotAllowed
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *DependencyUnavailable
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r GetPolicyResponse) GetJSON200() *TargetPolicy {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r GetPolicyResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON404 returns the response for an HTTP 404 `application/problem+json` response
+func (r GetPolicyResponse) GetApplicationproblemJSON404() *NotFound {
+	return r.ApplicationproblemJSON404
+}
+
+// GetApplicationproblemJSON405 returns the response for an HTTP 405 `application/problem+json` response
+func (r GetPolicyResponse) GetApplicationproblemJSON405() *MethodNotAllowed {
+	return r.ApplicationproblemJSON405
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r GetPolicyResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r GetPolicyResponse) GetApplicationproblemJSON503() *DependencyUnavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r GetPolicyResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r GetPolicyResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetPolicyResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetPolicyResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type PutPolicyResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *TargetPolicy
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *TargetPolicy
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON405 the response for an HTTP 405 `application/problem+json` response
+	ApplicationproblemJSON405 *MethodNotAllowed
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *PolicyConflict
+	// ApplicationproblemJSON415 the response for an HTTP 415 `application/problem+json` response
+	ApplicationproblemJSON415 *UnsupportedMediaType
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *UnprocessableEntity
+	// ApplicationproblemJSON500 the response for an HTTP 500 `application/problem+json` response
+	ApplicationproblemJSON500 *InternalError
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *DependencyUnavailable
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r PutPolicyResponse) GetJSON200() *TargetPolicy {
+	return r.JSON200
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r PutPolicyResponse) GetJSON201() *TargetPolicy {
+	return r.JSON201
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r PutPolicyResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON405 returns the response for an HTTP 405 `application/problem+json` response
+func (r PutPolicyResponse) GetApplicationproblemJSON405() *MethodNotAllowed {
+	return r.ApplicationproblemJSON405
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r PutPolicyResponse) GetApplicationproblemJSON409() *PolicyConflict {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON415 returns the response for an HTTP 415 `application/problem+json` response
+func (r PutPolicyResponse) GetApplicationproblemJSON415() *UnsupportedMediaType {
+	return r.ApplicationproblemJSON415
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r PutPolicyResponse) GetApplicationproblemJSON422() *UnprocessableEntity {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON500 returns the response for an HTTP 500 `application/problem+json` response
+func (r PutPolicyResponse) GetApplicationproblemJSON500() *InternalError {
+	return r.ApplicationproblemJSON500
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r PutPolicyResponse) GetApplicationproblemJSON503() *DependencyUnavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r PutPolicyResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r PutPolicyResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PutPolicyResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r PutPolicyResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -3623,6 +4998,49 @@ func (c *ClientWithResponses) GetComparisonWithResponse(ctx context.Context, com
 	return ParseGetComparisonResponse(rsp)
 }
 
+// CreateCorpusWithBodyWithResponse Register a replay corpus
+//
+// Accepts a set of distinct initial states and registers an immutable, content-addressed replay corpus.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /v1/corpora (the `CreateCorpus` operationId).
+func (c *ClientWithResponses) CreateCorpusWithBodyWithResponse(ctx context.Context, params *CreateCorpusParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCorpusResponse, error) {
+	rsp, err := c.CreateCorpusWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCorpusResponse(rsp)
+}
+
+// CreateCorpusWithResponse Register a replay corpus
+//
+// Accepts a set of distinct initial states and registers an immutable, content-addressed replay corpus.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /v1/corpora (the `CreateCorpus` operationId).
+func (c *ClientWithResponses) CreateCorpusWithResponse(ctx context.Context, params *CreateCorpusParams, body CreateCorpusJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCorpusResponse, error) {
+	rsp, err := c.CreateCorpus(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCorpusResponse(rsp)
+}
+
+// GetCorpusWithResponse Retrieve a replay corpus
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /v1/corpora/{corpusID} (the `GetCorpus` operationId).
+func (c *ClientWithResponses) GetCorpusWithResponse(ctx context.Context, corpusID Digest, params *GetCorpusParams, reqEditors ...RequestEditorFn) (*GetCorpusResponse, error) {
+	rsp, err := c.GetCorpus(ctx, corpusID, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetCorpusResponse(rsp)
+}
+
 // CreateExecutionWithBodyWithResponse Execute a compiled plan
 //
 // Accepts a previously compiled plan for execution over a pinned initial
@@ -3700,6 +5118,36 @@ func (c *ClientWithResponses) GetExecutionWithResponse(ctx context.Context, exec
 	return ParseGetExecutionResponse(rsp)
 }
 
+// GetExecutionCheckpointWithResponse Retrieve an execution checkpoint record
+//
+// Retrieves the sealed checkpoint artifact details and assessments for a specific checkpoint key in a finished execution.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /v1/executions/{executionID}/checkpoints/{checkpointKey} (the `GetExecutionCheckpoint` operationId).
+func (c *ClientWithResponses) GetExecutionCheckpointWithResponse(ctx context.Context, executionID Digest, checkpointKey string, params *GetExecutionCheckpointParams, reqEditors ...RequestEditorFn) (*GetExecutionCheckpointResponse, error) {
+	rsp, err := c.GetExecutionCheckpoint(ctx, executionID, checkpointKey, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetExecutionCheckpointResponse(rsp)
+}
+
+// ReattemptExecutionWithResponse Reattempt a failed execution
+//
+// Unblocks an execution whose attempt failed for retry by workers.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /v1/executions/{executionID}/reattempt (the `ReattemptExecution` operationId).
+func (c *ClientWithResponses) ReattemptExecutionWithResponse(ctx context.Context, executionID Digest, params *ReattemptExecutionParams, reqEditors ...RequestEditorFn) (*ReattemptExecutionResponse, error) {
+	rsp, err := c.ReattemptExecution(ctx, executionID, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseReattemptExecutionResponse(rsp)
+}
+
 // CreatePlanWithBodyWithResponse Compile declarations into a semantic plan
 //
 // Compiles a schema, ruleset, and completeness profiles into an immutable
@@ -3751,6 +5199,55 @@ func (c *ClientWithResponses) GetPlanWithResponse(ctx context.Context, planID Di
 		return nil, err
 	}
 	return ParseGetPlanResponse(rsp)
+}
+
+// GetPolicyWithResponse Retrieve a target policy
+//
+// Retrieves the active policy for a customer target, or a historical policy if `version` query parameter is supplied.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /v1/policies/{customerID}/{target} (the `GetPolicy` operationId).
+func (c *ClientWithResponses) GetPolicyWithResponse(ctx context.Context, customerID string, target string, params *GetPolicyParams, reqEditors ...RequestEditorFn) (*GetPolicyResponse, error) {
+	rsp, err := c.GetPolicy(ctx, customerID, target, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetPolicyResponse(rsp)
+}
+
+// PutPolicyWithBodyWithResponse Create or advance a target policy
+//
+// Appends a versioned target promotion policy for a customer target destination.
+// Writing a policy is a compare-and-swap on `version` (must be `current + 1`, or 1 for new targets).
+// Submitting identical content under an existing version is idempotent.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /v1/policies/{customerID}/{target} (the `PutPolicy` operationId).
+func (c *ClientWithResponses) PutPolicyWithBodyWithResponse(ctx context.Context, customerID string, target string, params *PutPolicyParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutPolicyResponse, error) {
+	rsp, err := c.PutPolicyWithBody(ctx, customerID, target, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePutPolicyResponse(rsp)
+}
+
+// PutPolicyWithResponse Create or advance a target policy
+//
+// Appends a versioned target promotion policy for a customer target destination.
+// Writing a policy is a compare-and-swap on `version` (must be `current + 1`, or 1 for new targets).
+// Submitting identical content under an existing version is idempotent.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with PUT /v1/policies/{customerID}/{target} (the `PutPolicy` operationId).
+func (c *ClientWithResponses) PutPolicyWithResponse(ctx context.Context, customerID string, target string, params *PutPolicyParams, body PutPolicyJSONRequestBody, reqEditors ...RequestEditorFn) (*PutPolicyResponse, error) {
+	rsp, err := c.PutPolicy(ctx, customerID, target, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePutPolicyResponse(rsp)
 }
 
 // CreatePublicationWithBodyWithResponse Evaluate the promotion gate and publish if it authorizes
@@ -4049,6 +5546,135 @@ func ParseGetComparisonResponse(rsp *http.Response) (*GetComparisonResponse, err
 	return response, nil
 }
 
+// ParseCreateCorpusResponse parses an HTTP response from a CreateCorpusWithResponse call
+func ParseCreateCorpusResponse(rsp *http.Response) (*CreateCorpusResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateCorpusResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Corpus
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 405:
+		var dest MethodNotAllowed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON405 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 415:
+		var dest UnsupportedMediaType
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON415 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest UnprocessableEntity
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest DependencyUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetCorpusResponse parses an HTTP response from a GetCorpusWithResponse call
+func ParseGetCorpusResponse(rsp *http.Response) (*GetCorpusResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetCorpusResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest Corpus
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 405:
+		var dest MethodNotAllowed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON405 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest DependencyUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseCreateExecutionResponse parses an HTTP response from a CreateExecutionWithResponse call
 func ParseCreateExecutionResponse(rsp *http.Response) (*CreateExecutionResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -4178,6 +5804,135 @@ func ParseGetExecutionResponse(rsp *http.Response) (*GetExecutionResponse, error
 	return response, nil
 }
 
+// ParseGetExecutionCheckpointResponse parses an HTTP response from a GetExecutionCheckpointWithResponse call
+func ParseGetExecutionCheckpointResponse(rsp *http.Response) (*GetExecutionCheckpointResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetExecutionCheckpointResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ExecutionCheckpointDetail
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 405:
+		var dest MethodNotAllowed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON405 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest DependencyUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseReattemptExecutionResponse parses an HTTP response from a ReattemptExecutionWithResponse call
+func ParseReattemptExecutionResponse(rsp *http.Response) (*ReattemptExecutionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ReattemptExecutionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest ExecutionAccepted
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 405:
+		var dest MethodNotAllowed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON405 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ExecutionConflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest DependencyUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParseCreatePlanResponse parses an HTTP response from a CreatePlanWithResponse call
 func ParseCreatePlanResponse(rsp *http.Response) (*CreatePlanResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -4287,6 +6042,149 @@ func ParseGetPlanResponse(rsp *http.Response) (*GetPlanResponse, error) {
 			return nil, err
 		}
 		response.ApplicationproblemJSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetPolicyResponse parses an HTTP response from a GetPolicyWithResponse call
+func ParseGetPolicyResponse(rsp *http.Response) (*GetPolicyResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetPolicyResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest TargetPolicy
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFound
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 405:
+		var dest MethodNotAllowed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON405 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest DependencyUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePutPolicyResponse parses an HTTP response from a PutPolicyWithResponse call
+func ParsePutPolicyResponse(rsp *http.Response) (*PutPolicyResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PutPolicyResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest TargetPolicy
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest TargetPolicy
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 405:
+		var dest MethodNotAllowed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON405 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest PolicyConflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 415:
+		var dest UnsupportedMediaType
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON415 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest UnprocessableEntity
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest DependencyUnavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
 
 	}
 

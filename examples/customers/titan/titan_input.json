@@ -1,0 +1,129 @@
+{
+  "schema": {
+    "entities": [
+      {
+        "kind": "raw_order",
+        "fields": [
+          {"name": "order_id", "type": "string"},
+          {"name": "customer_id", "type": "string"},
+          {"name": "commodity_id", "type": "string"},
+          {"name": "weight_lbs", "type": "int64"},
+          {"name": "total_charge_cents", "type": "int64"},
+          {"name": "bill_distance_miles", "type": "int64"},
+          {"name": "operational_status", "type": "string"},
+          {"name": "is_hazmat", "type": "string"},
+          {"name": "freight_class", "type": "string", "optional": true},
+          {"name": "requires_permits", "type": "string", "optional": true}
+        ]
+      },
+      {
+        "kind": "dynamic_load",
+        "fields": [
+          {"name": "load_id", "type": "string"},
+          {"name": "shipper_id", "type": "string"},
+          {"name": "freight_class", "type": "string"},
+          {"name": "total_revenue_cents", "type": "int64"},
+          {"name": "requires_permits", "type": "string"},
+          {"name": "status", "type": "string"}
+        ]
+      },
+      {
+        "kind": "raw_driver",
+        "fields": [
+          {"name": "driver_id", "type": "string"},
+          {"name": "home_terminal_zip", "type": "string"},
+          {"name": "avl_drive_hours", "type": "int64"},
+          {"name": "avl_onduty_hours", "type": "int64"},
+          {"name": "duty_status", "type": "string"},
+          {"name": "is_active", "type": "string"},
+          {"name": "dispatch_ready", "type": "string", "optional": true}
+        ]
+      },
+      {
+        "kind": "dynamic_driver",
+        "fields": [
+          {"name": "driver_id", "type": "string"},
+          {"name": "home_zip", "type": "string"},
+          {"name": "remaining_drive_hours", "type": "int64"},
+          {"name": "status", "type": "string"}
+        ]
+      }
+    ],
+    "relations": [
+      {
+        "kind": "assigned_driver",
+        "from_kind": "dynamic_driver",
+        "to_kind": "dynamic_load"
+      }
+    ]
+  },
+  "lineage_id": "sha256:0101010101010101010101010101010101010101010101010101010101010101",
+  "entities": [
+    {
+      "kind": "raw_order",
+      "id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "fields": {
+        "order_id": "0767911",
+        "customer_id": "SIAC",
+        "commodity_id": "WTRHTR",
+        "weight_lbs": 20179,
+        "total_charge_cents": 285864,
+        "bill_distance_miles": 831,
+        "operational_status": "CLIN",
+        "is_hazmat": "false"
+      }
+    },
+    {
+      "kind": "raw_order",
+      "id": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "fields": {
+        "order_id": "0767987",
+        "customer_id": "SIAC",
+        "commodity_id": "WTRHTR",
+        "weight_lbs": 48200,
+        "total_charge_cents": 123402,
+        "bill_distance_miles": 393,
+        "operational_status": "CLIN",
+        "is_hazmat": "true"
+      }
+    },
+    {
+      "kind": "raw_order",
+      "id": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "fields": {
+        "order_id": "0768001",
+        "customer_id": "SIAC",
+        "commodity_id": "WTRHTR",
+        "weight_lbs": 15000,
+        "total_charge_cents": 50000,
+        "bill_distance_miles": 150,
+        "operational_status": "CLIN",
+        "is_hazmat": "false"
+      }
+    },
+    {
+      "kind": "raw_driver",
+      "id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "fields": {
+        "driver_id": "ADDUCE",
+        "home_terminal_zip": "17601",
+        "avl_drive_hours": 11,
+        "avl_onduty_hours": 14,
+        "duty_status": "On Duty",
+        "is_active": "true"
+      }
+    },
+    {
+      "kind": "raw_driver",
+      "id": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "fields": {
+        "driver_id": "BUCHERW",
+        "home_terminal_zip": "17601",
+        "avl_drive_hours": 5,
+        "avl_onduty_hours": 8,
+        "duty_status": "Off Duty",
+        "is_active": "true"
+      }
+    }
+  ]
+}

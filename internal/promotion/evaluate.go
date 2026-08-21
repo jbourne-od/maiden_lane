@@ -88,6 +88,10 @@ type Candidate struct {
 	// Naming the limit here is better than a clause that looks like it verified
 	// something it read from a field.
 	ExecutionID semantic.ExecutionID
+
+	// Executor is the executor build identity used to produce this execution,
+	// evaluated by the certified-backend clause.
+	Executor semantic.ExecutorIdentity
 }
 
 // sealed reports whether a real sealed artifact was supplied at all.
@@ -125,21 +129,16 @@ func established(policy ports.TargetPolicy) bool {
 
 // Evaluate produces a gate decision for one candidate under one target policy.
 //
-// Seven of HLD §14.1's nine clauses are answered from the candidate. The other two are
-// UnsupportedByBuild rather than absent: protected metric regression and backend
-// certification each name a concept this codebase does not have, so no candidate
-// satisfies them and no additional evidence would help. Reporting them as unsupported is
-// what keeps a nine-clause gate from reading as satisfied while checking seven, and
-// publication consequently still authorizes nothing.
+// All nine of HLD §14.1's clauses are evaluated from the candidate, comparison evidence,
+// and target policy.
 //
 // It takes the whole policy rather than just the version it currently reads. The
 // readiness clause needs the required profile, and more importantly a caller
 // holding a bare version could pass one detached from the rule it came from, which
 // is the exact pairing the immutable versioned policy type exists to keep intact.
 //
-// Every clause is dispositioned explicitly here even when the disposition is
-// "unsupported", so adding a clause constant forces a decision about it rather
-// than defaulting into a refusal whose stated reason is wrong.
+// Every clause is dispositioned explicitly here, so adding a clause constant forces
+// a decision about it rather than defaulting into a refusal whose stated reason is wrong.
 func Evaluate(policy ports.TargetPolicy, candidate Candidate) Decision {
 	if !established(policy) {
 		// No rule to judge against, so nothing about the candidate has been
@@ -157,9 +156,9 @@ func Evaluate(policy ports.TargetPolicy, candidate Candidate) Decision {
 		ClauseReadyAssessment:      readyAssessment(policy, candidate),
 		ClausePinnedIdentities:     pinnedIdentities(candidate),
 		ClauseComparisonCorpus:     comparisonCorpus(policy, candidate, candidate.Comparison),
-		ClauseNoMetricRegression:   Unsupported(ClauseNoMetricRegression),
+		ClauseNoMetricRegression:   noMetricRegression(policy, candidate, candidate.Comparison),
 		ClauseDigestConsistency:    digestConsistency(candidate),
-		ClauseCertifiedBackend:     Unsupported(ClauseCertifiedBackend),
+		ClauseCertifiedBackend:     certifiedBackend(candidate),
 	})
 }
 

@@ -24,6 +24,27 @@ func expressionSchema(t *testing.T) Schema {
 	return schema
 }
 
+func extendedExpressionSchema(t *testing.T) Schema {
+	t.Helper()
+	schema, err := NewSchema([]EntityDeclaration{{
+		Kind: "driver",
+		Fields: []FieldDeclaration{
+			{Name: "assignment_key", Kind: ValueString},
+			{Name: "hos_anchor", Kind: ValueAtom},
+			{Name: "hos_elapsed_hours", Kind: ValueInt64},
+			{Name: "hos_driving_hours", Kind: ValueInt64},
+			{Name: "created_at", Kind: ValueTimestamp},
+			{Name: "shift_duration", Kind: ValueDuration},
+			{Name: "pay_rate", Kind: ValueDecimal},
+			{Name: "effective_date", Kind: ValueDate},
+		},
+	}}, nil)
+	if err != nil {
+		t.Fatalf("NewSchema: %v", err)
+	}
+	return schema
+}
+
 func intLiteral(value int64) Expr {
 	literal := NewInt64Value(value)
 	return Expr{Kind: ExprLiteral, Literal: &literal}
@@ -38,12 +59,44 @@ func stringLiteral(t *testing.T, text string) Expr {
 	return Expr{Kind: ExprLiteral, Literal: &literal}
 }
 
+func timestampLiteral(t *testing.T, s string) Expr {
+	t.Helper()
+	literal, err := NewTimestampValue(s)
+	if err != nil {
+		t.Fatalf("NewTimestampValue: %v", err)
+	}
+	return Expr{Kind: ExprLiteral, Literal: &literal}
+}
+
+func durationLiteral(seconds int64) Expr {
+	literal := NewDurationValue(seconds)
+	return Expr{Kind: ExprLiteral, Literal: &literal}
+}
+
+func decimalLiteral(t *testing.T, s string) Expr {
+	t.Helper()
+	literal, err := NewDecimalValue(s)
+	if err != nil {
+		t.Fatalf("NewDecimalValue: %v", err)
+	}
+	return Expr{Kind: ExprLiteral, Literal: &literal}
+}
+
+func dateLiteral(t *testing.T, s string) Expr {
+	t.Helper()
+	literal, err := NewDateValue(s)
+	if err != nil {
+		t.Fatalf("NewDateValue: %v", err)
+	}
+	return Expr{Kind: ExprLiteral, Literal: &literal}
+}
+
 func field(path FieldPath) Expr { return Expr{Kind: ExprField, Field: path} }
 
 // Type derivation is total over the vocabulary: every kind either yields a type or refuses,
 // and none silently produces the zero value.
 func TestCompileExpressionDerivesTypes(t *testing.T) {
-	schema := expressionSchema(t)
+	schema := extendedExpressionSchema(t)
 	for _, test := range []struct {
 		name string
 		expr Expr
@@ -51,9 +104,17 @@ func TestCompileExpressionDerivesTypes(t *testing.T) {
 	}{
 		{"string literal", stringLiteral(t, "x"), TypeString},
 		{"int literal", intLiteral(3), TypeInt64},
+		{"timestamp literal", timestampLiteral(t, "2026-08-21T10:00:00Z"), TypeTimestamp},
+		{"duration literal", durationLiteral(3600), TypeDuration},
+		{"decimal literal", decimalLiteral(t, "123.45"), TypeDecimal},
+		{"date literal", dateLiteral(t, "2026-08-21"), TypeDate},
 		{"string field", field("driver.assignment_key"), TypeString},
 		{"atom field", field("driver.hos_anchor"), TypeAtom},
 		{"int field", field("driver.hos_elapsed_hours"), TypeInt64},
+		{"timestamp field", field("driver.created_at"), TypeTimestamp},
+		{"duration field", field("driver.shift_duration"), TypeDuration},
+		{"decimal field", field("driver.pay_rate"), TypeDecimal},
+		{"date field", field("driver.effective_date"), TypeDate},
 		{"exists", Expr{Kind: ExprExists, Field: "driver.hos_anchor"}, TypeBool},
 		{"not", Expr{Kind: ExprNot, Args: []Expr{
 			{Kind: ExprExists, Field: "driver.hos_anchor"}}}, TypeBool},
@@ -64,10 +125,71 @@ func TestCompileExpressionDerivesTypes(t *testing.T) {
 			{Kind: ExprExists, Field: "driver.assignment_key"}}}, TypeBool},
 		{"equal on atoms", Expr{Kind: ExprEqual, Args: []Expr{
 			field("driver.hos_anchor"), field("driver.hos_anchor")}}, TypeBool},
+		{"equal on decimals", Expr{Kind: ExprEqual, Args: []Expr{
+			field("driver.pay_rate"), decimalLiteral(t, "50.00")}}, TypeBool},
+		{"equal on dates", Expr{Kind: ExprEqual, Args: []Expr{
+			field("driver.effective_date"), dateLiteral(t, "2026-08-21")}}, TypeBool},
 		{"less on ints", Expr{Kind: ExprLess, Args: []Expr{
 			field("driver.hos_driving_hours"), field("driver.hos_elapsed_hours")}}, TypeBool},
-		{"add", Expr{Kind: ExprAdd, Args: []Expr{
+		{"less on decimals", Expr{Kind: ExprLess, Args: []Expr{
+			field("driver.pay_rate"), decimalLiteral(t, "100.00")}}, TypeBool},
+		{"less on timestamps", Expr{Kind: ExprLess, Args: []Expr{
+			field("driver.created_at"), timestampLiteral(t, "2026-08-21T12:00:00Z")}}, TypeBool},
+		{"less on dates", Expr{Kind: ExprLess, Args: []Expr{
+			field("driver.effective_date"), dateLiteral(t, "2026-12-31")}}, TypeBool},
+		{"add ints", Expr{Kind: ExprAdd, Args: []Expr{
 			field("driver.hos_elapsed_hours"), intLiteral(1)}}, TypeInt64},
+		{"add decimals", Expr{Kind: ExprAdd, Args: []Expr{
+			field("driver.pay_rate"), decimalLiteral(t, "5.50")}}, TypeDecimal},
+		{"add timestamp and duration", Expr{Kind: ExprAdd, Args: []Expr{
+			field("driver.created_at"), durationLiteral(3600)}}, TypeTimestamp},
+		{"subtract ints", Expr{Kind: ExprSubtract, Args: []Expr{
+			field("driver.hos_elapsed_hours"), field("driver.hos_driving_hours")}}, TypeInt64},
+		{"subtract decimals", Expr{Kind: ExprSubtract, Args: []Expr{
+			field("driver.pay_rate"), decimalLiteral(t, "2.00")}}, TypeDecimal},
+		{"subtract timestamps", Expr{Kind: ExprSubtract, Args: []Expr{
+			field("driver.created_at"), timestampLiteral(t, "2026-08-20T00:00:00Z")}}, TypeDuration},
+		{"subtract timestamp and duration", Expr{Kind: ExprSubtract, Args: []Expr{
+			field("driver.created_at"), durationLiteral(1800)}}, TypeTimestamp},
+		{"multiply ints", Expr{Kind: ExprMultiply, Args: []Expr{
+			field("driver.hos_elapsed_hours"), intLiteral(2)}}, TypeInt64},
+		{"multiply decimals", Expr{Kind: ExprMultiply, Args: []Expr{
+			field("driver.pay_rate"), decimalLiteral(t, "1.10")}}, TypeDecimal},
+		{"multiply duration by int", Expr{Kind: ExprMultiply, Args: []Expr{
+			field("driver.shift_duration"), intLiteral(3)}}, TypeDuration},
+		{"divide ints", Expr{Kind: ExprDivide, Args: []Expr{
+			field("driver.hos_elapsed_hours"), intLiteral(2)}}, TypeInt64},
+		{"divide decimals", Expr{Kind: ExprDivide, Args: []Expr{
+			field("driver.pay_rate"), decimalLiteral(t, "2.00")}}, TypeDecimal},
+		{"modulo ints", Expr{Kind: ExprModulo, Args: []Expr{
+			field("driver.hos_elapsed_hours"), intLiteral(8)}}, TypeInt64},
+		{"abs int", Expr{Kind: ExprAbs, Args: []Expr{intLiteral(-5)}}, TypeInt64},
+		{"abs decimal", Expr{Kind: ExprAbs, Args: []Expr{decimalLiteral(t, "-12.34")}}, TypeDecimal},
+		{"abs duration", Expr{Kind: ExprAbs, Args: []Expr{durationLiteral(-3600)}}, TypeDuration},
+		{"clamp int", Expr{Kind: ExprClamp, Args: []Expr{
+			field("driver.hos_elapsed_hours"), intLiteral(0), intLiteral(70)}}, TypeInt64},
+		{"clamp decimal", Expr{Kind: ExprClamp, Args: []Expr{
+			field("driver.pay_rate"), decimalLiteral(t, "15.00"), decimalLiteral(t, "100.00")}}, TypeDecimal},
+		{"timestamp_add", Expr{Kind: ExprTimestampAdd, Args: []Expr{
+			field("driver.created_at"), durationLiteral(7200)}}, TypeTimestamp},
+		{"timestamp_diff", Expr{Kind: ExprTimestampDiff, Args: []Expr{
+			field("driver.created_at"), timestampLiteral(t, "2026-08-21T00:00:00Z")}}, TypeDuration},
+		{"date_extract year from timestamp", Expr{Kind: ExprDateExtract, Field: "year", Args: []Expr{
+			field("driver.created_at")}}, TypeInt64},
+		{"date_extract day from date", Expr{Kind: ExprDateExtract, Field: "day", Args: []Expr{
+			field("driver.effective_date")}}, TypeInt64},
+		{"concat strings", Expr{Kind: ExprConcat, Args: []Expr{
+			field("driver.assignment_key"), stringLiteral(t, "-suffix")}}, TypeString},
+		{"substring", Expr{Kind: ExprSubstring, Args: []Expr{
+			field("driver.assignment_key"), intLiteral(0), intLiteral(3)}}, TypeString},
+		{"trim", Expr{Kind: ExprTrim, Args: []Expr{
+			field("driver.assignment_key")}}, TypeString},
+		{"if condition", Expr{Kind: ExprIf, Args: []Expr{
+			Expr{Kind: ExprExists, Field: "driver.created_at"},
+			field("driver.hos_elapsed_hours"),
+			intLiteral(0)}}, TypeInt64},
+		{"coalesce", Expr{Kind: ExprCoalesce, Args: []Expr{
+			field("driver.hos_elapsed_hours"), intLiteral(0)}}, TypeInt64},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			compiled, err := CompileExpression(schema, testCompilerVersion, test.expr)
@@ -85,7 +207,7 @@ func TestCompileExpressionDerivesTypes(t *testing.T) {
 // nothing, and each must be refused at compile time rather than surfacing as a runtime
 // surprise in a later slice.
 func TestCompileExpressionRefusals(t *testing.T) {
-	schema := expressionSchema(t)
+	schema := extendedExpressionSchema(t)
 	deep := field("driver.hos_elapsed_hours")
 	for range maxExprDepth + 2 {
 		deep = Expr{Kind: ExprAdd, Args: []Expr{deep, intLiteral(1)}}
@@ -135,6 +257,24 @@ func TestCompileExpressionRefusals(t *testing.T) {
 			field("driver.assignment_key"), stringLiteral(t, "x")}}},
 		{"add on strings", Expr{Kind: ExprAdd, Args: []Expr{
 			field("driver.assignment_key"), stringLiteral(t, "x")}}},
+		{"date_extract unknown unit", Expr{Kind: ExprDateExtract, Field: "century", Args: []Expr{
+			field("driver.created_at")}}},
+		{"date_extract hour from date", Expr{Kind: ExprDateExtract, Field: "hour", Args: []Expr{
+			field("driver.effective_date")}}},
+		{"if mismatched branches", Expr{Kind: ExprIf, Args: []Expr{
+			Expr{Kind: ExprExists, Field: "driver.created_at"}, field("driver.assignment_key"), intLiteral(1)}}},
+		{"clamp mismatched types", Expr{Kind: ExprClamp, Args: []Expr{
+			field("driver.hos_elapsed_hours"), decimalLiteral(t, "0.0"), intLiteral(100)}}},
+		{"concat non-string", Expr{Kind: ExprConcat, Args: []Expr{
+			field("driver.assignment_key"), intLiteral(1)}}},
+		{"substring on non-string", Expr{Kind: ExprSubstring, Args: []Expr{
+			field("driver.hos_elapsed_hours"), intLiteral(0), intLiteral(1)}}},
+		{"trim on non-string", Expr{Kind: ExprTrim, Args: []Expr{
+			field("driver.hos_elapsed_hours")}}},
+		{"modulo on decimals", Expr{Kind: ExprModulo, Args: []Expr{
+			field("driver.pay_rate"), decimalLiteral(t, "2.0")}}},
+		{"timestamp_diff with int", Expr{Kind: ExprTimestampDiff, Args: []Expr{
+			field("driver.created_at"), intLiteral(1)}}},
 		{"deeper than the bound", deep},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -474,4 +614,262 @@ func TestExpressionCanonicalGoldenVectors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExtendedExpressionEvaluation(t *testing.T) {
+	schema := extendedExpressionSchema(t)
+	fields := map[FieldName]Value{
+		"assignment_key":    mustString(t, "  ORD-12345  "),
+		"hos_anchor":        mustAtom(t, "T0"),
+		"hos_elapsed_hours": NewInt64Value(10),
+		"hos_driving_hours": NewInt64Value(6),
+		"created_at":        mustTimestamp(t, "2026-08-21T10:00:00Z"),
+		"shift_duration":    NewDurationValue(3600),
+		"pay_rate":          mustDecimal(t, "25.50"),
+		"effective_date":    mustDate(t, "2026-08-21"),
+	}
+	entity, err := NewEntity(EntityRef{
+		Kind: "driver",
+		ID:   EntityID("sha256:1111111111111111111111111111111111111111111111111111111111111111"),
+	}, fields)
+	if err != nil {
+		t.Fatalf("NewEntity: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		expr      Expr
+		wantType  ExprType
+		wantValue Value
+		wantBool  bool
+		isBool    bool
+	}{
+		{
+			name: "subtract ints",
+			expr: Expr{Kind: ExprSubtract, Args: []Expr{
+				field("driver.hos_elapsed_hours"), field("driver.hos_driving_hours"),
+			}},
+			wantType:  TypeInt64,
+			wantValue: NewInt64Value(4),
+		},
+		{
+			name: "subtract decimals",
+			expr: Expr{Kind: ExprSubtract, Args: []Expr{
+				field("driver.pay_rate"), decimalLiteral(t, "5.50"),
+			}},
+			wantType:  TypeDecimal,
+			wantValue: mustDecimal(t, "20"),
+		},
+		{
+			name: "subtract timestamps to duration",
+			expr: Expr{Kind: ExprSubtract, Args: []Expr{
+				field("driver.created_at"), timestampLiteral(t, "2026-08-21T09:00:00Z"),
+			}},
+			wantType:  TypeDuration,
+			wantValue: NewDurationValue(3600),
+		},
+		{
+			name: "subtract duration from timestamp",
+			expr: Expr{Kind: ExprSubtract, Args: []Expr{
+				field("driver.created_at"), durationLiteral(3600),
+			}},
+			wantType:  TypeTimestamp,
+			wantValue: mustTimestamp(t, "2026-08-21T09:00:00Z"),
+		},
+		{
+			name: "multiply ints",
+			expr: Expr{Kind: ExprMultiply, Args: []Expr{
+				field("driver.hos_driving_hours"), intLiteral(2),
+			}},
+			wantType:  TypeInt64,
+			wantValue: NewInt64Value(12),
+		},
+		{
+			name: "multiply decimals",
+			expr: Expr{Kind: ExprMultiply, Args: []Expr{
+				field("driver.pay_rate"), decimalLiteral(t, "2"),
+			}},
+			wantType:  TypeDecimal,
+			wantValue: mustDecimal(t, "51"),
+		},
+		{
+			name: "divide ints",
+			expr: Expr{Kind: ExprDivide, Args: []Expr{
+				field("driver.hos_elapsed_hours"), intLiteral(2),
+			}},
+			wantType:  TypeInt64,
+			wantValue: NewInt64Value(5),
+		},
+		{
+			name: "divide decimals",
+			expr: Expr{Kind: ExprDivide, Args: []Expr{
+				field("driver.pay_rate"), decimalLiteral(t, "2"),
+			}},
+			wantType:  TypeDecimal,
+			wantValue: mustDecimal(t, "12.75"),
+		},
+		{
+			name: "modulo ints",
+			expr: Expr{Kind: ExprModulo, Args: []Expr{
+				field("driver.hos_elapsed_hours"), intLiteral(4),
+			}},
+			wantType:  TypeInt64,
+			wantValue: NewInt64Value(2),
+		},
+		{
+			name:      "abs negative decimal",
+			expr:      Expr{Kind: ExprAbs, Args: []Expr{decimalLiteral(t, "-123.45")}},
+			wantType:  TypeDecimal,
+			wantValue: mustDecimal(t, "123.45"),
+		},
+		{
+			name: "clamp inside range",
+			expr: Expr{Kind: ExprClamp, Args: []Expr{
+				field("driver.hos_elapsed_hours"), intLiteral(0), intLiteral(14),
+			}},
+			wantType:  TypeInt64,
+			wantValue: NewInt64Value(10),
+		},
+		{
+			name: "clamp below min",
+			expr: Expr{Kind: ExprClamp, Args: []Expr{
+				field("driver.hos_elapsed_hours"), intLiteral(12), intLiteral(14),
+			}},
+			wantType:  TypeInt64,
+			wantValue: NewInt64Value(12),
+		},
+		{
+			name: "timestamp_add",
+			expr: Expr{Kind: ExprTimestampAdd, Args: []Expr{
+				field("driver.created_at"), durationLiteral(7200),
+			}},
+			wantType:  TypeTimestamp,
+			wantValue: mustTimestamp(t, "2026-08-21T12:00:00Z"),
+		},
+		{
+			name: "timestamp_diff",
+			expr: Expr{Kind: ExprTimestampDiff, Args: []Expr{
+				field("driver.created_at"), timestampLiteral(t, "2026-08-21T08:00:00Z"),
+			}},
+			wantType:  TypeDuration,
+			wantValue: NewDurationValue(7200),
+		},
+		{
+			name: "date_extract year from timestamp",
+			expr: Expr{Kind: ExprDateExtract, Field: "year", Args: []Expr{
+				field("driver.created_at"),
+			}},
+			wantType:  TypeInt64,
+			wantValue: NewInt64Value(2026),
+		},
+		{
+			name: "date_extract day from date",
+			expr: Expr{Kind: ExprDateExtract, Field: "day", Args: []Expr{
+				field("driver.effective_date"),
+			}},
+			wantType:  TypeInt64,
+			wantValue: NewInt64Value(21),
+		},
+		{
+			name: "concat",
+			expr: Expr{Kind: ExprConcat, Args: []Expr{
+				stringLiteral(t, "PREFIX-"),
+				stringLiteral(t, "CORE-"),
+				stringLiteral(t, "SUFFIX"),
+			}},
+			wantType:  TypeString,
+			wantValue: mustString(t, "PREFIX-CORE-SUFFIX"),
+		},
+		{
+			name: "substring",
+			expr: Expr{Kind: ExprSubstring, Args: []Expr{
+				stringLiteral(t, "ABCDEF"), intLiteral(2), intLiteral(3),
+			}},
+			wantType:  TypeString,
+			wantValue: mustString(t, "CDE"),
+		},
+		{
+			name: "substring with max int64 length",
+			expr: Expr{Kind: ExprSubstring, Args: []Expr{
+				stringLiteral(t, "hello"), intLiteral(1), intLiteral(9223372036854775807),
+			}},
+			wantType:  TypeString,
+			wantValue: mustString(t, "ello"),
+		},
+		{
+			name: "substring start beyond string length",
+			expr: Expr{Kind: ExprSubstring, Args: []Expr{
+				stringLiteral(t, "hello"), intLiteral(10), intLiteral(5),
+			}},
+			wantType:  TypeString,
+			wantValue: mustString(t, ""),
+		},
+		{
+			name: "trim",
+			expr: Expr{Kind: ExprTrim, Args: []Expr{
+				field("driver.assignment_key"),
+			}},
+			wantType:  TypeString,
+			wantValue: mustString(t, "ORD-12345"),
+		},
+		{
+			name: "if true branch",
+			expr: Expr{Kind: ExprIf, Args: []Expr{
+				Expr{Kind: ExprEqual, Args: []Expr{field("driver.hos_driving_hours"), intLiteral(6)}},
+				stringLiteral(t, "yes"),
+				stringLiteral(t, "no"),
+			}},
+			wantType:  TypeString,
+			wantValue: mustString(t, "yes"),
+		},
+		{
+			name: "if false branch",
+			expr: Expr{Kind: ExprIf, Args: []Expr{
+				Expr{Kind: ExprEqual, Args: []Expr{field("driver.hos_driving_hours"), intLiteral(10)}},
+				stringLiteral(t, "yes"),
+				stringLiteral(t, "no"),
+			}},
+			wantType:  TypeString,
+			wantValue: mustString(t, "no"),
+		},
+		{
+			name: "coalesce first",
+			expr: Expr{Kind: ExprCoalesce, Args: []Expr{
+				field("driver.hos_elapsed_hours"), intLiteral(99),
+			}},
+			wantType:  TypeInt64,
+			wantValue: NewInt64Value(10),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := evaluateExpr(schema, tc.expr, entity)
+			if err != nil {
+				t.Fatalf("evaluateExpr: %v", err)
+			}
+			if res.kind != tc.wantType {
+				t.Fatalf("result kind = %s, want %s", res.kind, tc.wantType)
+			}
+			if tc.isBool {
+				if res.boolean != tc.wantBool {
+					t.Fatalf("result bool = %v, want %v", res.boolean, tc.wantBool)
+				}
+			} else {
+				if !res.value.Equal(tc.wantValue) {
+					t.Fatalf("result value = %v, want %v", res.value, tc.wantValue)
+				}
+			}
+		})
+	}
+
+	t.Run("subtract min int64 duration from timestamp refuses overflow", func(t *testing.T) {
+		subExpr := Expr{Kind: ExprSubtract, Args: []Expr{
+			field("driver.created_at"),
+			durationLiteral(-9223372036854775808),
+		}}
+		if _, err := evaluateExpr(schema, subExpr, entity); err == nil {
+			t.Fatal("evaluateExpr accepted subtract with -9223372036854775808 duration")
+		}
+	})
 }

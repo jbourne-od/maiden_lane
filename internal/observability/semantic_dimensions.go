@@ -376,24 +376,6 @@ func observedInvariantCode(code app.ObservationCode) (closedCode, bool) {
 		return closedCode{"OP_RELATION_ALREADY_PRESENT"}, true
 	case app.CodeOpRelationEndpointMissing:
 		return closedCode{"OP_RELATION_ENDPOINT_MISSING"}, true
-	case app.CodeDeclaredSourceNotFound:
-		return closedCode{"DECLARED_SOURCE_NOT_FOUND"}, true
-	case app.CodeDeclaredSourceKindInvalid:
-		return closedCode{"DECLARED_SOURCE_KIND_INVALID"}, true
-	case app.CodeTeamAssignmentKeyInvalid:
-		return closedCode{"TEAM_ASSIGNMENT_KEY_INVALID"}, true
-	case app.CodeTeamAssignmentKeyMismatch:
-		return closedCode{"TEAM_ASSIGNMENT_KEY_MISMATCH"}, true
-	case app.CodeTeamMemberCardinalityInvalid:
-		return closedCode{"TEAM_MEMBER_CARDINALITY_INVALID"}, true
-	case app.CodeHOSTupleIncomplete:
-		return closedCode{"HOS_TUPLE_INCOMPLETE"}, true
-	case app.CodeHOSDurationInvalid:
-		return closedCode{"HOS_DURATION_INVALID"}, true
-	case app.CodeHOSAnchorMismatch:
-		return closedCode{"HOS_ANCHOR_MISMATCH"}, true
-	case app.CodeHOSAggregateInvalid:
-		return closedCode{"HOS_AGGREGATE_INVALID"}, true
 	case app.CodeSelectionCardinalityInvalid:
 		return closedCode{"SELECTION_CARDINALITY_INVALID"}, true
 	case app.CodeSelectionEmpty:

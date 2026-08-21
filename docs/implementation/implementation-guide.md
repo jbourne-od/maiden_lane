@@ -8,107 +8,39 @@ the history. The ratified Inviolates and then the HLD outrank this guide.
 
 ## Current capabilities
 
-- One Go module and one `maiden-lane` binary.
-- A `serve` command with explicit listen configuration and graceful shutdown.
-- A chi router exposing `/healthz` and `/readyz`.
-- Structured JSON application logging through `log/slog`.
-- Explicit OpenTelemetry trace and metric providers with disabled or
-  OTLP-over-HTTP/protobuf operation.
-- Privacy-safe registered-route HTTP instrumentation and bounded telemetry
-  flush/shutdown after the HTTP server drains.
-- Tracked Staticcheck and govulncheck tools.
-- Local verification and a non-root container build.
-- GitHub Actions verification and ECR image publication.
-- A pure, standard-library semantic kernel with immutable typed schemas,
-  values, entity-graph states, pinned worlds, and canonical content identities.
-- Deterministic compilation and execution of the closed rule language:
-  selectors, member expressions, group predicates (`all_members`, `any_members`,
-  `all_equal`), group reductions (`count`, `sum`, `min`, `max`), assignments,
-  checkpoint boundaries, invariant obligations, and completeness-profile
-  declarations.
-- An immutable, schema-bound, content-addressed atomic patch subset containing
-  exactly `Insert`, `Relate`, and `Update`, with closed operation failures,
-  explicit update before-images, success-only accepted-application receipts,
-  and receipt-authorized verified inverse application.
-- A deterministic reference executor for the compiled plan, including verified
-  run binding, authorable select-and-assign transformations with group reductions,
-  the closed related-entity and related-field aggregate operators, compiler-derived
-  protected invariant results, typed semantic failure reports, and immutable
-  accepted-only journals.
-- Versioned identities for provenance policy, semantic input/run/execution,
-  synthetic entities, accepted journal entries and prefixes, invariant-result
-  sets, and protected/integrity failure reports. Executor build identity affects
-  only `ExecutionID`; accepted semantic artifacts remain backend-independent.
-- Pure checkpoint sealing at exact compiled plan prefixes. A sealed immutable
-  manifest binds its declared checkpoint identity, plan/run/input/world/policy
-  replay links, accepted journal-prefix digest, complete applicable protected
-  invariant-result digest, and canonical state digest. Claim identity remains
-  distinct from full-manifest content identity.
-- Replay-verified refusal for incomplete or corrupt prefixes, state divergence,
-  incomplete protected evidence, and one-claim/two-manifest conflicts. These
-  established-run defects are typed integrity results and produce no checkpoint.
-- Immutable readiness assessment over sealed checkpoints with explicit
-  entity-kind scope, universal aggregation, documented vacuous-empty semantics,
-  and profile ordering proved from normalized implication rather than names.
-  Assessment identity is derived from the checkpoint artifact and profile, and
-  assessing mutates no state or journal.
-- A data-only ratified team-HOS fixture package holding the sanitized
-  declarations and the two initial-state variants. It implements no
-  transformer, evaluator, or alternate canonicalizer, and no production binary
-  imports it.
-- An application spine that orchestrates compile, bind, transition, seal, and
-  assess generically over the compiled plan, advancing an independently
-  verified dependency-closed frontier. Semantic rejection returns a typed
-  result with a nil Go error; machinery inability returns the retained prefix
-  with a non-nil error.
-- A closed, non-authoritative observation contract owned by the application,
-  and an OpenTelemetry adapter that implements it with five spans and the five
-  registered semantic instruments in `METRICS.md`.
-- Stable typed application machinery errors with fixed safe text and preserved
-  cause chains, registered in `ERRORS.md`.
-- A tenant-scoped HTTP surface: plan compilation, plan retrieval including
-  declarations the compiler accepted, asynchronous execution submission,
-  execution reads, comparison contract creation (`POST /v1/comparisons`),
-  comparison contract retrieval (`GET /v1/comparisons/{comparisonID}`), and
-  promotion gate evaluation (`POST /v1/publications`). `api/openapi.yaml` is the
-  authoritative contract; Go server and client code are generated from it and a
-  drift gate runs inside `make verify`.
-- Replay corpus identity, comparison policy and comparison identity in the
-  kernel, with immutable persistence and rehydration.
-- Durable executions and a work queue. The executions table *is* the queue;
-  a worker claims with `SELECT … FOR UPDATE SKIP LOCKED`, runs the spine, and
-  stores the result.
-- A worker in `internal/worker`, run either in the serving process or as a
-  separate `work` mode of the same binary.
-- Storage interfaces owned by the application in `internal/ports`, with an
-  in-process adapter in `internal/adapters/memory` and a durable PostgreSQL
-  adapter in `internal/adapters/postgres`. Both are held to one shared
-  behavioural contract in `internal/ports/storagecontract`, which is what makes
-  substitutability a tested property rather than a claim.
-
-There is no AWS Batch dispatch or production team-HOS policy.
+- One Go module and one `maiden-lane` binary with subcommands: `serve`, `compile`, `run`, `transpile sql`, `transpile dbt`, `diff`, `gate`, `version`.
+- A pure, closed DSL parser and compiler pipeline in `internal/dsl` converting human/agent authorable `.ml` rules into canonical ASTs and `semantic.CompileRequest`.
+- Full closed expression AST across 30 `ExprKind` variants supporting arithmetic, pure timestamp diffs/truncations, string operations, durations, decimals, and conditional `if/else` logic.
+- All 7 structural transformation operators implemented and certified: `SelectAndAssign`, `InsertEntity`, `DeleteEntity`, `RelateEntities`, `UnrelateEntities`, `MergeEntities`, `SplitEntity`.
+- A 9-clause fail-closed promotion gate engine in `internal/promotion` evaluating static validation, provenance, protected invariants, readiness assessments, pinned identities, comparison corpora, metric non-regression, digest consistency, and backend certification.
+- Deterministic Target SQL and dbt transpiler backends in `internal/transpiler/sql` and `internal/transpiler/dbt`, producing composable CTE query DAGs and complete deployable dbt project directory structures from canonical Plans.
+- Comprehensive HTTP API surface in `internal/httpapi` with complete OpenAPI v1 specification, tenant isolation, RFC 9457 Problem Details, publication receipts, and comparison diffing.
+- AI Agent Skill in `skills/maiden-lane-transformer/SKILL.md` empowering Antigravity and automated agents to author, compile, transpile, and gate transformations.
+- Complete Odyssey Superiority test suite in `internal/fixtures/odyssey_superiority_test.go` verifying mathematical determinism, static safety, multi-backend portability, and fail-closed promotion gating.
 
 ## Current repository map
 
 ```text
-api/openapi.yaml                 current health wire contract
-cmd/maiden-lane/main.go          CLI, process composition, server lifecycle
-internal/httpapi/router.go       HTTP transport routes and handlers
-internal/observability/          operational config, slog, OTel runtime, HTTP instrumentation, and the semantic observer adapter
-internal/semantic/               pure typed state, compiler, atomic patches, reference executor, invariants, journal, checkpoints, and readiness
-internal/fixtures/teamhos/       data-only ratified team-HOS declarations and initial-state variants
+api/openapi.yaml                 authoritative OpenAPI specification
+cmd/maiden-lane/                 CLI subcommands (compile, run, transpile, diff, gate, serve) and server lifecycle
+internal/adapters/memory/        in-process storage adapter
+internal/adapters/postgres/      durable PostgreSQL adapter and migrations
 internal/app/                    spine orchestration, verified frontier, closed observation contract, typed machinery errors
-internal/httpapi/                transport: generated routing, problems, tenant scoping, wire translation, handlers
+internal/dsl/                    text DSL lexer, parser, formatter, and AST lowering pipeline (.ml)
+internal/fixtures/teamhos/       data-only ratified team-HOS declarations and initial-state variants
+internal/fixtures/               end-to-end Odyssey superiority and comparative benchmarks
+internal/httpapi/                HTTP transport: routing, problem details, tenant scoping, handlers
 internal/httpapi/openapiv1/      GENERATED server types and routing; never hand-edited
 internal/httpapiclient/          GENERATED client, used only by tests
-internal/ports/                  storage interfaces owned by the application
-internal/adapters/memory/        in-process storage adapter
-internal/adapters/postgres/      durable PostgreSQL adapter and its schema
-internal/worker/                 claims queued executions and stores their results
-internal/ports/storagecontract/  the behavioural contract both adapters must pass
-Dockerfile                       non-root application image
-Makefile                         explicit local verification commands
-.github/workflows/pipeline.yml   CI and ECR publication
+internal/observability/          operational config, slog, OTel runtime, HTTP instrumentation, and semantic observer adapter
+internal/ports/                  storage and policy interfaces owned by the application
+internal/ports/storagecontract/  behavioural contract for storage adapters
+internal/promotion/              9-clause fail-closed promotion gate evaluation and backend certification
+internal/semantic/               pure typed state, compiler, atomic patches, 7 structural operators, expression AST, journal, checkpoints, diffing, and readiness
+internal/transpiler/dbt/         deterministic dbt project generator
+internal/transpiler/sql/         deterministic SQL CTE pipeline and dialect transpiler
+internal/worker/                 claims queued executions and stores results
+skills/maiden-lane-transformer/  AI agent skill definition and tool reference
 ```
 
 Only implemented packages appear in this map.

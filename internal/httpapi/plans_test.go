@@ -187,7 +187,7 @@ func TestEveryVersionedRouteRejectsAMalformedTenant(t *testing.T) {
 			} else {
 				// An empty object is enough: scoping is enforced before a body
 				// is read, so no route should get as far as parsing it.
-				recorder = postJSON(t, router, op.path, tenant, map[string]any{})
+				recorder = requestJSON(t, router, op.method, op.path, tenant, map[string]any{})
 			}
 			if recorder.Code != http.StatusBadRequest {
 				t.Errorf("%s %s with tenant %q = %d, want 400",
@@ -219,7 +219,6 @@ func TestCreatePlanRejectsMalformedBodies(t *testing.T) {
 	if unknownMember.Code != http.StatusBadRequest {
 		t.Errorf("unknown member status = %d, want 400", unknownMember.Code)
 	}
-
 	wrongMedia := httptest.NewRecorder()
 	formRequest := httptest.NewRequest(http.MethodPost, "/v1/plans", bytes.NewReader([]byte(`a=b`)))
 	formRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -228,6 +227,22 @@ func TestCreatePlanRejectsMalformedBodies(t *testing.T) {
 	if wrongMedia.Code != http.StatusUnsupportedMediaType {
 		t.Errorf("wrong media type status = %d, want 415", wrongMedia.Code)
 	}
+}
+
+func requestJSON(t *testing.T, router http.Handler, method, path, tenant string, body any) *httptest.ResponseRecorder {
+	t.Helper()
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	request := httptest.NewRequest(method, path, bytes.NewReader(encoded))
+	request.Header.Set("Content-Type", "application/json")
+	if tenant != "" {
+		request.Header.Set(tenantHeader, tenant)
+	}
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	return recorder
 }
 
 // fixtureDeclarations renders the ratified team-HOS declarations as the wire
@@ -337,7 +352,14 @@ func newTestRouter(t *testing.T) http.Handler {
 
 func oneStoreDependencies() Dependencies {
 	store := memory.NewStore()
-	return Dependencies{Plans: store, Executions: store, Policies: store, Publications: store, Comparisons: store}
+	return Dependencies{
+		Plans:        store,
+		Executions:   store,
+		Policies:     store,
+		Publications: store,
+		Comparisons:  store,
+		Corpora:      store,
+	}
 }
 
 // Production break caught by running the binary, not by the suite: the compiler

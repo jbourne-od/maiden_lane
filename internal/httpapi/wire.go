@@ -57,6 +57,18 @@ func valueFromWire(value openapiv1.Value) (semantic.Value, error) {
 	if value.Int64 != nil {
 		present++
 	}
+	if value.Timestamp != nil {
+		present++
+	}
+	if value.Duration != nil {
+		present++
+	}
+	if value.Decimal != nil {
+		present++
+	}
+	if value.Date != nil {
+		present++
+	}
 	if present != 1 {
 		return semantic.Value{}, translationError("value carries %d payloads, want exactly 1", present)
 	}
@@ -77,6 +89,26 @@ func valueFromWire(value openapiv1.Value) (semantic.Value, error) {
 			return semantic.Value{}, translationError("int64 value carries a different payload")
 		}
 		return semantic.NewInt64Value(*value.Int64), nil
+	case openapiv1.ValueKindTimestamp:
+		if value.Timestamp == nil {
+			return semantic.Value{}, translationError("timestamp value carries a different payload")
+		}
+		return semantic.NewTimestampValue(*value.Timestamp)
+	case openapiv1.ValueKindDuration:
+		if value.Duration == nil {
+			return semantic.Value{}, translationError("duration value carries a different payload")
+		}
+		return semantic.NewDurationValue(*value.Duration), nil
+	case openapiv1.ValueKindDecimal:
+		if value.Decimal == nil {
+			return semantic.Value{}, translationError("decimal value carries a different payload")
+		}
+		return semantic.NewDecimalValue(*value.Decimal)
+	case openapiv1.ValueKindDate:
+		if value.Date == nil {
+			return semantic.Value{}, translationError("date value carries a different payload")
+		}
+		return semantic.NewDateValue(*value.Date)
 	default:
 		return semantic.Value{}, translationError("unknown value kind")
 	}
@@ -96,6 +128,18 @@ func valueToWire(value semantic.Value) openapiv1.Value {
 	case semantic.ValueInt64:
 		number, _ := value.Int64()
 		return openapiv1.Value{Kind: openapiv1.ValueKindInt64, Int64: &number}
+	case semantic.ValueTimestamp:
+		ts, _ := value.Timestamp()
+		return openapiv1.Value{Kind: openapiv1.ValueKindTimestamp, Timestamp: &ts}
+	case semantic.ValueDuration:
+		dur, _ := value.Duration()
+		return openapiv1.Value{Kind: openapiv1.ValueKindDuration, Duration: &dur}
+	case semantic.ValueDecimal:
+		dec, _ := value.Decimal()
+		return openapiv1.Value{Kind: openapiv1.ValueKindDecimal, Decimal: &dec}
+	case semantic.ValueDate:
+		dt, _ := value.Date()
+		return openapiv1.Value{Kind: openapiv1.ValueKindDate, Date: &dt}
 	default:
 		return openapiv1.Value{}
 	}
@@ -149,6 +193,14 @@ func valueKindFromWire(kind openapiv1.ValueKind) (semantic.ValueKind, error) {
 		return semantic.ValueAtom, nil
 	case openapiv1.ValueKindInt64:
 		return semantic.ValueInt64, nil
+	case openapiv1.ValueKindTimestamp:
+		return semantic.ValueTimestamp, nil
+	case openapiv1.ValueKindDuration:
+		return semantic.ValueDuration, nil
+	case openapiv1.ValueKindDecimal:
+		return semantic.ValueDecimal, nil
+	case openapiv1.ValueKindDate:
+		return semantic.ValueDate, nil
 	default:
 		return 0, translationError("unknown value kind")
 	}
@@ -160,6 +212,16 @@ func valueKindToWire(kind semantic.ValueKind) openapiv1.ValueKind {
 		return openapiv1.ValueKindString
 	case semantic.ValueAtom:
 		return openapiv1.ValueKindAtom
+	case semantic.ValueInt64:
+		return openapiv1.ValueKindInt64
+	case semantic.ValueTimestamp:
+		return openapiv1.ValueKindTimestamp
+	case semantic.ValueDuration:
+		return openapiv1.ValueKindDuration
+	case semantic.ValueDecimal:
+		return openapiv1.ValueKindDecimal
+	case semantic.ValueDate:
+		return openapiv1.ValueKindDate
 	default:
 		return openapiv1.ValueKindInt64
 	}
@@ -335,28 +397,8 @@ func transformationFromWire(declaration openapiv1.TransformationDeclaration) (se
 	// operator tag. The compiler enforces the agreement; this rejects a request
 	// that carries neither or both before it gets there.
 	switch declaration.Operator {
-	case openapiv1.TransformationDeclarationOperatorFormRelatedEntity:
-		if declaration.Form == nil || declaration.Aggregate != nil {
-			return semantic.TransformationDeclaration{}, translationError("form operator without exactly its own payload")
-		}
-		translated.Operator = semantic.OperatorFormRelatedEntity
-		form, err := formFromWire(*declaration.Form)
-		if err != nil {
-			return semantic.TransformationDeclaration{}, err
-		}
-		translated.Form = &form
-	case openapiv1.TransformationDeclarationOperatorAggregateRelatedFields:
-		if declaration.Aggregate == nil || declaration.Form != nil {
-			return semantic.TransformationDeclaration{}, translationError("aggregate operator without exactly its own payload")
-		}
-		translated.Operator = semantic.OperatorAggregateRelatedFields
-		aggregate, err := aggregateFromWire(*declaration.Aggregate)
-		if err != nil {
-			return semantic.TransformationDeclaration{}, err
-		}
-		translated.Aggregate = &aggregate
 	case openapiv1.TransformationDeclarationOperatorSelectAndAssign:
-		if declaration.SelectAssign == nil || declaration.Form != nil || declaration.Aggregate != nil {
+		if declaration.SelectAssign == nil {
 			return semantic.TransformationDeclaration{}, translationError("select-and-assign operator without exactly its own payload")
 		}
 		translated.Operator = semantic.OperatorSelectAndAssign
@@ -365,120 +407,68 @@ func transformationFromWire(declaration openapiv1.TransformationDeclaration) (se
 			return semantic.TransformationDeclaration{}, err
 		}
 		translated.SelectAssign = &payload
+	case openapiv1.TransformationDeclarationOperatorInsertEntity:
+		if declaration.InsertEntity == nil {
+			return semantic.TransformationDeclaration{}, translationError("insert-entity operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorInsertEntity
+		payload, err := insertEntityFromWire(*declaration.InsertEntity)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.InsertEntity = &payload
+	case openapiv1.TransformationDeclarationOperatorDeleteEntity:
+		if declaration.DeleteEntity == nil {
+			return semantic.TransformationDeclaration{}, translationError("delete-entity operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorDeleteEntity
+		payload, err := deleteEntityFromWire(*declaration.DeleteEntity)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.DeleteEntity = &payload
+	case openapiv1.TransformationDeclarationOperatorRelateEntities:
+		if declaration.RelateEntities == nil {
+			return semantic.TransformationDeclaration{}, translationError("relate-entities operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorRelateEntities
+		payload, err := relateEntitiesFromWire(*declaration.RelateEntities)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.RelateEntities = &payload
+	case openapiv1.TransformationDeclarationOperatorUnrelateEntities:
+		if declaration.UnrelateEntities == nil {
+			return semantic.TransformationDeclaration{}, translationError("unrelate-entities operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorUnrelateEntities
+		payload, err := unrelateEntitiesFromWire(*declaration.UnrelateEntities)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.UnrelateEntities = &payload
+	case openapiv1.TransformationDeclarationOperatorMergeEntities:
+		if declaration.MergeEntities == nil {
+			return semantic.TransformationDeclaration{}, translationError("merge-entities operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorMergeEntities
+		payload, err := mergeEntitiesFromWire(*declaration.MergeEntities)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.MergeEntities = &payload
+	case openapiv1.TransformationDeclarationOperatorSplitEntity:
+		if declaration.SplitEntity == nil {
+			return semantic.TransformationDeclaration{}, translationError("split-entity operator without exactly its own payload")
+		}
+		translated.Operator = semantic.OperatorSplitEntity
+		payload, err := splitEntityFromWire(*declaration.SplitEntity)
+		if err != nil {
+			return semantic.TransformationDeclaration{}, err
+		}
+		translated.SplitEntity = &payload
 	default:
 		return semantic.TransformationDeclaration{}, translationError("unknown operator")
-	}
-	return translated, nil
-}
-
-func formFromWire(form openapiv1.FormRelatedEntity) (semantic.FormRelatedEntityDeclaration, error) {
-	sources := make([]semantic.SourceReference, 0, len(form.Sources))
-	for _, source := range form.Sources {
-		sources = append(sources, semantic.SourceReference{
-			Kind:               semantic.EntityKind(source.Kind),
-			CanonicalSourceKey: source.CanonicalSourceKey,
-		})
-	}
-	translated := semantic.FormRelatedEntityDeclaration{
-		SourceKind:    semantic.EntityKind(form.SourceKind),
-		Sources:       sources,
-		OutputKind:    semantic.EntityKind(form.OutputKind),
-		OutputSlot:    semantic.OutputSlotKey(form.OutputSlot),
-		GroupingField: semantic.FieldPath(form.GroupingField),
-		SourceCount:   uint64(form.SourceCount),
-		CopiedFields:  fieldCopiesFromWire(form.CopiedFields),
-		RelationKind:  semantic.RelationKind(form.RelationKind),
-	}
-	if form.OutputKey != nil {
-		if form.OutputKey.Kind != openapiv1.OutputKeyExpressionKindCommonSourceField {
-			return semantic.FormRelatedEntityDeclaration{}, translationError("unknown output key kind")
-		}
-		translated.OutputKey = &semantic.OutputKeyExpression{
-			Kind:  semantic.OutputKeyCommonSourceField,
-			Field: semantic.FieldPath(form.OutputKey.Field),
-		}
-	}
-	return translated, nil
-}
-
-func aggregateFromWire(aggregate openapiv1.AggregateRelatedFields) (semantic.AggregateRelatedFieldsDeclaration, error) {
-	predicates, err := predicatesFromWire(aggregate.Predicates)
-	if err != nil {
-		return semantic.AggregateRelatedFieldsDeclaration{}, err
-	}
-	resultPredicates, err := predicatesFromWire(aggregate.ResultPredicates)
-	if err != nil {
-		return semantic.AggregateRelatedFieldsDeclaration{}, err
-	}
-	reductions, err := reductionsFromWire(aggregate.Reductions)
-	if err != nil {
-		return semantic.AggregateRelatedFieldsDeclaration{}, err
-	}
-	return semantic.AggregateRelatedFieldsDeclaration{
-		Target: semantic.OutputSlotReference{
-			Rule: semantic.RuleID(aggregate.Target.Rule),
-			Slot: semantic.OutputSlotKey(aggregate.Target.Slot),
-		},
-		RelationKind:        semantic.RelationKind(aggregate.RelationKind),
-		SourceKind:          semantic.EntityKind(aggregate.SourceKind),
-		RequiredSourceTuple: fieldPathsFromWire(&aggregate.RequiredSourceTuple),
-		Predicates:          predicates,
-		Anchor: semantic.FieldCopy{
-			Source:      semantic.FieldPath(aggregate.Anchor.Source),
-			Destination: semantic.FieldPath(aggregate.Anchor.Destination),
-		},
-		Reductions:       reductions,
-		ResultPredicates: resultPredicates,
-	}, nil
-}
-
-func predicatesFromWire(predicates *[]openapiv1.AggregatePredicate) ([]semantic.AggregatePredicate, error) {
-	if predicates == nil {
-		return nil, nil
-	}
-	translated := make([]semantic.AggregatePredicate, 0, len(*predicates))
-	for _, predicate := range *predicates {
-		kind, err := predicateKindFromWire(predicate.Kind)
-		if err != nil {
-			return nil, err
-		}
-		translated = append(translated, semantic.AggregatePredicate{
-			Kind:   kind,
-			Fields: fieldPathsFromWire(&predicate.Fields),
-		})
-	}
-	return translated, nil
-}
-
-func predicateKindFromWire(kind openapiv1.AggregatePredicateKind) (semantic.AggregatePredicateKind, error) {
-	switch kind {
-	case openapiv1.AggregatePredicateKindCompleteTuple:
-		return semantic.CompleteTuple, nil
-	case openapiv1.AggregatePredicateKindNonNegativeInt:
-		return semantic.NonNegativeInt, nil
-	case openapiv1.AggregatePredicateKindEqualFieldAcrossSources:
-		return semantic.EqualFieldAcrossSources, nil
-	case openapiv1.AggregatePredicateKindLessOrEqualFields:
-		return semantic.LessOrEqualFields, nil
-	default:
-		return 0, translationError("unknown aggregate predicate kind")
-	}
-}
-
-func reductionsFromWire(reductions *[]openapiv1.FieldReduction) ([]semantic.FieldReduction, error) {
-	if reductions == nil {
-		return nil, nil
-	}
-	translated := make([]semantic.FieldReduction, 0, len(*reductions))
-	for _, reduction := range *reductions {
-		if reduction.Kind != openapiv1.FieldReductionKindReduceInt64Max {
-			return nil, translationError("unknown reduction kind")
-		}
-		translated = append(translated, semantic.FieldReduction{
-			Kind:        semantic.ReduceInt64Max,
-			Source:      semantic.FieldPath(reduction.Source),
-			Destination: semantic.FieldPath(reduction.Destination),
-		})
 	}
 	return translated, nil
 }
@@ -532,20 +522,6 @@ func fieldPathsFromWire(paths *[]string) []semantic.FieldPath {
 	translated := make([]semantic.FieldPath, 0, len(*paths))
 	for _, path := range *paths {
 		translated = append(translated, semantic.FieldPath(path))
-	}
-	return translated
-}
-
-func fieldCopiesFromWire(copies *[]openapiv1.FieldCopy) []semantic.FieldCopy {
-	if copies == nil {
-		return nil
-	}
-	translated := make([]semantic.FieldCopy, 0, len(*copies))
-	for _, copied := range *copies {
-		translated = append(translated, semantic.FieldCopy{
-			Source:      semantic.FieldPath(copied.Source),
-			Destination: semantic.FieldPath(copied.Destination),
-		})
 	}
 	return translated
 }
@@ -695,14 +671,6 @@ func transformationToWire(declaration semantic.TransformationDeclaration) (opena
 		After:          &after,
 	}
 	switch {
-	case declaration.Form != nil:
-		projected.Operator = openapiv1.TransformationDeclarationOperatorFormRelatedEntity
-		form := formToWire(*declaration.Form)
-		projected.Form = &form
-	case declaration.Aggregate != nil:
-		projected.Operator = openapiv1.TransformationDeclarationOperatorAggregateRelatedFields
-		aggregate := aggregateToWire(*declaration.Aggregate)
-		projected.Aggregate = &aggregate
 	case declaration.SelectAssign != nil:
 		projected.Operator = openapiv1.TransformationDeclarationOperatorSelectAndAssign
 		payload, err := selectAssignToWire(*declaration.SelectAssign)
@@ -710,92 +678,53 @@ func transformationToWire(declaration semantic.TransformationDeclaration) (opena
 			return openapiv1.TransformationDeclaration{}, err
 		}
 		projected.SelectAssign = &payload
+	case declaration.InsertEntity != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorInsertEntity
+		payload, err := insertEntityToWire(*declaration.InsertEntity)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.InsertEntity = &payload
+	case declaration.DeleteEntity != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorDeleteEntity
+		payload, err := deleteEntityToWire(*declaration.DeleteEntity)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.DeleteEntity = &payload
+	case declaration.RelateEntities != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorRelateEntities
+		payload, err := relateEntitiesToWire(*declaration.RelateEntities)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.RelateEntities = &payload
+	case declaration.UnrelateEntities != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorUnrelateEntities
+		payload, err := unrelateEntitiesToWire(*declaration.UnrelateEntities)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.UnrelateEntities = &payload
+	case declaration.MergeEntities != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorMergeEntities
+		payload, err := mergeEntitiesToWire(*declaration.MergeEntities)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.MergeEntities = &payload
+	case declaration.SplitEntity != nil:
+		projected.Operator = openapiv1.TransformationDeclarationOperatorSplitEntity
+		payload, err := splitEntityToWire(*declaration.SplitEntity)
+		if err != nil {
+			return openapiv1.TransformationDeclaration{}, err
+		}
+		projected.SplitEntity = &payload
 	default:
 		return openapiv1.TransformationDeclaration{}, translationError(
 			"compiled operator has no representation in this contract version")
 	}
 	return projected, nil
-}
-
-func formToWire(form semantic.FormRelatedEntityDeclaration) openapiv1.FormRelatedEntity {
-	sources := make([]openapiv1.SourceReference, 0, len(form.Sources))
-	for _, source := range form.Sources {
-		sources = append(sources, openapiv1.SourceReference{
-			Kind:               string(source.Kind),
-			CanonicalSourceKey: source.CanonicalSourceKey,
-		})
-	}
-	copies := fieldCopiesToWire(form.CopiedFields)
-	projected := openapiv1.FormRelatedEntity{
-		SourceKind:    string(form.SourceKind),
-		Sources:       sources,
-		OutputKind:    string(form.OutputKind),
-		OutputSlot:    string(form.OutputSlot),
-		GroupingField: string(form.GroupingField),
-		SourceCount:   int64(form.SourceCount),
-		CopiedFields:  &copies,
-		RelationKind:  string(form.RelationKind),
-	}
-	if form.OutputKey != nil {
-		projected.OutputKey = &openapiv1.OutputKeyExpression{
-			Kind:  openapiv1.OutputKeyExpressionKindCommonSourceField,
-			Field: string(form.OutputKey.Field),
-		}
-	}
-	return projected
-}
-
-func aggregateToWire(aggregate semantic.AggregateRelatedFieldsDeclaration) openapiv1.AggregateRelatedFields {
-	predicates := predicatesToWire(aggregate.Predicates)
-	resultPredicates := predicatesToWire(aggregate.ResultPredicates)
-	reductions := make([]openapiv1.FieldReduction, 0, len(aggregate.Reductions))
-	for _, reduction := range aggregate.Reductions {
-		reductions = append(reductions, openapiv1.FieldReduction{
-			Kind:        openapiv1.FieldReductionKindReduceInt64Max,
-			Source:      string(reduction.Source),
-			Destination: string(reduction.Destination),
-		})
-	}
-	return openapiv1.AggregateRelatedFields{
-		Target: openapiv1.OutputSlotReference{
-			Rule: string(aggregate.Target.Rule),
-			Slot: string(aggregate.Target.Slot),
-		},
-		RelationKind:        string(aggregate.RelationKind),
-		SourceKind:          string(aggregate.SourceKind),
-		RequiredSourceTuple: fieldPathsToWire(aggregate.RequiredSourceTuple),
-		Predicates:          &predicates,
-		Anchor: openapiv1.FieldCopy{
-			Source:      string(aggregate.Anchor.Source),
-			Destination: string(aggregate.Anchor.Destination),
-		},
-		Reductions:       &reductions,
-		ResultPredicates: &resultPredicates,
-	}
-}
-
-func predicatesToWire(predicates []semantic.AggregatePredicate) []openapiv1.AggregatePredicate {
-	projected := make([]openapiv1.AggregatePredicate, 0, len(predicates))
-	for _, predicate := range predicates {
-		projected = append(projected, openapiv1.AggregatePredicate{
-			Kind:   predicateKindToWire(predicate.Kind),
-			Fields: fieldPathsToWire(predicate.Fields),
-		})
-	}
-	return projected
-}
-
-func predicateKindToWire(kind semantic.AggregatePredicateKind) openapiv1.AggregatePredicateKind {
-	switch kind {
-	case semantic.CompleteTuple:
-		return openapiv1.AggregatePredicateKindCompleteTuple
-	case semantic.NonNegativeInt:
-		return openapiv1.AggregatePredicateKindNonNegativeInt
-	case semantic.EqualFieldAcrossSources:
-		return openapiv1.AggregatePredicateKindEqualFieldAcrossSources
-	default:
-		return openapiv1.AggregatePredicateKindLessOrEqualFields
-	}
 }
 
 func profileToWire(declaration semantic.ProfileDeclaration) openapiv1.ProfileDeclaration {
@@ -830,17 +759,6 @@ func fieldPathsToWire(paths []semantic.FieldPath) []string {
 	projected := make([]string, 0, len(paths))
 	for _, path := range paths {
 		projected = append(projected, string(path))
-	}
-	return projected
-}
-
-func fieldCopiesToWire(copies []semantic.FieldCopy) []openapiv1.FieldCopy {
-	projected := make([]openapiv1.FieldCopy, 0, len(copies))
-	for _, copied := range copies {
-		projected = append(projected, openapiv1.FieldCopy{
-			Source:      string(copied.Source),
-			Destination: string(copied.Destination),
-		})
 	}
 	return projected
 }

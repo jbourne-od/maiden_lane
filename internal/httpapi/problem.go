@@ -38,6 +38,8 @@ const (
 	problemInternalError               problemKind = "internal-error"
 	problemDependencyUnavailable       problemKind = "dependency-unavailable"
 	problemPublicationConflict         problemKind = "publication-conflict"
+	problemPolicyConflict              problemKind = "policy-conflict"
+	problemExecutionConflict           problemKind = "execution-conflict"
 	problemStoredArtifactsUnverifiable problemKind = "stored-artifacts-unverifiable"
 )
 
@@ -65,6 +67,16 @@ var problemCatalog = map[problemKind]problemDefinition{
 		title:  "Publication conflict",
 		detail: "The target is not at the expected version, so this decision was formed " +
 			"against a state that no longer holds. Read the target again and decide afresh.",
+	},
+	problemPolicyConflict: {
+		status: http.StatusConflict,
+		title:  "Policy conflict",
+		detail: "The target policy version conflicts with recorded history. Either the version is not the immediate successor or it attempts to rewrite an existing version.",
+	},
+	problemExecutionConflict: {
+		status: http.StatusConflict,
+		title:  "Execution conflict",
+		detail: "The execution cannot be reattempted because it is not in a failed state.",
 	},
 	problemStoredArtifactsUnverifiable: {
 		// 500 rather than 422: the request was well formed and every dependency

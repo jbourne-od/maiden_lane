@@ -99,7 +99,8 @@ func benchmarkExecutionInputs(
 	}
 	for i := len(padded); i < entities; i++ {
 		key := fmt.Sprintf("bench-driver-%d", i)
-		assignment, err := semantic.NewStringValue("bench-assignment-" + key)
+		pairIndex := i / 2
+		assignment, err := semantic.NewStringValue(fmt.Sprintf("bench-assignment-%d", pairIndex))
 		if err != nil {
 			b.Fatalf("NewStringValue: %v", err)
 		}

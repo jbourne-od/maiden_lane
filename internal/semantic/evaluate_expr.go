@@ -1,6 +1,9 @@
 package semantic
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Evaluation of an expression against ONE BOUND ENTITY.
 //
@@ -24,8 +27,8 @@ type evaluated struct {
 }
 
 // evaluateBool evaluates an expression that must be bool.
-func evaluateBool(schema Schema, expr Expr, entity Entity) (bool, error) {
-	result, err := evaluateExpr(schema, expr, entity)
+func evaluateBool(schema Schema, expr Expr, entities ...Entity) (bool, error) {
+	result, err := evaluateExpr(schema, expr, entities...)
 	if err != nil {
 		return false, err
 	}
@@ -38,8 +41,8 @@ func evaluateBool(schema Schema, expr Expr, entity Entity) (bool, error) {
 }
 
 // evaluateValue evaluates an expression that must yield a Value.
-func evaluateValue(schema Schema, expr Expr, entity Entity) (Value, error) {
-	result, err := evaluateExpr(schema, expr, entity)
+func evaluateValue(schema Schema, expr Expr, entities ...Entity) (Value, error) {
+	result, err := evaluateExpr(schema, expr, entities...)
 	if err != nil {
 		return Value{}, err
 	}
@@ -53,8 +56,8 @@ func evaluateValue(schema Schema, expr Expr, entity Entity) (Value, error) {
 	return result.value, nil
 }
 
-// evaluateExpr walks one expression against the bound entity.
-func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
+// evaluateExpr walks one expression against the bound entities.
+func evaluateExpr(schema Schema, expr Expr, entities ...Entity) (evaluated, error) {
 	// TOTALITY, enforced rather than claimed. The header says this function is total, and an
 	// earlier version was not: Expr{Kind: ExprNot} indexed Args[0] and panicked, as did every
 	// binary kind, while the sibling arms all guarded exactly this class of un-compiled input.
@@ -82,7 +85,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: kind, value: *expr.Literal}, nil
 
 	case ExprField:
-		value, declared, present, err := boundField(schema, expr.Field, entity)
+		value, declared, present, err := boundField(schema, expr.Field, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -116,14 +119,14 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: kind, value: value}, nil
 
 	case ExprExists:
-		_, _, present, err := boundField(schema, expr.Field, entity)
+		_, _, present, err := boundField(schema, expr.Field, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
 		return evaluated{kind: TypeBool, boolean: present}, nil
 
 	case ExprNot:
-		operand, err := evaluateBool(schema, expr.Args[0], entity)
+		operand, err := evaluateBool(schema, expr.Args[0], entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
@@ -143,7 +146,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		// selection. Real inputs are sparse, so a language that cannot say "present and
 		// below" is not a language for them.
 		for i := range expr.Args {
-			operand, err := evaluateBool(schema, expr.Args[i], entity)
+			operand, err := evaluateBool(schema, expr.Args[i], entities...)
 			if err != nil {
 				return evaluated{}, err
 			}
@@ -155,7 +158,7 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 
 	case ExprAny:
 		for i := range expr.Args {
-			operand, err := evaluateBool(schema, expr.Args[i], entity)
+			operand, err := evaluateBool(schema, expr.Args[i], entities...)
 			if err != nil {
 				return evaluated{}, err
 			}
@@ -166,101 +169,557 @@ func evaluateExpr(schema Schema, expr Expr, entity Entity) (evaluated, error) {
 		return evaluated{kind: TypeBool, boolean: false}, nil
 
 	case ExprEqual:
-		left, right, err := evaluatePair(schema, expr, entity)
+		left, right, err := evaluatePair(schema, expr, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
 		if left.kind != right.kind {
 			return evaluated{}, fmt.Errorf("equal compares %s with %s", left.kind, right.kind)
 		}
-		// Bool operands compare through .boolean, not .value. A bool result carries the zero
-		// Value, so comparing values here answered false for every pair of booleans -- a
-		// total, deterministic wrong answer: equal(exists(f), exists(f)) was false even when
-		// f was present. Two checks each correct against their own reference, and neither
-		// owning the fact that TypeBool has no value.
 		if left.kind == TypeBool {
 			return evaluated{kind: TypeBool, boolean: left.boolean == right.boolean}, nil
 		}
 		return evaluated{kind: TypeBool, boolean: left.value.Equal(right.value)}, nil
 
 	case ExprLess:
-		left, right, err := evaluateInt64Pair(schema, expr, entity)
+		left, right, err := evaluatePair(schema, expr, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
-		return evaluated{kind: TypeBool, boolean: left < right}, nil
+		if left.kind != right.kind {
+			return evaluated{}, fmt.Errorf("less compares %s with %s", left.kind, right.kind)
+		}
+		switch left.kind {
+		case TypeInt64, TypeDuration, TypeTimestamp, TypeDate:
+			return evaluated{kind: TypeBool, boolean: left.value.integer < right.value.integer}, nil
+		case TypeDecimal:
+			d1, _ := parseDecimal(left.value.text)
+			d2, _ := parseDecimal(right.value.text)
+			return evaluated{kind: TypeBool, boolean: d1.Less(d2)}, nil
+		default:
+			return evaluated{}, fmt.Errorf("less not supported on %s", left.kind)
+		}
 
 	case ExprAdd:
-		left, right, err := evaluateInt64Pair(schema, expr, entity)
+		left, right, err := evaluatePair(schema, expr, entities...)
 		if err != nil {
 			return evaluated{}, err
 		}
-		// OVERFLOW IS REFUSED. Go wraps on int64 overflow, and a wrapped sum is a wrong
-		// answer the kernel would seal into a checkpoint and hash. HLD §8 says bounded
-		// arithmetic; this is where the bound is enforced rather than assumed.
-		sum := left + right
-		if (right > 0 && sum < left) || (right < 0 && sum > left) {
-			return evaluated{}, fmt.Errorf("add overflows int64")
+		if left.kind == TypeInt64 && right.kind == TypeInt64 {
+			sum, err := addInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(sum)}, nil
 		}
-		return evaluated{kind: TypeInt64, value: NewInt64Value(sum)}, nil
+		if left.kind == TypeDecimal && right.kind == TypeDecimal {
+			d1, _ := parseDecimal(left.value.text)
+			d2, _ := parseDecimal(right.value.text)
+			res, err := d1.Add(d2)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewDecimalValue(res.String())
+			return evaluated{kind: TypeDecimal, value: val}, nil
+		}
+		if left.kind == TypeDuration && right.kind == TypeDuration {
+			sum, err := addInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(sum)}, nil
+		}
+		if left.kind == TypeTimestamp && right.kind == TypeDuration {
+			ts, _ := parseTimestamp(left.value.text)
+			res, err := ts.AddDuration(right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewTimestampValue(res.String())
+			return evaluated{kind: TypeTimestamp, value: val}, nil
+		}
+		if left.kind == TypeDuration && right.kind == TypeTimestamp {
+			ts, _ := parseTimestamp(right.value.text)
+			res, err := ts.AddDuration(left.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewTimestampValue(res.String())
+			return evaluated{kind: TypeTimestamp, value: val}, nil
+		}
+		return evaluated{}, fmt.Errorf("add unsupported on %s and %s", left.kind, right.kind)
+
+	case ExprSubtract:
+		left, right, err := evaluatePair(schema, expr, entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind == TypeInt64 && right.kind == TypeInt64 {
+			diff, err := subInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(diff)}, nil
+		}
+		if left.kind == TypeDecimal && right.kind == TypeDecimal {
+			d1, _ := parseDecimal(left.value.text)
+			d2, _ := parseDecimal(right.value.text)
+			res, err := d1.Sub(d2)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewDecimalValue(res.String())
+			return evaluated{kind: TypeDecimal, value: val}, nil
+		}
+		if left.kind == TypeDuration && right.kind == TypeDuration {
+			diff, err := subInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(diff)}, nil
+		}
+		if left.kind == TypeTimestamp && right.kind == TypeTimestamp {
+			ts1, _ := parseTimestamp(left.value.text)
+			ts2, _ := parseTimestamp(right.value.text)
+			diff, err := ts1.Diff(ts2)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(diff)}, nil
+		}
+		if left.kind == TypeTimestamp && right.kind == TypeDuration {
+			ts, _ := parseTimestamp(left.value.text)
+			dur := right.value.integer
+			if dur == -9223372036854775808 {
+				return evaluated{}, fmt.Errorf("duration %d overflows negation", dur)
+			}
+			res, err := ts.AddDuration(-dur)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewTimestampValue(res.String())
+			return evaluated{kind: TypeTimestamp, value: val}, nil
+		}
+		return evaluated{}, fmt.Errorf("subtract unsupported on %s and %s", left.kind, right.kind)
+
+	case ExprMultiply:
+		left, right, err := evaluatePair(schema, expr, entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind == TypeInt64 && right.kind == TypeInt64 {
+			prod, err := mulInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(prod)}, nil
+		}
+		if left.kind == TypeDecimal && right.kind == TypeDecimal {
+			d1, _ := parseDecimal(left.value.text)
+			d2, _ := parseDecimal(right.value.text)
+			res, err := d1.Mul(d2)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewDecimalValue(res.String())
+			return evaluated{kind: TypeDecimal, value: val}, nil
+		}
+		if left.kind == TypeDuration && right.kind == TypeInt64 {
+			prod, err := mulInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(prod)}, nil
+		}
+		if left.kind == TypeInt64 && right.kind == TypeDuration {
+			prod, err := mulInt64(left.value.integer, right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(prod)}, nil
+		}
+		return evaluated{}, fmt.Errorf("multiply unsupported on %s and %s", left.kind, right.kind)
+
+	case ExprDivide:
+		left, right, err := evaluatePair(schema, expr, entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind == TypeInt64 && right.kind == TypeInt64 {
+			if right.value.integer == 0 {
+				return evaluated{}, fmt.Errorf("division by zero")
+			}
+			if left.value.integer == -9223372036854775808 && right.value.integer == -1 {
+				return evaluated{}, fmt.Errorf("division overflows int64")
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(left.value.integer / right.value.integer)}, nil
+		}
+		if left.kind == TypeDecimal && right.kind == TypeDecimal {
+			d1, _ := parseDecimal(left.value.text)
+			d2, _ := parseDecimal(right.value.text)
+			res, err := d1.Div(d2)
+			if err != nil {
+				return evaluated{}, err
+			}
+			val, _ := NewDecimalValue(res.String())
+			return evaluated{kind: TypeDecimal, value: val}, nil
+		}
+		return evaluated{}, fmt.Errorf("divide unsupported on %s and %s", left.kind, right.kind)
+
+	case ExprModulo:
+		left, right, err := evaluatePair(schema, expr, entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind == TypeInt64 && right.kind == TypeInt64 {
+			if right.value.integer == 0 {
+				return evaluated{}, fmt.Errorf("modulo by zero")
+			}
+			if left.value.integer == -9223372036854775808 && right.value.integer == -1 {
+				return evaluated{}, fmt.Errorf("modulo overflows int64")
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(left.value.integer % right.value.integer)}, nil
+		}
+		return evaluated{}, fmt.Errorf("modulo requires int64")
+
+	case ExprAbs:
+		arg, err := evaluateExpr(schema, expr.Args[0], entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		switch arg.kind {
+		case TypeInt64:
+			if arg.value.integer == -9223372036854775808 {
+				return evaluated{}, fmt.Errorf("abs overflows int64")
+			}
+			v := arg.value.integer
+			if v < 0 {
+				v = -v
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(v)}, nil
+		case TypeDuration:
+			if arg.value.integer == -9223372036854775808 {
+				return evaluated{}, fmt.Errorf("abs overflows duration")
+			}
+			v := arg.value.integer
+			if v < 0 {
+				v = -v
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(v)}, nil
+		case TypeDecimal:
+			d, _ := parseDecimal(arg.value.text)
+			res := d.Abs()
+			val, _ := NewDecimalValue(res.String())
+			return evaluated{kind: TypeDecimal, value: val}, nil
+		default:
+			return evaluated{}, fmt.Errorf("abs unsupported on %s", arg.kind)
+		}
+
+	case ExprClamp:
+		val, err := evaluateExpr(schema, expr.Args[0], entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		minVal, err := evaluateExpr(schema, expr.Args[1], entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		maxVal, err := evaluateExpr(schema, expr.Args[2], entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if val.kind != minVal.kind || val.kind != maxVal.kind {
+			return evaluated{}, fmt.Errorf("clamp types mismatch: %s, %s, %s", val.kind, minVal.kind, maxVal.kind)
+		}
+		switch val.kind {
+		case TypeInt64, TypeDuration, TypeTimestamp, TypeDate:
+			if maxVal.value.integer < minVal.value.integer {
+				return evaluated{}, fmt.Errorf("clamp min %d is greater than max %d", minVal.value.integer, maxVal.value.integer)
+			}
+			clamped := val.value.integer
+			if clamped < minVal.value.integer {
+				return minVal, nil
+			}
+			if clamped > maxVal.value.integer {
+				return maxVal, nil
+			}
+			return val, nil
+		case TypeDecimal:
+			dVal, _ := parseDecimal(val.value.text)
+			dMin, _ := parseDecimal(minVal.value.text)
+			dMax, _ := parseDecimal(maxVal.value.text)
+			res, err := dVal.Clamp(dMin, dMax)
+			if err != nil {
+				return evaluated{}, err
+			}
+			v, _ := NewDecimalValue(res.String())
+			return evaluated{kind: TypeDecimal, value: v}, nil
+		default:
+			return evaluated{}, fmt.Errorf("clamp unsupported on %s", val.kind)
+		}
+
+	case ExprTimestampAdd:
+		left, right, err := evaluatePair(schema, expr, entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind == TypeTimestamp && right.kind == TypeDuration {
+			ts, _ := parseTimestamp(left.value.text)
+			res, err := ts.AddDuration(right.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			v, _ := NewTimestampValue(res.String())
+			return evaluated{kind: TypeTimestamp, value: v}, nil
+		}
+		if left.kind == TypeDuration && right.kind == TypeTimestamp {
+			ts, _ := parseTimestamp(right.value.text)
+			res, err := ts.AddDuration(left.value.integer)
+			if err != nil {
+				return evaluated{}, err
+			}
+			v, _ := NewTimestampValue(res.String())
+			return evaluated{kind: TypeTimestamp, value: v}, nil
+		}
+		return evaluated{}, fmt.Errorf("timestamp_add requires timestamp and duration")
+
+	case ExprTimestampDiff:
+		left, right, err := evaluatePair(schema, expr, entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if left.kind == TypeTimestamp && right.kind == TypeTimestamp {
+			ts1, _ := parseTimestamp(left.value.text)
+			ts2, _ := parseTimestamp(right.value.text)
+			diff, err := ts1.Diff(ts2)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeDuration, value: NewDurationValue(diff)}, nil
+		}
+		return evaluated{}, fmt.Errorf("timestamp_diff requires timestamps")
+
+	case ExprDateExtract:
+		arg, err := evaluateExpr(schema, expr.Args[0], entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		unit := string(expr.Field)
+		if arg.kind == TypeTimestamp {
+			ts, _ := parseTimestamp(arg.value.text)
+			extracted, err := ts.DateExtract(unit)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(extracted)}, nil
+		}
+		if arg.kind == TypeDate {
+			d, _ := parseDate(arg.value.text)
+			extracted, err := d.DateExtract(unit)
+			if err != nil {
+				return evaluated{}, err
+			}
+			return evaluated{kind: TypeInt64, value: NewInt64Value(extracted)}, nil
+		}
+		return evaluated{}, fmt.Errorf("date_extract requires timestamp or date")
+
+	case ExprConcat:
+		var buf strings.Builder
+		for _, arg := range expr.Args {
+			res, err := evaluateExpr(schema, arg, entities...)
+			if err != nil {
+				return evaluated{}, err
+			}
+			if res.kind != TypeString {
+				return evaluated{}, fmt.Errorf("concat requires string, got %s", res.kind)
+			}
+			buf.WriteString(res.value.text)
+		}
+		val, err := NewStringValue(buf.String())
+		if err != nil {
+			return evaluated{}, err
+		}
+		return evaluated{kind: TypeString, value: val}, nil
+
+	case ExprSubstring:
+		strRes, err := evaluateExpr(schema, expr.Args[0], entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		startRes, err := evaluateExpr(schema, expr.Args[1], entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		lenRes, err := evaluateExpr(schema, expr.Args[2], entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if strRes.kind != TypeString || startRes.kind != TypeInt64 || lenRes.kind != TypeInt64 {
+			return evaluated{}, fmt.Errorf("substring requires (string, int64, int64)")
+		}
+		start := startRes.value.integer
+		length := lenRes.value.integer
+		if start < 0 || length < 0 {
+			return evaluated{}, fmt.Errorf("substring start and length must be non-negative")
+		}
+		runes := []rune(strRes.value.text)
+		runeCount := int64(len(runes))
+		if start >= runeCount {
+			val, _ := NewStringValue("")
+			return evaluated{kind: TypeString, value: val}, nil
+		}
+		end := runeCount
+		if length < runeCount-start {
+			end = start + length
+		}
+		val, _ := NewStringValue(string(runes[start:end]))
+		return evaluated{kind: TypeString, value: val}, nil
+
+	case ExprTrim:
+		strRes, err := evaluateExpr(schema, expr.Args[0], entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if strRes.kind != TypeString {
+			return evaluated{}, fmt.Errorf("trim requires string, got %s", strRes.kind)
+		}
+		val, _ := NewStringValue(strings.TrimSpace(strRes.value.text))
+		return evaluated{kind: TypeString, value: val}, nil
+
+	case ExprIf:
+		cond, err := evaluateBool(schema, expr.Args[0], entities...)
+		if err != nil {
+			return evaluated{}, err
+		}
+		if cond {
+			return evaluateExpr(schema, expr.Args[1], entities...)
+		}
+		return evaluateExpr(schema, expr.Args[2], entities...)
+
+	case ExprCoalesce:
+		var lastErr error
+		for _, arg := range expr.Args {
+			res, err := evaluateExpr(schema, arg, entities...)
+			if err == nil {
+				return res, nil
+			}
+			lastErr = err
+		}
+		return evaluated{}, fmt.Errorf("coalesce failed: %w", lastErr)
 
 	default:
 		return evaluated{}, fmt.Errorf("unknown expression kind %d", expr.Kind)
 	}
 }
 
+func addInt64(a, b int64) (int64, error) {
+	sum := a + b
+	if (b > 0 && sum < a) || (b < 0 && sum > a) {
+		return 0, fmt.Errorf("add overflows int64")
+	}
+	return sum, nil
+}
+
+func subInt64(a, b int64) (int64, error) {
+	diff := a - b
+	if (b > 0 && diff > a) || (b < 0 && diff < a) {
+		return 0, fmt.Errorf("subtract overflows int64")
+	}
+	return diff, nil
+}
+
+func mulInt64(a, b int64) (int64, error) {
+	if a == 0 || b == 0 {
+		return 0, nil
+	}
+	prod := a * b
+	if prod/b != a || (a == -1 && b == -9223372036854775808) {
+		return 0, fmt.Errorf("multiply overflows int64")
+	}
+	return prod, nil
+}
+
 // evaluatePair evaluates both operands of a binary node.
-func evaluatePair(schema Schema, expr Expr, entity Entity) (evaluated, evaluated, error) {
-	left, err := evaluateExpr(schema, expr.Args[0], entity)
+func evaluatePair(schema Schema, expr Expr, entities ...Entity) (evaluated, evaluated, error) {
+	left, err := evaluateExpr(schema, expr.Args[0], entities...)
 	if err != nil {
 		return evaluated{}, evaluated{}, err
 	}
-	right, err := evaluateExpr(schema, expr.Args[1], entity)
+	right, err := evaluateExpr(schema, expr.Args[1], entities...)
 	if err != nil {
 		return evaluated{}, evaluated{}, err
 	}
 	return left, right, nil
 }
 
-// evaluateInt64Pair evaluates both operands and requires them to be int64.
-func evaluateInt64Pair(schema Schema, expr Expr, entity Entity) (int64, int64, error) {
-	left, right, err := evaluatePair(schema, expr, entity)
-	if err != nil {
-		return 0, 0, err
-	}
-	leftInt, leftOK := left.value.Int64()
-	rightInt, rightOK := right.value.Int64()
-	if left.kind != TypeInt64 || right.kind != TypeInt64 || !leftOK || !rightOK {
-		return 0, 0, fmt.Errorf("arithmetic requires int64, got %s and %s", left.kind, right.kind)
-	}
-	return leftInt, rightInt, nil
-}
-
-// boundField reads a field from the bound entity, refusing a path that names another kind.
-//
-// A compiled selector has already established that every path names the selected kind, so
-// this cannot fire through that route. It is checked anyway because the evaluator is reachable
-// without one and must not read a field off an entity the path does not describe.
+// boundField reads a field from the bound entities, disambiguating endpoints and kinds.
 func boundField(
-	schema Schema, path FieldPath, entity Entity,
+	schema Schema, path FieldPath, entities ...Entity,
 ) (value Value, declared ValueKind, present bool, err error) {
+	if len(entities) == 0 {
+		return Value{}, 0, false, fmt.Errorf("no entity bound in scope")
+	}
 	kind, name := splitFieldPath(path)
 	if kind == "" || name == "" {
 		return Value{}, 0, false, fmt.Errorf("malformed field path %q", path)
 	}
-	// DECLAREDNESS, re-established rather than relied on. Without this, exists() over a path
-	// no schema declares answered false rather than refusing -- absence of a DECLARATION
-	// collapsed into absence of a VALUE, so not(exists(driver.typo)) was true for every
-	// entity while the compiler refused the identical node. The kind half of this guard was
-	// added a round earlier; this is the other half of the same sentence.
+
+	if len(entities) == 2 {
+		fromEntity, toEntity := entities[0], entities[1]
+		fromKind, toKind := fromEntity.Ref().Kind, toEntity.Ref().Kind
+
+		if kind == "from" {
+			realPath := FieldPath(string(fromKind) + "." + string(name))
+			declaredKind, isDeclared := schema.fieldKind(realPath)
+			if !isDeclared {
+				return Value{}, 0, false, fmt.Errorf("from endpoint reads undeclared field %q", realPath)
+			}
+			stored, found := fromEntity.Field(name)
+			return stored, declaredKind, found, nil
+		}
+		if kind == "to" {
+			realPath := FieldPath(string(toKind) + "." + string(name))
+			declaredKind, isDeclared := schema.fieldKind(realPath)
+			if !isDeclared {
+				return Value{}, 0, false, fmt.Errorf("to endpoint reads undeclared field %q", realPath)
+			}
+			stored, found := toEntity.Field(name)
+			return stored, declaredKind, found, nil
+		}
+		if fromKind == toKind && kind == fromKind {
+			return Value{}, 0, false, fmt.Errorf(
+				"field %q is ambiguous for same-kind relation endpoints (%s -> %s); use from.%s or to.%s",
+				path, fromKind, toKind, name, name)
+		}
+		if fromKind != toKind {
+			if kind == fromKind {
+				declaredKind, isDeclared := schema.fieldKind(path)
+				if !isDeclared {
+					return Value{}, 0, false, fmt.Errorf("from endpoint reads undeclared field %q", path)
+				}
+				stored, found := fromEntity.Field(name)
+				return stored, declaredKind, found, nil
+			}
+			if kind == toKind {
+				declaredKind, isDeclared := schema.fieldKind(path)
+				if !isDeclared {
+					return Value{}, 0, false, fmt.Errorf("to endpoint reads undeclared field %q", path)
+				}
+				stored, found := toEntity.Field(name)
+				return stored, declaredKind, found, nil
+			}
+		}
+		return Value{}, 0, false, fmt.Errorf("path %q does not match relation endpoints %s or %s", path, fromKind, toKind)
+	}
+
 	declaredKind, isDeclared := schema.fieldKind(path)
 	if !isDeclared {
 		return Value{}, 0, false, fmt.Errorf("field %q is not declared by this schema", path)
 	}
-	if kind != entity.Ref().Kind {
+	if entities[0].Ref().Kind != kind {
 		return Value{}, 0, false, fmt.Errorf(
-			"path %q does not name the bound entity kind %q", path, entity.Ref().Kind)
+			"path %q does not name the bound entity kind %q", path, entities[0].Ref().Kind)
 	}
-	stored, found := entity.Field(name)
+	stored, found := entities[0].Field(name)
 	return stored, declaredKind, found, nil
 }

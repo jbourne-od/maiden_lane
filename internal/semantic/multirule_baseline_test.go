@@ -16,9 +16,9 @@ import (
 // reason, not treat the change as a regression.
 //
 // What it shows: write-conflict analysis is field-path granular, so N rules each writing
-// team.assignment_key for a DIFFERENT instance produce C(N,2) unresolved conflicts, because
-// nothing in a field path distinguishes one team from another. That is why one rule per team
-// is not a workaround for the missing set-scoped selector.
+// driver.assignment_status without an ordering produce C(N,2) unresolved conflicts, because
+// nothing in a field path distinguishes one group from another. That is why multiple duplicate
+// rules are not a workaround when write-write overlaps exist without explicit ordering.
 func TestMultiInstanceRulesetBaseline(t *testing.T) {
 	for _, instances := range []int{2, 3, 10} {
 		t.Run(fmt.Sprintf("instances=%d", instances), func(t *testing.T) {
@@ -39,10 +39,9 @@ func TestMultiInstanceRulesetBaseline(t *testing.T) {
 				}
 			}
 			// One diagnostic per overlapping field path per unordered pair — but only for
-			// pairs no dependency path already orders (compile.go:800). This fixture's rules
-			// read driver.assignment_key and write team.assignment_key, which never intersect,
-			// so no edges exist and every pair is reported. A fixture whose rules did create
-			// edges would see conflicts SUPPRESSED, which is the case this one cannot reach.
+			// pairs no dependency path already orders. This fixture's rules
+			// read driver.assignment_key and write driver.assignment_status, which never intersect,
+			// so no edges exist and every pair is reported.
 			wantConflicts := instances * (instances - 1) / 2
 			if conflicts != wantConflicts {
 				t.Fatalf("write conflicts = %d, want %d (C(%d,2))",
@@ -52,9 +51,8 @@ func TestMultiInstanceRulesetBaseline(t *testing.T) {
 	}
 }
 
-// multiInstanceRequest builds a ruleset with one form transformation per instance, each
-// naming its own two source drivers, which is the only way to express a multi-team fleet with
-// today's operators.
+// multiInstanceRequest builds a ruleset with duplicate SelectAndAssign transformations,
+// each writing driver.assignment_status without explicit After ordering.
 func multiInstanceRequest(t *testing.T, instances int) CompileRequest {
 	t.Helper()
 
@@ -62,15 +60,18 @@ func multiInstanceRequest(t *testing.T, instances int) CompileRequest {
 		[]EntityDeclaration{
 			{Kind: "driver", Fields: []FieldDeclaration{
 				{Name: "assignment_key", Kind: ValueString},
-			}},
-			{Kind: "team", Fields: []FieldDeclaration{
-				{Name: "assignment_key", Kind: ValueString},
+				{Name: "assignment_status", Kind: ValueString},
 			}},
 		},
-		[]RelationDeclaration{{Kind: "member", FromKind: "team", ToKind: "driver"}},
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("NewSchema: %v", err)
+	}
+
+	assignmentValue, err := NewStringValue("assigned")
+	if err != nil {
+		t.Fatalf("NewStringValue: %v", err)
 	}
 
 	transformations := make([]TransformationDeclaration, 0, instances)
@@ -78,25 +79,19 @@ func multiInstanceRequest(t *testing.T, instances int) CompileRequest {
 		rule := RuleID(fmt.Sprintf("form_team_%d", i))
 		transformations = append(transformations, TransformationDeclaration{
 			ID:             rule,
-			Operator:       OperatorFormRelatedEntity,
+			Operator:       OperatorSelectAndAssign,
 			DeclaredReads:  []FieldPath{"driver.assignment_key"},
-			DeclaredWrites: []FieldPath{"team.assignment_key"},
-			Form: &FormRelatedEntityDeclaration{
-				SourceKind: "driver",
-				Sources: []SourceReference{
-					{Kind: "driver", CanonicalSourceKey: fmt.Sprintf("driver-%d-a", i)},
-					{Kind: "driver", CanonicalSourceKey: fmt.Sprintf("driver-%d-b", i)},
+			DeclaredWrites: []FieldPath{"driver.assignment_status"},
+			SelectAssign: &SelectAssignDeclaration{
+				Selector: Selector{
+					Kind:    "driver",
+					GroupBy: &Expr{Kind: ExprField, Field: "driver.assignment_key"},
+					Members: Cardinality{Kind: CardinalityExactly, Count: 2},
 				},
-				OutputKind:    "team",
-				OutputSlot:    OutputSlotKey(fmt.Sprintf("team_%d", i)),
-				GroupingField: "driver.assignment_key",
-				SourceCount:   2,
-				CopiedFields: []FieldCopy{
-					{Source: "driver.assignment_key", Destination: "team.assignment_key"},
+				Guard: Expr{Kind: ExprAllEqual, Field: "driver.assignment_key"},
+				Assignments: []FieldAssignment{
+					{Target: "driver.assignment_status", Value: Expr{Kind: ExprLiteral, Literal: &assignmentValue}},
 				},
-				RelationKind: "member",
-				OutputKey: &OutputKeyExpression{
-					Kind: OutputKeyCommonSourceField, Field: "driver.assignment_key"},
 			},
 		})
 	}

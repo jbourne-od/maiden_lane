@@ -223,13 +223,10 @@ func (p Plan) MustTransformation(id RuleID) CompiledTransformation {
 // CompiledTransformation contains normalized source meaning plus every
 // compiler-derived access, dependency, invariant, and stable execution level.
 type CompiledTransformation struct {
-	declaration TransformationDeclaration
-	// selector is the compiled form of a SelectAssign payload's selector, and is the zero
-	// value for every other operator. It is compiled HERE rather than at execution because
-	// Select refuses a selector it was not handed compiled, and re-checking at execution
-	// would make the executor a second compiler -- the shape decision 3 refuses for read/
-	// write derivation, for the same reason.
+	declaration  TransformationDeclaration
 	selector     CompiledSelector
+	fromSelector CompiledSelector
+	toSelector   CompiledSelector
 	reads        []FieldPath
 	writes       []FieldPath
 	accesses     []SemanticAccess
@@ -245,6 +242,15 @@ func (t CompiledTransformation) Declaration() TransformationDeclaration {
 
 // Operator returns the closed operator tag.
 func (t CompiledTransformation) Operator() OperatorKind { return t.declaration.Operator }
+
+// Selector returns the primary compiled selector.
+func (t CompiledTransformation) Selector() CompiledSelector { return t.selector }
+
+// FromSelector returns the source compiled selector for relation operators.
+func (t CompiledTransformation) FromSelector() CompiledSelector { return t.fromSelector }
+
+// ToSelector returns the target compiled selector for relation operators.
+func (t CompiledTransformation) ToSelector() CompiledSelector { return t.toSelector }
 
 // ReadSet returns the canonical field-read set.
 func (t CompiledTransformation) ReadSet() []FieldPath { return slices.Clone(t.reads) }
@@ -490,22 +496,62 @@ func normalizeRuleset(input RulesetDeclaration) (normalizedRuleset, error) {
 // It reads the caller's declaration rather than a clone, deliberately: cloning is the first
 // recursion, so a check that ran after it would already have overflowed.
 func checkAuthoredPayloadBounds(raw TransformationDeclaration) error {
-	payload := raw.SelectAssign
-	if payload == nil {
-		// The frozen operators carry no expressions. When one gains them, it comes here.
-		return nil
+	trees := make([]Expr, 0)
+	collectSelectorTrees := func(s Selector) {
+		if s.Where != nil {
+			trees = append(trees, *s.Where)
+		}
+		if s.GroupBy != nil {
+			trees = append(trees, *s.GroupBy)
+		}
 	}
-	trees := make([]Expr, 0, 3+len(payload.Assignments))
-	if payload.Selector.Where != nil {
-		trees = append(trees, *payload.Selector.Where)
+
+	if payload := raw.SelectAssign; payload != nil {
+		collectSelectorTrees(payload.Selector)
+		trees = append(trees, payload.Guard)
+		for _, assignment := range payload.Assignments {
+			trees = append(trees, assignment.Value)
+		}
 	}
-	if payload.Selector.GroupBy != nil {
-		trees = append(trees, *payload.Selector.GroupBy)
+	if payload := raw.InsertEntity; payload != nil {
+		collectSelectorTrees(payload.Selector)
+		trees = append(trees, payload.Discriminator, payload.Guard)
+		for _, assignment := range payload.Assignments {
+			trees = append(trees, assignment.Value)
+		}
 	}
-	trees = append(trees, payload.Guard)
-	for _, assignment := range payload.Assignments {
-		trees = append(trees, assignment.Value)
+	if payload := raw.DeleteEntity; payload != nil {
+		collectSelectorTrees(payload.Selector)
+		trees = append(trees, payload.Guard)
 	}
+	if payload := raw.RelateEntities; payload != nil {
+		collectSelectorTrees(payload.FromSelector)
+		collectSelectorTrees(payload.ToSelector)
+		trees = append(trees, payload.Guard)
+	}
+	if payload := raw.UnrelateEntities; payload != nil {
+		collectSelectorTrees(payload.FromSelector)
+		collectSelectorTrees(payload.ToSelector)
+		trees = append(trees, payload.Guard)
+	}
+	if payload := raw.MergeEntities; payload != nil {
+		collectSelectorTrees(payload.Selector)
+		trees = append(trees, payload.Discriminator, payload.Guard)
+		for _, assignment := range payload.Assignments {
+			trees = append(trees, assignment.Value)
+		}
+	}
+	if payload := raw.SplitEntity; payload != nil {
+		collectSelectorTrees(payload.Selector)
+		trees = append(trees, payload.Guard)
+		for _, partition := range payload.Partitions {
+			trees = append(trees, partition.Discriminator)
+			for _, assignment := range partition.Assignments {
+				trees = append(trees, assignment.Value)
+			}
+		}
+	}
+
 	for _, tree := range trees {
 		if err := checkAuthoredExprBound(tree); err != nil {
 			return err
@@ -516,119 +562,9 @@ func checkAuthoredPayloadBounds(raw TransformationDeclaration) error {
 
 func normalizeTransformationPayload(transformation *TransformationDeclaration) error {
 	if payload := transformation.SelectAssign; payload != nil {
-		// AUTHORED ORDER IS NOT SEMANTIC HERE, and leaving it unnormalized put it in the
-		// ruleset identity. Every value is evaluated against the same pre-state member, no
-		// assignment observes another's result, duplicate targets are refused, and NewPatch
-		// sorts an update's fields by name -- so two rulesets listing the same assignments in
-		// different order produce byte-identical patches, journals and states, and differed
-		// only in their PlanID and therefore their SemanticRunID.
-		//
-		// This is the arm that was missing: every other authored payload list in this
-		// function is sorted, and RulesetDeclaration's own doc says authored order is not
-		// semantic. Duplicate detection stays in deriveTransformation, where it is an
-		// attributable diagnostic rather than an error.
 		sort.Slice(payload.Assignments, func(i, j int) bool {
 			return payload.Assignments[i].Target < payload.Assignments[j].Target
 		})
-	}
-	if form := transformation.Form; form != nil {
-		sort.Slice(form.Sources, func(i, j int) bool {
-			if form.Sources[i].Kind != form.Sources[j].Kind {
-				return form.Sources[i].Kind < form.Sources[j].Kind
-			}
-			return form.Sources[i].CanonicalSourceKey < form.Sources[j].CanonicalSourceKey
-		})
-		for i, source := range form.Sources {
-			if !validSemanticName(string(source.Kind)) || !validSemanticName(source.CanonicalSourceKey) {
-				return fmt.Errorf("source reference is empty or invalid UTF-8")
-			}
-			if i > 0 && source == form.Sources[i-1] {
-				return fmt.Errorf("duplicate source reference")
-			}
-		}
-		sort.Slice(form.CopiedFields, func(i, j int) bool { return compareFieldCopy(form.CopiedFields[i], form.CopiedFields[j]) < 0 })
-		copyDestinations := make(map[FieldPath]struct{}, len(form.CopiedFields))
-		for i := 1; i < len(form.CopiedFields); i++ {
-			if form.CopiedFields[i] == form.CopiedFields[i-1] {
-				return fmt.Errorf("duplicate copied field")
-			}
-		}
-		for _, copied := range form.CopiedFields {
-			if _, exists := copyDestinations[copied.Destination]; exists {
-				return fmt.Errorf("multiple copied fields write destination %q", copied.Destination)
-			}
-			copyDestinations[copied.Destination] = struct{}{}
-		}
-	}
-	if aggregate := transformation.Aggregate; aggregate != nil {
-		var err error
-		if aggregate.RequiredSourceTuple, err = normalizeFieldSet(aggregate.RequiredSourceTuple); err != nil {
-			return fmt.Errorf("required source tuple: %w", err)
-		}
-		if err := normalizePredicates(aggregate.Predicates); err != nil {
-			return err
-		}
-		if err := normalizePredicates(aggregate.ResultPredicates); err != nil {
-			return err
-		}
-		sort.Slice(aggregate.Predicates, func(i, j int) bool {
-			return predicateKey(aggregate.Predicates[i]) < predicateKey(aggregate.Predicates[j])
-		})
-		sort.Slice(aggregate.ResultPredicates, func(i, j int) bool {
-			return predicateKey(aggregate.ResultPredicates[i]) < predicateKey(aggregate.ResultPredicates[j])
-		})
-		if duplicatePredicate(aggregate.Predicates) || duplicatePredicate(aggregate.ResultPredicates) {
-			return fmt.Errorf("duplicate normalized aggregate predicate")
-		}
-		sort.Slice(aggregate.Reductions, func(i, j int) bool {
-			return reductionKey(aggregate.Reductions[i]) < reductionKey(aggregate.Reductions[j])
-		})
-		reductionDestinations := map[FieldPath]struct{}{aggregate.Anchor.Destination: {}}
-		for i, reduction := range aggregate.Reductions {
-			if i > 0 && reductionKey(reduction) == reductionKey(aggregate.Reductions[i-1]) {
-				return fmt.Errorf("duplicate normalized reduction")
-			}
-			if _, exists := reductionDestinations[reduction.Destination]; exists {
-				return fmt.Errorf("multiple aggregate writers target destination %q", reduction.Destination)
-			}
-			reductionDestinations[reduction.Destination] = struct{}{}
-		}
-	}
-	return nil
-}
-
-func duplicatePredicate(predicates []AggregatePredicate) bool {
-	for i := 1; i < len(predicates); i++ {
-		if predicateKey(predicates[i]) == predicateKey(predicates[i-1]) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizePredicates(predicates []AggregatePredicate) error {
-	for i := range predicates {
-		if predicates[i].Kind == LessOrEqualFields {
-			fields := slices.Clone(predicates[i].Fields)
-			seen := make(map[FieldPath]struct{}, len(fields))
-			for _, field := range fields {
-				kind, name := splitFieldPath(field)
-				if !validSemanticName(string(kind)) || !validSemanticName(string(name)) {
-					return fmt.Errorf("predicate fields: invalid field path %q", field)
-				}
-				if _, duplicate := seen[field]; duplicate {
-					return fmt.Errorf("predicate fields: duplicate field path %q", field)
-				}
-				seen[field] = struct{}{}
-			}
-			predicates[i].Fields = fields
-			continue
-		}
-		fields, err := normalizeFieldSet(predicates[i].Fields)
-		if err != nil {
-			return fmt.Errorf("predicate fields: %w", err)
-		}
-		predicates[i].Fields = fields
 	}
 	return nil
 }
@@ -675,174 +611,527 @@ func deriveTransformation(
 		validateFieldPath(schema, path, "", 0, declaration.ID, &diagnostics)
 	}
 	active := 0
-	if declaration.Form != nil {
-		active++
-	}
-	if declaration.Aggregate != nil {
-		active++
-	}
 	if declaration.SelectAssign != nil {
 		active++
 	}
-	if active != 1 || (declaration.Operator == OperatorFormRelatedEntity && declaration.Form == nil) ||
-		(declaration.Operator == OperatorAggregateRelatedFields && declaration.Aggregate == nil) ||
-		(declaration.Operator == OperatorSelectAndAssign && declaration.SelectAssign == nil) ||
-		(declaration.Operator != OperatorFormRelatedEntity && declaration.Operator != OperatorAggregateRelatedFields &&
-			declaration.Operator != OperatorSelectAndAssign) {
+	if declaration.InsertEntity != nil {
+		active++
+	}
+	if declaration.DeleteEntity != nil {
+		active++
+	}
+	if declaration.RelateEntities != nil {
+		active++
+	}
+	if declaration.UnrelateEntities != nil {
+		active++
+	}
+	if declaration.MergeEntities != nil {
+		active++
+	}
+	if declaration.SplitEntity != nil {
+		active++
+	}
+	var payloadOperator OperatorKind
+	if declaration.SelectAssign != nil {
+		payloadOperator = OperatorSelectAndAssign
+	}
+	if declaration.InsertEntity != nil {
+		payloadOperator = OperatorInsertEntity
+	}
+	if declaration.DeleteEntity != nil {
+		payloadOperator = OperatorDeleteEntity
+	}
+	if declaration.RelateEntities != nil {
+		payloadOperator = OperatorRelateEntities
+	}
+	if declaration.UnrelateEntities != nil {
+		payloadOperator = OperatorUnrelateEntities
+	}
+	if declaration.MergeEntities != nil {
+		payloadOperator = OperatorMergeEntities
+	}
+	if declaration.SplitEntity != nil {
+		payloadOperator = OperatorSplitEntity
+	}
+	if active != 1 || declaration.Operator != payloadOperator {
 		diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "operator_union"))
 	}
 	reads := make([]FieldPath, 0)
 	writes := make([]FieldPath, 0)
 	accesses := make([]SemanticAccess, 0)
 	invariants := make([]InvariantDeclaration, 0)
+
 	switch declaration.Operator {
-	case OperatorFormRelatedEntity:
-		if declaration.Form != nil {
-			form := declaration.Form
-			if form.OutputKey == nil || form.OutputKey.Kind != OutputKeyCommonSourceField || form.OutputSlot == "" || form.SourceCount == 0 || uint64(len(form.Sources)) != form.SourceCount {
-				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "form_shape"))
-			}
-			if !schemaHasEntity(schema, form.SourceKind) || !schemaHasEntity(schema, form.OutputKind) || !schemaHasRelation(schema, form.RelationKind, form.OutputKind, form.SourceKind) {
-				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "form_schema_shape"))
-			}
-			for _, source := range form.Sources {
-				if source.Kind != form.SourceKind {
-					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "source_kind"))
-				}
-			}
-			reads = append(reads, form.GroupingField)
-			validateFieldPath(schema, form.GroupingField, form.SourceKind, 0, declaration.ID, &diagnostics)
-			if form.OutputKey != nil {
-				reads = append(reads, form.OutputKey.Field)
-				validateFieldPath(schema, form.OutputKey.Field, form.SourceKind, 0, declaration.ID, &diagnostics)
-			}
-			for _, copied := range form.CopiedFields {
-				reads = append(reads, copied.Source)
-				writes = append(writes, copied.Destination)
-				sourceKind := validateFieldPath(schema, copied.Source, form.SourceKind, 0, declaration.ID, &diagnostics)
-				destinationKind := validateFieldPath(schema, copied.Destination, form.OutputKind, 0, declaration.ID, &diagnostics)
-				if sourceKind != 0 && destinationKind != 0 && sourceKind != destinationKind {
-					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "copy_type"))
-				}
-			}
-			accesses = append(accesses,
-				SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: form.SourceKind},
-				SemanticAccess{Kind: AccessEntity, Mode: AccessWrite, EntityKind: form.OutputKind},
-				SemanticAccess{Kind: AccessRelation, Mode: AccessWrite, RelationKind: form.RelationKind},
-			)
-			invariants = append(invariants, formInvariants(declaration.ID, form.GroupingField)...)
-		}
 	case OperatorSelectAndAssign:
-		if declaration.SelectAssign != nil {
-			payload := declaration.SelectAssign
-			selector, err := CompileSelector(schema, version, payload.Selector)
-			if err != nil {
-				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "selector"))
-			} else if !selector.Grouped() {
-				// Refused at compile time rather than left to fail at evaluation. An
-				// ungrouped selector cannot carry a group-scoped guard, and the guard is
-				// this operator's whole point.
-				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "selector_ungrouped"))
+		if declaration.SelectAssign == nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "operator_union"))
+			break
+		}
+		payload := declaration.SelectAssign
+		kind := payload.Selector.Kind
+		if payload.Selector.Where != nil {
+			for _, p := range readFieldPaths(*payload.Selector.Where) {
+				validateFieldPath(schema, p, kind, 0, declaration.ID, &diagnostics)
+			}
+		}
+		if payload.Selector.GroupBy != nil {
+			for _, p := range readFieldPaths(*payload.Selector.GroupBy) {
+				validateFieldPath(schema, p, kind, 0, declaration.ID, &diagnostics)
+			}
+		}
+		for _, p := range readFieldPaths(payload.Guard) {
+			validateFieldPath(schema, p, kind, 0, declaration.ID, &diagnostics)
+		}
+		selector, err := CompileSelector(schema, version, payload.Selector)
+		if err != nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "selector"))
+		} else if !selector.Grouped() {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "selector_ungrouped"))
+		} else {
+			compiled.selector = selector
+		}
+		if len(payload.Assignments) == 0 {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "assignments_empty"))
+		}
+		guardType, guardErr := checkGroupExpr(schema, kind, payload.Guard, 0)
+		if guardErr != nil || guardType != TypeBool {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "guard"))
+		}
+		if payload.Selector.Where != nil {
+			reads = append(reads, readFieldPaths(*payload.Selector.Where)...)
+		}
+		if payload.Selector.GroupBy != nil {
+			reads = append(reads, readFieldPaths(*payload.Selector.GroupBy)...)
+		}
+		reads = append(reads, readFieldPaths(payload.Guard)...)
+		seenTargets := make(map[FieldPath]struct{}, len(payload.Assignments))
+		for _, assignment := range payload.Assignments {
+			detail := string(assignment.Target)
+			if _, duplicate := seenTargets[assignment.Target]; duplicate {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+			}
+			seenTargets[assignment.Target] = struct{}{}
+			writes = append(writes, assignment.Target)
+			reads = append(reads, readFieldPaths(assignment.Value)...)
+			targetKind := validateFieldPath(schema, assignment.Target, kind, 0, declaration.ID, &diagnostics)
+			valueType, valueErr := checkExprInScope(schema, kind, assignment.Value, memberInGroupScope, 0)
+			if valueErr != nil {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+			} else if pathErr := checkPathsBindKind(assignment.Value, kind); pathErr != nil {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+			} else if targetKind != 0 {
+				declaredType, typeErr := valueKindType(targetKind)
+				if typeErr != nil || declaredType != valueType {
+					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+				}
+			}
+		}
+		accesses = append(accesses, SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: kind},
+			SemanticAccess{Kind: AccessEntity, Mode: AccessWrite, EntityKind: kind})
+		invariants = append(invariants, selectAssignInvariants(declaration.ID, payload)...)
+
+	case OperatorInsertEntity:
+		if declaration.InsertEntity == nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "operator_union"))
+			break
+		}
+		payload := declaration.InsertEntity
+		sourceKind := payload.Selector.Kind
+		targetKind := payload.TargetKind
+		if _, ok := schema.entityDeclaration(targetKind); !ok {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "target_entity_kind"))
+		}
+		if payload.Selector.Where != nil {
+			for _, p := range readFieldPaths(*payload.Selector.Where) {
+				validateFieldPath(schema, p, sourceKind, 0, declaration.ID, &diagnostics)
+			}
+		}
+		if payload.Selector.GroupBy != nil {
+			for _, p := range readFieldPaths(*payload.Selector.GroupBy) {
+				validateFieldPath(schema, p, sourceKind, 0, declaration.ID, &diagnostics)
+			}
+		}
+		for _, p := range readFieldPaths(payload.Guard) {
+			validateFieldPath(schema, p, sourceKind, 0, declaration.ID, &diagnostics)
+		}
+		for _, p := range readFieldPaths(payload.Discriminator) {
+			validateFieldPath(schema, p, sourceKind, 0, declaration.ID, &diagnostics)
+		}
+		selector, err := CompileSelector(schema, version, payload.Selector)
+		if err != nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "selector"))
+		} else {
+			compiled.selector = selector
+		}
+		guardType, guardErr := checkGroupExpr(schema, sourceKind, payload.Guard, 0)
+		if guardErr != nil || guardType != TypeBool {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "guard"))
+		}
+		insertScope := memberScope
+		if payload.Selector.GroupBy != nil {
+			insertScope = groupScope
+		}
+		discType, discErr := checkExprInScope(schema, sourceKind, payload.Discriminator, insertScope, 0)
+		if discErr != nil || (discType != TypeString && discType != TypeInt64 && discType != TypeAtom) {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "discriminator"))
+		}
+		if payload.Selector.Where != nil {
+			reads = append(reads, readFieldPaths(*payload.Selector.Where)...)
+		}
+		if payload.Selector.GroupBy != nil {
+			reads = append(reads, readFieldPaths(*payload.Selector.GroupBy)...)
+		}
+		reads = append(reads, readFieldPaths(payload.Guard)...)
+		reads = append(reads, readFieldPaths(payload.Discriminator)...)
+		seenTargets := make(map[FieldPath]struct{}, len(payload.Assignments))
+		for _, assignment := range payload.Assignments {
+			detail := string(assignment.Target)
+			if _, duplicate := seenTargets[assignment.Target]; duplicate {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+			}
+			seenTargets[assignment.Target] = struct{}{}
+			writes = append(writes, assignment.Target)
+			reads = append(reads, readFieldPaths(assignment.Value)...)
+			targetFieldKind := validateFieldPath(schema, assignment.Target, targetKind, 0, declaration.ID, &diagnostics)
+			valueType, valueErr := checkExprInScope(schema, sourceKind, assignment.Value, insertScope, 0)
+			if valueErr != nil {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+			} else if targetFieldKind != 0 {
+				declaredType, typeErr := valueKindType(targetFieldKind)
+				if typeErr != nil || declaredType != valueType {
+					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+				}
+			}
+		}
+		accesses = append(accesses,
+			SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: sourceKind},
+			SemanticAccess{Kind: AccessEntity, Mode: AccessWrite, EntityKind: targetKind},
+		)
+		invariants = append(invariants, insertEntityInvariants(declaration.ID, payload)...)
+
+	case OperatorDeleteEntity:
+		if declaration.DeleteEntity == nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "operator_union"))
+			break
+		}
+		payload := declaration.DeleteEntity
+		kind := payload.Selector.Kind
+		if payload.Selector.Where != nil {
+			for _, p := range readFieldPaths(*payload.Selector.Where) {
+				validateFieldPath(schema, p, kind, 0, declaration.ID, &diagnostics)
+			}
+		}
+		if payload.Selector.GroupBy != nil {
+			for _, p := range readFieldPaths(*payload.Selector.GroupBy) {
+				validateFieldPath(schema, p, kind, 0, declaration.ID, &diagnostics)
+			}
+		}
+		for _, p := range readFieldPaths(payload.Guard) {
+			validateFieldPath(schema, p, kind, 0, declaration.ID, &diagnostics)
+		}
+		selector, err := CompileSelector(schema, version, payload.Selector)
+		if err != nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "selector"))
+		} else {
+			compiled.selector = selector
+		}
+		guardType, guardErr := checkGroupExpr(schema, kind, payload.Guard, 0)
+		if guardErr != nil || guardType != TypeBool {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "guard"))
+		}
+		if payload.Selector.Where != nil {
+			reads = append(reads, readFieldPaths(*payload.Selector.Where)...)
+		}
+		if payload.Selector.GroupBy != nil {
+			reads = append(reads, readFieldPaths(*payload.Selector.GroupBy)...)
+		}
+		reads = append(reads, readFieldPaths(payload.Guard)...)
+		accesses = append(accesses,
+			SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: kind},
+			SemanticAccess{Kind: AccessEntity, Mode: AccessWrite, EntityKind: kind},
+		)
+		invariants = append(invariants, deleteEntityInvariants(declaration.ID, payload)...)
+
+	case OperatorRelateEntities:
+		if declaration.RelateEntities == nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "operator_union"))
+			break
+		}
+		payload := declaration.RelateEntities
+		relDecl, ok := schema.relationDeclaration(payload.RelationKind)
+		if !ok {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "relation_kind"))
+		} else {
+			if payload.FromSelector.Kind != relDecl.FromKind || payload.ToSelector.Kind != relDecl.ToKind {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "endpoint_kind_mismatch"))
+			}
+		}
+		fromCompiled, fromErr := CompileSelector(schema, version, payload.FromSelector)
+		if fromErr != nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "from_selector"))
+		} else {
+			compiled.fromSelector = fromCompiled
+		}
+		toCompiled, toErr := CompileSelector(schema, version, payload.ToSelector)
+		if toErr != nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "to_selector"))
+		} else {
+			compiled.toSelector = toCompiled
+		}
+		guardType, guardErr := checkRelationGuard(schema, payload.FromSelector.Kind, payload.ToSelector.Kind, payload.Guard, 0)
+		if guardErr != nil || guardType != TypeBool {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "guard"))
+		}
+		if payload.FromSelector.Where != nil {
+			reads = append(reads, readFieldPaths(*payload.FromSelector.Where)...)
+		}
+		if payload.FromSelector.GroupBy != nil {
+			reads = append(reads, readFieldPaths(*payload.FromSelector.GroupBy)...)
+		}
+		if payload.ToSelector.Where != nil {
+			reads = append(reads, readFieldPaths(*payload.ToSelector.Where)...)
+		}
+		if payload.ToSelector.GroupBy != nil {
+			reads = append(reads, readFieldPaths(*payload.ToSelector.GroupBy)...)
+		}
+		for _, p := range readFieldPaths(payload.Guard) {
+			k, name := splitFieldPath(p)
+			if k == "from" {
+				reads = append(reads, FieldPath(string(payload.FromSelector.Kind)+"."+string(name)))
+			} else if k == "to" {
+				reads = append(reads, FieldPath(string(payload.ToSelector.Kind)+"."+string(name)))
 			} else {
-				compiled.selector = selector
+				reads = append(reads, p)
 			}
-			if len(payload.Assignments) == 0 {
-				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "assignments_empty"))
+		}
+		accesses = append(accesses,
+			SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: payload.FromSelector.Kind},
+			SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: payload.ToSelector.Kind},
+			SemanticAccess{Kind: AccessRelation, Mode: AccessWrite, RelationKind: payload.RelationKind},
+		)
+		invariants = append(invariants, relationInvariants(declaration.ID, payload.FromSelector, payload.ToSelector, payload.Guard)...)
+
+	case OperatorUnrelateEntities:
+		if declaration.UnrelateEntities == nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "operator_union"))
+			break
+		}
+		payload := declaration.UnrelateEntities
+		relDecl, ok := schema.relationDeclaration(payload.RelationKind)
+		if !ok {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "relation_kind"))
+		} else {
+			if payload.FromSelector.Kind != relDecl.FromKind || payload.ToSelector.Kind != relDecl.ToKind {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "endpoint_kind_mismatch"))
 			}
-			kind := payload.Selector.Kind
-			guardType, guardErr := checkGroupExpr(schema, kind, payload.Guard, 0)
-			if guardErr != nil || guardType != TypeBool {
-				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "guard"))
+		}
+		fromCompiled, fromErr := CompileSelector(schema, version, payload.FromSelector)
+		if fromErr != nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "from_selector"))
+		} else {
+			compiled.fromSelector = fromCompiled
+		}
+		toCompiled, toErr := CompileSelector(schema, version, payload.ToSelector)
+		if toErr != nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "to_selector"))
+		} else {
+			compiled.toSelector = toCompiled
+		}
+		guardType, guardErr := checkRelationGuard(schema, payload.FromSelector.Kind, payload.ToSelector.Kind, payload.Guard, 0)
+		if guardErr != nil || guardType != TypeBool {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "guard"))
+		}
+		if payload.FromSelector.Where != nil {
+			reads = append(reads, readFieldPaths(*payload.FromSelector.Where)...)
+		}
+		if payload.FromSelector.GroupBy != nil {
+			reads = append(reads, readFieldPaths(*payload.FromSelector.GroupBy)...)
+		}
+		if payload.ToSelector.Where != nil {
+			reads = append(reads, readFieldPaths(*payload.ToSelector.Where)...)
+		}
+		if payload.ToSelector.GroupBy != nil {
+			reads = append(reads, readFieldPaths(*payload.ToSelector.GroupBy)...)
+		}
+		for _, p := range readFieldPaths(payload.Guard) {
+			k, name := splitFieldPath(p)
+			if k == "from" {
+				reads = append(reads, FieldPath(string(payload.FromSelector.Kind)+"."+string(name)))
+			} else if k == "to" {
+				reads = append(reads, FieldPath(string(payload.ToSelector.Kind)+"."+string(name)))
+			} else {
+				reads = append(reads, p)
 			}
-			// READS ARE DERIVED FROM THE EXPRESSION TREES, which is the half decision 3
-			// records as missing. Every path the rule can read must appear, or the write-
-			// conflict analysis and DECLARED_ACCESS_MISMATCH both reason over a read set
-			// smaller than the truth -- and under-derivation is the fail-OPEN direction.
-			if payload.Selector.Where != nil {
-				reads = append(reads, readFieldPaths(*payload.Selector.Where)...)
+		}
+		accesses = append(accesses,
+			SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: payload.FromSelector.Kind},
+			SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: payload.ToSelector.Kind},
+			SemanticAccess{Kind: AccessRelation, Mode: AccessWrite, RelationKind: payload.RelationKind},
+		)
+		invariants = append(invariants, relationInvariants(declaration.ID, payload.FromSelector, payload.ToSelector, payload.Guard)...)
+
+	case OperatorMergeEntities:
+		if declaration.MergeEntities == nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "operator_union"))
+			break
+		}
+		payload := declaration.MergeEntities
+		sourceKind := payload.Selector.Kind
+		targetKind := payload.TargetKind
+		if _, ok := schema.entityDeclaration(targetKind); !ok {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "target_entity_kind"))
+		}
+		if payload.Selector.Where != nil {
+			for _, p := range readFieldPaths(*payload.Selector.Where) {
+				validateFieldPath(schema, p, sourceKind, 0, declaration.ID, &diagnostics)
 			}
-			if payload.Selector.GroupBy != nil {
-				reads = append(reads, readFieldPaths(*payload.Selector.GroupBy)...)
+		}
+		if payload.Selector.GroupBy != nil {
+			for _, p := range readFieldPaths(*payload.Selector.GroupBy) {
+				validateFieldPath(schema, p, sourceKind, 0, declaration.ID, &diagnostics)
 			}
-			reads = append(reads, readFieldPaths(payload.Guard)...)
-			seenTargets := make(map[FieldPath]struct{}, len(payload.Assignments))
-			for _, assignment := range payload.Assignments {
-				// THE TARGET, NOT THE INDEX. normalizeTransformationPayload sorts the
-				// assignments, so an index names a position in the sorted slice and not the
-				// one the author wrote -- an author who duplicated their first two
-				// assignments was told the diagnostic concerned their third. A target path
-				// is a bounded typed declaration key, which is what a detail is for, and it
-				// is stable under the sort.
+		}
+		for _, p := range readFieldPaths(payload.Guard) {
+			validateFieldPath(schema, p, sourceKind, 0, declaration.ID, &diagnostics)
+		}
+		for _, p := range readFieldPaths(payload.Discriminator) {
+			validateFieldPath(schema, p, sourceKind, 0, declaration.ID, &diagnostics)
+		}
+		selector, err := CompileSelector(schema, version, payload.Selector)
+		if err != nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "selector"))
+		} else {
+			compiled.selector = selector
+		}
+		guardType, guardErr := checkGroupExpr(schema, sourceKind, payload.Guard, 0)
+		if guardErr != nil || guardType != TypeBool {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "guard"))
+		}
+		discType, discErr := checkExprInScope(schema, sourceKind, payload.Discriminator, groupScope, 0)
+		if discErr != nil || (discType != TypeString && discType != TypeInt64 && discType != TypeAtom) {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "discriminator"))
+		}
+		if payload.Selector.Where != nil {
+			reads = append(reads, readFieldPaths(*payload.Selector.Where)...)
+		}
+		if payload.Selector.GroupBy != nil {
+			reads = append(reads, readFieldPaths(*payload.Selector.GroupBy)...)
+		}
+		reads = append(reads, readFieldPaths(payload.Guard)...)
+		reads = append(reads, readFieldPaths(payload.Discriminator)...)
+		seenTargets := make(map[FieldPath]struct{}, len(payload.Assignments))
+		for _, assignment := range payload.Assignments {
+			detail := string(assignment.Target)
+			if _, duplicate := seenTargets[assignment.Target]; duplicate {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+			}
+			seenTargets[assignment.Target] = struct{}{}
+			writes = append(writes, assignment.Target)
+			reads = append(reads, readFieldPaths(assignment.Value)...)
+			targetFieldKind := validateFieldPath(schema, assignment.Target, targetKind, 0, declaration.ID, &diagnostics)
+			valueType, valueErr := checkExprInScope(schema, sourceKind, assignment.Value, groupScope, 0)
+			if valueErr != nil {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+			} else if targetFieldKind != 0 {
+				declaredType, typeErr := valueKindType(targetFieldKind)
+				if typeErr != nil || declaredType != valueType {
+					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
+				}
+			}
+		}
+		accesses = append(accesses,
+			SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: sourceKind},
+			SemanticAccess{Kind: AccessEntity, Mode: AccessWrite, EntityKind: targetKind},
+		)
+		if !payload.RetainSources {
+			accesses = append(accesses, SemanticAccess{Kind: AccessEntity, Mode: AccessWrite, EntityKind: sourceKind})
+		}
+		invariants = append(invariants, mergeEntityInvariants(declaration.ID, payload)...)
+
+	case OperatorSplitEntity:
+		if declaration.SplitEntity == nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "operator_union"))
+			break
+		}
+		payload := declaration.SplitEntity
+		sourceKind := payload.Selector.Kind
+		targetKind := payload.TargetKind
+		if _, ok := schema.entityDeclaration(targetKind); !ok {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "target_entity_kind"))
+		}
+		if payload.Selector.Where != nil {
+			for _, p := range readFieldPaths(*payload.Selector.Where) {
+				validateFieldPath(schema, p, sourceKind, 0, declaration.ID, &diagnostics)
+			}
+		}
+		if payload.Selector.GroupBy != nil {
+			for _, p := range readFieldPaths(*payload.Selector.GroupBy) {
+				validateFieldPath(schema, p, sourceKind, 0, declaration.ID, &diagnostics)
+			}
+		}
+		for _, p := range readFieldPaths(payload.Guard) {
+			validateFieldPath(schema, p, sourceKind, 0, declaration.ID, &diagnostics)
+		}
+		selector, err := CompileSelector(schema, version, payload.Selector)
+		if err != nil {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "selector"))
+		} else {
+			compiled.selector = selector
+		}
+		guardType, guardErr := checkGroupExpr(schema, sourceKind, payload.Guard, 0)
+		if guardErr != nil || guardType != TypeBool {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "guard"))
+		}
+		if payload.Selector.Where != nil {
+			reads = append(reads, readFieldPaths(*payload.Selector.Where)...)
+		}
+		if payload.Selector.GroupBy != nil {
+			reads = append(reads, readFieldPaths(*payload.Selector.GroupBy)...)
+		}
+		reads = append(reads, readFieldPaths(payload.Guard)...)
+
+		if len(payload.Partitions) == 0 {
+			diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "partitions_empty"))
+		}
+		for _, part := range payload.Partitions {
+			discType, discErr := checkExprInScope(schema, sourceKind, part.Discriminator, memberScope, 0)
+			if discErr != nil || (discType != TypeString && discType != TypeInt64 && discType != TypeAtom) {
+				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "partition_discriminator"))
+			}
+			reads = append(reads, readFieldPaths(part.Discriminator)...)
+			seenTargets := make(map[FieldPath]struct{}, len(part.Assignments))
+			for _, assignment := range part.Assignments {
 				detail := string(assignment.Target)
 				if _, duplicate := seenTargets[assignment.Target]; duplicate {
-					// Two assignments to one field would produce two FieldUpdates with the
-					// same name in one Update, which NewPatch refuses as an error rather
-					// than as a diagnostic -- so the whole compilation would fail with no
-					// attributable subject instead of refusing this rule.
 					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
 				}
 				seenTargets[assignment.Target] = struct{}{}
 				writes = append(writes, assignment.Target)
 				reads = append(reads, readFieldPaths(assignment.Value)...)
-				targetKind := validateFieldPath(schema, assignment.Target, kind, 0, declaration.ID, &diagnostics)
-				valueType, valueErr := checkExprInScope(schema, kind, assignment.Value, memberInGroupScope, 0)
+				targetFieldKind := validateFieldPath(schema, assignment.Target, targetKind, 0, declaration.ID, &diagnostics)
+				valueType, valueErr := checkExprInScope(schema, sourceKind, assignment.Value, memberScope, 0)
 				if valueErr != nil {
 					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
-				} else if pathErr := checkPathsBindKind(assignment.Value, kind); pathErr != nil {
-					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
-				} else if targetKind != 0 {
-					declaredType, typeErr := valueKindType(targetKind)
+				} else if targetFieldKind != 0 {
+					declaredType, typeErr := valueKindType(targetFieldKind)
 					if typeErr != nil || declaredType != valueType {
-						// The assignment writes a value of one type into a field declared as
-						// another. Caught here because ApplyPatch does not re-derive types.
 						diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), detail))
 					}
 				}
 			}
-			accesses = append(accesses, SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: kind},
-				SemanticAccess{Kind: AccessEntity, Mode: AccessWrite, EntityKind: kind})
-			invariants = append(invariants, selectAssignInvariants(declaration.ID, payload)...)
 		}
-	case OperatorAggregateRelatedFields:
-		if declaration.Aggregate != nil {
-			aggregate := declaration.Aggregate
-			if aggregate.Target.Rule == "" || aggregate.Target.Slot == "" || aggregate.RelationKind == "" || aggregate.SourceKind == "" {
-				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "aggregate_shape"))
-			}
-			reads = append(reads, aggregate.RequiredSourceTuple...)
-			for _, path := range aggregate.RequiredSourceTuple {
-				validateFieldPath(schema, path, aggregate.SourceKind, 0, declaration.ID, &diagnostics)
-			}
-			for _, predicate := range aggregate.Predicates {
-				reads = append(reads, predicate.Fields...)
-				validatePredicate(schema, declaration.ID, aggregate.SourceKind, predicate, &diagnostics)
-			}
-			reads = append(reads, aggregate.Anchor.Source, aggregate.Anchor.Destination)
-			anchorSource := validateFieldPath(schema, aggregate.Anchor.Source, aggregate.SourceKind, 0, declaration.ID, &diagnostics)
-			anchorDestination := validateFieldPath(schema, aggregate.Anchor.Destination, "", 0, declaration.ID, &diagnostics)
-			if anchorSource != 0 && anchorDestination != 0 && anchorSource != anchorDestination {
-				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "anchor_type"))
-			}
-			writes = append(writes, aggregate.Anchor.Destination)
-			for _, reduction := range aggregate.Reductions {
-				reads = append(reads, reduction.Source, reduction.Destination)
-				writes = append(writes, reduction.Destination)
-				if reduction.Kind != ReduceInt64Max {
-					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "reduction_tag"))
-				}
-				validateFieldPath(schema, reduction.Source, aggregate.SourceKind, ValueInt64, declaration.ID, &diagnostics)
-				validateFieldPath(schema, reduction.Destination, "", ValueInt64, declaration.ID, &diagnostics)
-			}
-			for _, predicate := range aggregate.ResultPredicates {
-				reads = append(reads, predicate.Fields...)
-				validatePredicate(schema, declaration.ID, "", predicate, &diagnostics)
-			}
-			accesses = append(accesses,
-				SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: aggregate.SourceKind},
-				SemanticAccess{Kind: AccessRelation, Mode: AccessRead, RelationKind: aggregate.RelationKind},
-			)
-			invariants = append(invariants, aggregateInvariants(declaration.ID, aggregate)...)
+		accesses = append(accesses,
+			SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: sourceKind},
+			SemanticAccess{Kind: AccessEntity, Mode: AccessWrite, EntityKind: targetKind},
+		)
+		if !payload.RetainSource {
+			accesses = append(accesses, SemanticAccess{Kind: AccessEntity, Mode: AccessWrite, EntityKind: sourceKind})
 		}
+		invariants = append(invariants, splitEntityInvariants(declaration.ID, payload)...)
+
+	default:
+		diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "operator_kind"))
 	}
 	reads = normalizeDerivedFields(reads)
 	writes = normalizeDerivedFields(writes)
@@ -868,8 +1157,10 @@ func deriveTransformation(
 func resolveDependencies(_ Schema, declarations []TransformationDeclaration, compiled map[RuleID]CompiledTransformation) []CompilationDiagnostic {
 	diagnostics := make([]CompilationDiagnostic, 0)
 	edges := make(map[RuleID]map[RuleID]struct{}, len(declarations))
+	explicitEdges := make(map[RuleID]map[RuleID]struct{}, len(declarations))
 	for _, declaration := range declarations {
 		edges[declaration.ID] = make(map[RuleID]struct{})
+		explicitEdges[declaration.ID] = make(map[RuleID]struct{})
 	}
 	for _, declaration := range declarations {
 		for _, dependency := range declaration.After {
@@ -879,38 +1170,7 @@ func resolveDependencies(_ Schema, declarations []TransformationDeclaration, com
 				}
 			}
 			edges[declaration.ID][dependency] = struct{}{}
-		}
-		if declaration.Aggregate != nil {
-			target := declaration.Aggregate.Target
-			producer, ok := compiled[target.Rule]
-			if !ok || producer.declaration.Form == nil || producer.declaration.Form.OutputSlot != target.Slot {
-				diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "output_slot:"+string(target.Rule)+":"+string(target.Slot)))
-			} else {
-				edges[declaration.ID][target.Rule] = struct{}{}
-				consumer := compiled[declaration.ID]
-				consumer.accesses = append(consumer.accesses,
-					SemanticAccess{Kind: AccessEntity, Mode: AccessRead, EntityKind: producer.declaration.Form.OutputKind},
-					SemanticAccess{Kind: AccessEntity, Mode: AccessWrite, EntityKind: producer.declaration.Form.OutputKind},
-				)
-				sort.Slice(consumer.accesses, func(i, j int) bool { return accessKey(consumer.accesses[i]) < accessKey(consumer.accesses[j]) })
-				consumer.accesses = slices.Compact(consumer.accesses)
-				compiled[declaration.ID] = consumer
-				targetKind, _ := splitFieldPath(declaration.Aggregate.Anchor.Destination)
-				validTarget := targetKind == producer.declaration.Form.OutputKind
-				for _, reduction := range declaration.Aggregate.Reductions {
-					kind, _ := splitFieldPath(reduction.Destination)
-					validTarget = validTarget && kind == producer.declaration.Form.OutputKind
-				}
-				for _, predicate := range declaration.Aggregate.ResultPredicates {
-					for _, field := range predicate.Fields {
-						kind, _ := splitFieldPath(field)
-						validTarget = validTarget && kind == producer.declaration.Form.OutputKind
-					}
-				}
-				if !validTarget || !schemaRelationMatches(producer, declaration) {
-					diagnostics = append(diagnostics, diagnostic(UnsupportedOperator, string(declaration.ID), "output_slot_shape"))
-				}
-			}
+			explicitEdges[declaration.ID][dependency] = struct{}{}
 		}
 	}
 	for readerID, reader := range compiled {
@@ -918,7 +1178,19 @@ func resolveDependencies(_ Schema, declarations []TransformationDeclaration, com
 			if readerID == writerID {
 				continue
 			}
-			if intersects(writer.writes, reader.reads) {
+			overlap := fieldIntersection(writer.writes, reader.reads)
+			if len(overlap) > 0 {
+				if intersects(writer.writes, reader.writes) {
+					if dependencyPathExists(explicitEdges, writerID, readerID) {
+						continue
+					}
+					if !dependencyPathExists(explicitEdges, readerID, writerID) {
+						continue
+					}
+					if isWriteShadowed(explicitEdges, compiled, readerID, writerID, overlap) {
+						continue
+					}
+				}
 				edges[readerID][writerID] = struct{}{}
 			}
 		}
@@ -981,6 +1253,25 @@ func fieldIntersection(left, right []FieldPath) []FieldPath {
 		}
 	}
 	return result
+}
+
+func isWriteShadowed(edges map[RuleID]map[RuleID]struct{}, compiled map[RuleID]CompiledTransformation, readerID, writerID RuleID, fields []FieldPath) bool {
+	for _, field := range fields {
+		shadowed := false
+		for midID, mid := range compiled {
+			if midID == readerID || midID == writerID {
+				continue
+			}
+			if dependencyPathExists(edges, readerID, midID) && dependencyPathExists(edges, midID, writerID) && mid.Writes(field) {
+				shadowed = true
+				break
+			}
+		}
+		if !shadowed {
+			return false
+		}
+	}
+	return true
 }
 
 func topologicalOrder(compiled map[RuleID]CompiledTransformation) ([]CompiledTransformation, bool) {
@@ -1103,50 +1394,6 @@ func validateFieldPath(schema Schema, path FieldPath, expectedEntity EntityKind,
 	return field.Kind
 }
 
-func validatePredicate(schema Schema, subject RuleID, expectedEntity EntityKind, predicate AggregatePredicate, diagnostics *[]CompilationDiagnostic) {
-	validShape := false
-	switch predicate.Kind {
-	case CompleteTuple:
-		validShape = len(predicate.Fields) > 0
-	case NonNegativeInt:
-		validShape = len(predicate.Fields) == 1
-	case EqualFieldAcrossSources:
-		validShape = len(predicate.Fields) == 1 && expectedEntity != ""
-	case LessOrEqualFields:
-		validShape = len(predicate.Fields) == 2
-	default:
-		validShape = false
-	}
-	if !validShape {
-		*diagnostics = append(*diagnostics, diagnostic(UnsupportedOperator, string(subject), "predicate_tag"))
-	}
-	for _, path := range predicate.Fields {
-		expectedKind := ValueKind(0)
-		if predicate.Kind == NonNegativeInt || predicate.Kind == LessOrEqualFields {
-			expectedKind = ValueInt64
-		}
-		validateFieldPath(schema, path, expectedEntity, expectedKind, subject, diagnostics)
-	}
-}
-
-func formInvariants(rule RuleID, grouping FieldPath) []InvariantDeclaration {
-	return []InvariantDeclaration{
-		newInvariant(rule, "01-source-found", DeclaredSourceNotFound, InvariantRulePrecondition, nil),
-		newInvariant(rule, "02-source-kind", DeclaredSourceKindInvalid, InvariantRulePrecondition, nil),
-		newInvariant(rule, "03-grouping-valid", TeamAssignmentKeyInvalid, InvariantRulePrecondition, []FieldPath{grouping}),
-		newInvariant(rule, "04-grouping-equal", TeamAssignmentKeyMismatch, InvariantRulePrecondition, []FieldPath{grouping}),
-		newInvariant(rule, "05-member-cardinality", TeamMemberCardinalityInvalid, InvariantCandidatePostcondition, nil),
-	}
-}
-
-// selectAssignInvariants derives the obligations of a selector-scoped rule.
-//
-// The reads recorded on each obligation are the paths the CHECK reads, not the rule's whole
-// read set: an evidence set wider than the fact that failed makes an attribution that names
-// fields the refusal did not consult.
-// The obligation suffixes of a selector-scoped rule, in the order executeSelectAndAssign
-// checks them. Constants because the compiler derives them and the executor names them, and
-// a string literal in two places is a proposition nothing forces to agree.
 const (
 	selectorEvaluableSuffix = "01-selector-evaluable"
 	cardinalitySuffix       = "02-cardinality"
@@ -1166,22 +1413,6 @@ func selectAssignInvariants(rule RuleID, payload *SelectAssignDeclaration) []Inv
 	for _, assignment := range payload.Assignments {
 		values = append(values, readFieldPaths(assignment.Value)...)
 	}
-	// NUMBERED IN THE ORDER executeSelectAndAssign CHECKS THEM, and that is a correctness
-	// constraint rather than a tidiness one. Obligations are sorted by key, and
-	// evaluatedFailureResults marks every declaration BEFORE the failing key as passed --
-	// so a key ordered ahead of the check that actually runs first produces a sealed,
-	// digested failure report attesting to an obligation nothing established.
-	//
-	// SELECTION_EXPRESSION_UNAVAILABLE APPEARS TWICE, and that is why. It is raised in two
-	// places that cannot be adjacent: once by the SELECTOR, whose filter and grouping
-	// expressions are evaluated before any group exists, and once by the GUARD and the
-	// assignment values, which are evaluated per group after cardinality and emptiness have
-	// been established. A single obligation carrying both would have to sit either before
-	// the cardinality check or after it, and would lie in whichever case it did not sit
-	// beside -- an earlier version put it fourth, so a selector fault sealed a report
-	// claiming the cardinality obligation and the non-empty obligation had both passed when
-	// nothing had been grouped at all. Two obligations, one code, distinct keys, each
-	// carrying the reads ITS check consults.
 	selectorPaths := make([]FieldPath, 0)
 	if payload.Selector.Where != nil {
 		selectorPaths = append(selectorPaths, readFieldPaths(*payload.Selector.Where)...)
@@ -1197,32 +1428,127 @@ func selectAssignInvariants(rule RuleID, payload *SelectAssignDeclaration) []Inv
 	}
 }
 
-func aggregateInvariants(rule RuleID, aggregate *AggregateRelatedFieldsDeclaration) []InvariantDeclaration {
-	result := []InvariantDeclaration{
-		newInvariant(rule, "01-member-cardinality", TeamMemberCardinalityInvalid, InvariantRulePrecondition, nil),
-		newInvariant(rule, "02-tuple-complete", HOSTupleIncomplete, InvariantRulePrecondition, aggregate.RequiredSourceTuple),
+func insertEntityInvariants(rule RuleID, payload *InsertEntityDeclaration) []InvariantDeclaration {
+	grouping := make([]FieldPath, 0)
+	if payload.Selector.GroupBy != nil {
+		grouping = readFieldPaths(*payload.Selector.GroupBy)
 	}
-	for i, predicate := range aggregate.Predicates {
-		code := HOSAggregateInvalid
-		switch predicate.Kind {
-		case CompleteTuple:
-			code = HOSTupleIncomplete
-		case NonNegativeInt, LessOrEqualFields:
-			code = HOSDurationInvalid
-		case EqualFieldAcrossSources:
-			code = HOSAnchorMismatch
+	values := make([]FieldPath, 0)
+	for _, assignment := range payload.Assignments {
+		values = append(values, readFieldPaths(assignment.Value)...)
+	}
+	values = append(values, readFieldPaths(payload.Discriminator)...)
+	selectorPaths := make([]FieldPath, 0)
+	if payload.Selector.Where != nil {
+		selectorPaths = append(selectorPaths, readFieldPaths(*payload.Selector.Where)...)
+	}
+	selectorPaths = append(selectorPaths, grouping...)
+	guard := readFieldPaths(payload.Guard)
+	return []InvariantDeclaration{
+		newInvariant(rule, selectorEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, selectorPaths),
+		newInvariant(rule, cardinalitySuffix, SelectionCardinalityInvalid, InvariantRulePrecondition, grouping),
+		newInvariant(rule, selectionNonEmptySuffix, SelectionEmpty, InvariantRulePrecondition, grouping),
+		newInvariant(rule, groupEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, append(slices.Clone(guard), values...)),
+		newInvariant(rule, guardSuffix, SelectionGuardUnsatisfied, InvariantRulePrecondition, guard),
+	}
+}
+
+func deleteEntityInvariants(rule RuleID, payload *DeleteEntityDeclaration) []InvariantDeclaration {
+	grouping := make([]FieldPath, 0)
+	if payload.Selector.GroupBy != nil {
+		grouping = readFieldPaths(*payload.Selector.GroupBy)
+	}
+	selectorPaths := make([]FieldPath, 0)
+	if payload.Selector.Where != nil {
+		selectorPaths = append(selectorPaths, readFieldPaths(*payload.Selector.Where)...)
+	}
+	selectorPaths = append(selectorPaths, grouping...)
+	guard := readFieldPaths(payload.Guard)
+	return []InvariantDeclaration{
+		newInvariant(rule, selectorEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, selectorPaths),
+		newInvariant(rule, cardinalitySuffix, SelectionCardinalityInvalid, InvariantRulePrecondition, grouping),
+		newInvariant(rule, selectionNonEmptySuffix, SelectionEmpty, InvariantRulePrecondition, grouping),
+		newInvariant(rule, groupEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, guard),
+		newInvariant(rule, guardSuffix, SelectionGuardUnsatisfied, InvariantRulePrecondition, guard),
+	}
+}
+
+func relationInvariants(rule RuleID, fromSel, toSel Selector, guard Expr) []InvariantDeclaration {
+	grouping := make([]FieldPath, 0)
+	if fromSel.GroupBy != nil {
+		grouping = append(grouping, readFieldPaths(*fromSel.GroupBy)...)
+	}
+	if toSel.GroupBy != nil {
+		grouping = append(grouping, readFieldPaths(*toSel.GroupBy)...)
+	}
+	selectorPaths := make([]FieldPath, 0)
+	if fromSel.Where != nil {
+		selectorPaths = append(selectorPaths, readFieldPaths(*fromSel.Where)...)
+	}
+	if toSel.Where != nil {
+		selectorPaths = append(selectorPaths, readFieldPaths(*toSel.Where)...)
+	}
+	selectorPaths = append(selectorPaths, grouping...)
+	guardPaths := readFieldPaths(guard)
+	return []InvariantDeclaration{
+		newInvariant(rule, selectorEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, selectorPaths),
+		newInvariant(rule, cardinalitySuffix, SelectionCardinalityInvalid, InvariantRulePrecondition, grouping),
+		newInvariant(rule, selectionNonEmptySuffix, SelectionEmpty, InvariantRulePrecondition, grouping),
+		newInvariant(rule, groupEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, guardPaths),
+		newInvariant(rule, guardSuffix, SelectionGuardUnsatisfied, InvariantRulePrecondition, guardPaths),
+	}
+}
+
+func mergeEntityInvariants(rule RuleID, payload *MergeEntitiesDeclaration) []InvariantDeclaration {
+	grouping := make([]FieldPath, 0)
+	if payload.Selector.GroupBy != nil {
+		grouping = readFieldPaths(*payload.Selector.GroupBy)
+	}
+	values := make([]FieldPath, 0)
+	for _, assignment := range payload.Assignments {
+		values = append(values, readFieldPaths(assignment.Value)...)
+	}
+	values = append(values, readFieldPaths(payload.Discriminator)...)
+	selectorPaths := make([]FieldPath, 0)
+	if payload.Selector.Where != nil {
+		selectorPaths = append(selectorPaths, readFieldPaths(*payload.Selector.Where)...)
+	}
+	selectorPaths = append(selectorPaths, grouping...)
+	guard := readFieldPaths(payload.Guard)
+	return []InvariantDeclaration{
+		newInvariant(rule, selectorEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, selectorPaths),
+		newInvariant(rule, cardinalitySuffix, SelectionCardinalityInvalid, InvariantRulePrecondition, grouping),
+		newInvariant(rule, selectionNonEmptySuffix, SelectionEmpty, InvariantRulePrecondition, grouping),
+		newInvariant(rule, groupEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, append(slices.Clone(guard), values...)),
+		newInvariant(rule, guardSuffix, SelectionGuardUnsatisfied, InvariantRulePrecondition, guard),
+	}
+}
+
+func splitEntityInvariants(rule RuleID, payload *SplitEntityDeclaration) []InvariantDeclaration {
+	grouping := make([]FieldPath, 0)
+	if payload.Selector.GroupBy != nil {
+		grouping = readFieldPaths(*payload.Selector.GroupBy)
+	}
+	values := make([]FieldPath, 0)
+	for _, p := range payload.Partitions {
+		values = append(values, readFieldPaths(p.Discriminator)...)
+		for _, a := range p.Assignments {
+			values = append(values, readFieldPaths(a.Value)...)
 		}
-		result = append(result, newInvariant(rule, fmt.Sprintf("03-source-%02d", i), code, InvariantRulePrecondition, predicate.Fields))
 	}
-	resultReads := []FieldPath{aggregate.Anchor.Source, aggregate.Anchor.Destination}
-	for _, reduction := range aggregate.Reductions {
-		resultReads = append(resultReads, reduction.Source, reduction.Destination)
+	selectorPaths := make([]FieldPath, 0)
+	if payload.Selector.Where != nil {
+		selectorPaths = append(selectorPaths, readFieldPaths(*payload.Selector.Where)...)
 	}
-	for _, predicate := range aggregate.ResultPredicates {
-		resultReads = append(resultReads, predicate.Fields...)
+	selectorPaths = append(selectorPaths, grouping...)
+	guard := readFieldPaths(payload.Guard)
+	return []InvariantDeclaration{
+		newInvariant(rule, selectorEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, selectorPaths),
+		newInvariant(rule, cardinalitySuffix, SelectionCardinalityInvalid, InvariantRulePrecondition, grouping),
+		newInvariant(rule, selectionNonEmptySuffix, SelectionEmpty, InvariantRulePrecondition, grouping),
+		newInvariant(rule, groupEvaluableSuffix, SelectionExpressionUnavailable, InvariantRulePrecondition, append(slices.Clone(guard), values...)),
+		newInvariant(rule, guardSuffix, SelectionGuardUnsatisfied, InvariantRulePrecondition, guard),
 	}
-	result = append(result, newInvariant(rule, "04-emitted-values", HOSAggregateInvalid, InvariantCandidatePostcondition, normalizeDerivedFields(resultReads)))
-	return result
 }
 
 func newInvariant(rule RuleID, suffix string, code InvariantCode, scope InvariantScope, reads []FieldPath) InvariantDeclaration {
@@ -1336,20 +1662,8 @@ func schemaHasEntity(schema Schema, kind EntityKind) bool {
 	return ok
 }
 
-func schemaHasRelation(schema Schema, relation RelationKind, from, to EntityKind) bool {
-	declaration, ok := schema.relationDeclaration(relation)
-	return ok && declaration.FromKind == from && declaration.ToKind == to
-}
-
-func schemaRelationMatches(producer CompiledTransformation, consumer TransformationDeclaration) bool {
-	return producer.declaration.Form != nil && consumer.Aggregate != nil &&
-		producer.declaration.Form.RelationKind == consumer.Aggregate.RelationKind &&
-		producer.declaration.Form.SourceKind == consumer.Aggregate.SourceKind
-}
-
 func validRequirementCode(code RequirementCode) bool {
-	return code == TeamAssignmentKeyRequired || code == TeamAggregationAnchorRequired ||
-		code == TeamElapsedDurationRequired || code == TeamDrivingDurationRequired
+	return validSemanticName(string(code))
 }
 
 func intersects(a, b []FieldPath) bool {
@@ -1359,25 +1673,6 @@ func intersects(a, b []FieldPath) bool {
 		}
 	}
 	return false
-}
-
-func compareFieldCopy(a, b FieldCopy) int {
-	if a.Source != b.Source {
-		return compare(string(a.Source), string(b.Source))
-	}
-	return compare(string(a.Destination), string(b.Destination))
-}
-
-func predicateKey(predicate AggregatePredicate) string {
-	parts := make([]string, len(predicate.Fields))
-	for i, field := range predicate.Fields {
-		parts[i] = string(field)
-	}
-	return fmt.Sprintf("%03d:%s", predicate.Kind, strings.Join(parts, "\x00"))
-}
-
-func reductionKey(reduction FieldReduction) string {
-	return fmt.Sprintf("%03d:%s:%s", reduction.Kind, reduction.Source, reduction.Destination)
 }
 
 func requirementKey(requirement RequirementAtom) string {
@@ -1403,7 +1698,9 @@ func cloneInvariant(input InvariantDeclaration) InvariantDeclaration {
 func cloneCompiledTransformation(input CompiledTransformation) CompiledTransformation {
 	result := CompiledTransformation{declaration: cloneTransformation(input.declaration), reads: slices.Clone(input.reads), writes: slices.Clone(input.writes),
 		accesses: slices.Clone(input.accesses), dependencies: slices.Clone(input.dependencies), level: input.level,
-		selector: cloneCompiledSelector(input.selector)}
+		selector:     cloneCompiledSelector(input.selector),
+		fromSelector: cloneCompiledSelector(input.fromSelector),
+		toSelector:   cloneCompiledSelector(input.toSelector)}
 	result.invariants = make([]InvariantDeclaration, len(input.invariants))
 	for i, invariant := range input.invariants {
 		result.invariants[i] = cloneInvariant(invariant)

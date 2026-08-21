@@ -81,6 +81,10 @@ func TestValueTranslationRejectsKindPayloadDisagreement(t *testing.T) {
 		{"int64 kind carrying a string", openapiv1.Value{Kind: openapiv1.ValueKindInt64, String: ptr("ten")}},
 		{"string kind carrying an int", openapiv1.Value{Kind: openapiv1.ValueKindString, Int64: ptrInt(10)}},
 		{"atom kind with no payload", openapiv1.Value{Kind: openapiv1.ValueKindAtom}},
+		{"timestamp kind with int", openapiv1.Value{Kind: openapiv1.ValueKindTimestamp, Int64: ptrInt(123)}},
+		{"duration kind with string", openapiv1.Value{Kind: openapiv1.ValueKindDuration, String: ptr("3600s")}},
+		{"decimal kind with int", openapiv1.Value{Kind: openapiv1.ValueKindDecimal, Int64: ptrInt(100)}},
+		{"date kind with timestamp string", openapiv1.Value{Kind: openapiv1.ValueKindDate, String: ptr("2026-08-21T10:00:00Z")}},
 		{"two payloads present", openapiv1.Value{Kind: openapiv1.ValueKindString, String: ptr("a"), Int64: ptrInt(1)}},
 		{"unknown kind", openapiv1.Value{Kind: openapiv1.ValueKind("float"), String: ptr("1.5")}},
 	}
@@ -88,6 +92,41 @@ func TestValueTranslationRejectsKindPayloadDisagreement(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := valueFromWire(test.value); err == nil {
 				t.Fatal("translation accepted a malformed value")
+			}
+		})
+	}
+}
+
+func TestValueTranslationRoundTripsAllKinds(t *testing.T) {
+	tests := []struct {
+		name  string
+		value openapiv1.Value
+	}{
+		{"string", openapiv1.Value{Kind: openapiv1.ValueKindString, String: ptr("hello")}},
+		{"atom", openapiv1.Value{Kind: openapiv1.ValueKindAtom, Atom: ptr("alpha")}},
+		{"int64", openapiv1.Value{Kind: openapiv1.ValueKindInt64, Int64: ptrInt(42)}},
+		{"timestamp", openapiv1.Value{Kind: openapiv1.ValueKindTimestamp, Timestamp: ptr("2026-08-21T10:00:00Z")}},
+		{"duration", openapiv1.Value{Kind: openapiv1.ValueKindDuration, Duration: ptrInt(3600)}},
+		{"decimal", openapiv1.Value{Kind: openapiv1.ValueKindDecimal, Decimal: ptr("123.45")}},
+		{"date", openapiv1.Value{Kind: openapiv1.ValueKindDate, Date: ptr("2026-08-21")}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			val, err := valueFromWire(tc.value)
+			if err != nil {
+				t.Fatalf("valueFromWire: %v", err)
+			}
+			wireVal := valueToWire(val)
+			if wireVal.Kind != tc.value.Kind {
+				t.Fatalf("kind = %s, want %s", wireVal.Kind, tc.value.Kind)
+			}
+			roundTripped, err := valueFromWire(wireVal)
+			if err != nil {
+				t.Fatalf("valueFromWire second: %v", err)
+			}
+			if !roundTripped.Equal(val) {
+				t.Fatalf("roundtripped = %v, want %v", roundTripped, val)
 			}
 		})
 	}
@@ -502,29 +541,146 @@ func TestTransformationProjectionRefusesADeclarationTheContractCannotExpress(t *
 	if err == nil {
 		t.Fatalf("projected an inexpressible declaration as %+v", projected)
 	}
-	if projected.Operator != "" || projected.Form != nil || projected.Aggregate != nil || projected.SelectAssign != nil {
+	if projected.Operator != "" || projected.SelectAssign != nil {
 		t.Fatalf("refused projection still returned content: %+v", projected)
 	}
 
 	// And every operator the contract DOES express still projects, or this test would pass
 	// against a projection that had simply stopped working.
 	groupBy := semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"}
+	trueLit := semantic.Expr{Kind: semantic.ExprLiteral, Literal: &semantic.Value{}}
+	vTrue := semantic.NewInt64Value(1)
+	trueLit.Literal = &vTrue
+
 	for _, expressible := range []semantic.TransformationDeclaration{
-		{ID: "form_team.v1", Operator: semantic.OperatorFormRelatedEntity,
-			Form: &semantic.FormRelatedEntityDeclaration{SourceKind: "driver", OutputKind: "team"}},
-		{ID: "aggregate_team_hos.v1", Operator: semantic.OperatorAggregateRelatedFields,
-			Aggregate: &semantic.AggregateRelatedFieldsDeclaration{SourceKind: "driver"}},
-		{ID: "certify_depot.v1", Operator: semantic.OperatorSelectAndAssign,
+		{
+			ID:       "certify_depot.v1",
+			Operator: semantic.OperatorSelectAndAssign,
 			SelectAssign: &semantic.SelectAssignDeclaration{
-				Selector: semantic.Selector{Kind: "driver", GroupBy: &groupBy,
-					Members: semantic.Cardinality{Kind: semantic.CardinalityAtLeast, Count: 1}},
+				Selector: semantic.Selector{
+					Kind:    "driver",
+					GroupBy: &groupBy,
+					Members: semantic.Cardinality{Kind: semantic.CardinalityAtLeast, Count: 1},
+				},
 				Guard: semantic.Expr{Kind: semantic.ExprAllEqual, Field: "driver.depot"},
-				Assignments: []semantic.FieldAssignment{{Target: "driver.status",
-					Value: semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"}}},
-			}},
+				Assignments: []semantic.FieldAssignment{{
+					Target: "driver.status",
+					Value:  semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"},
+				}},
+			},
+		},
+		{
+			ID:       "insert_team.v1",
+			Operator: semantic.OperatorInsertEntity,
+			InsertEntity: &semantic.InsertEntityDeclaration{
+				Selector: semantic.Selector{
+					Kind:    "driver",
+					GroupBy: &groupBy,
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 2},
+				},
+				TargetKind:    "team",
+				Discriminator: trueLit,
+				Guard:         trueLit,
+				Assignments: []semantic.FieldAssignment{{
+					Target: "team.depot",
+					Value:  semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"},
+				}},
+			},
+		},
+		{
+			ID:       "delete_driver.v1",
+			Operator: semantic.OperatorDeleteEntity,
+			DeleteEntity: &semantic.DeleteEntityDeclaration{
+				Selector: semantic.Selector{
+					Kind:    "driver",
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 1},
+				},
+				Guard: trueLit,
+			},
+		},
+		{
+			ID:       "relate_driver_truck.v1",
+			Operator: semantic.OperatorRelateEntities,
+			RelateEntities: &semantic.RelateEntitiesDeclaration{
+				FromSelector: semantic.Selector{
+					Kind:    "driver",
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 1},
+				},
+				ToSelector: semantic.Selector{
+					Kind:    "truck",
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 1},
+				},
+				RelationKind: "assigned_truck",
+				Guard:        trueLit,
+			},
+		},
+		{
+			ID:       "unrelate_driver_truck.v1",
+			Operator: semantic.OperatorUnrelateEntities,
+			UnrelateEntities: &semantic.UnrelateEntitiesDeclaration{
+				FromSelector: semantic.Selector{
+					Kind:    "driver",
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 1},
+				},
+				ToSelector: semantic.Selector{
+					Kind:    "truck",
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 1},
+				},
+				RelationKind: "assigned_truck",
+				Guard:        trueLit,
+			},
+		},
+		{
+			ID:       "merge_drivers.v1",
+			Operator: semantic.OperatorMergeEntities,
+			MergeEntities: &semantic.MergeEntitiesDeclaration{
+				Selector: semantic.Selector{
+					Kind:    "driver",
+					GroupBy: &groupBy,
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 2},
+				},
+				TargetKind:        "driver",
+				Discriminator:     trueLit,
+				Guard:             trueLit,
+				RetainSources:     false,
+				ReanchorRelations: true,
+				Assignments: []semantic.FieldAssignment{{
+					Target: "driver.depot",
+					Value:  semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"},
+				}},
+			},
+		},
+		{
+			ID:       "split_driver.v1",
+			Operator: semantic.OperatorSplitEntity,
+			SplitEntity: &semantic.SplitEntityDeclaration{
+				Selector: semantic.Selector{
+					Kind:    "driver",
+					Members: semantic.Cardinality{Kind: semantic.CardinalityExactly, Count: 1},
+				},
+				TargetKind:   "driver_part",
+				Guard:        trueLit,
+				RetainSource: false,
+				Partitions: []semantic.PartitionDeclaration{{
+					Discriminator: trueLit,
+					Assignments: []semantic.FieldAssignment{{
+						Target: "driver_part.depot",
+						Value:  semantic.Expr{Kind: semantic.ExprField, Field: "driver.depot"},
+					}},
+				}},
+			},
+		},
 	} {
-		if _, err := transformationToWire(expressible); err != nil {
-			t.Fatalf("%s: %v", expressible.ID, err)
+		wire, err := transformationToWire(expressible)
+		if err != nil {
+			t.Fatalf("%s to wire: %v", expressible.ID, err)
+		}
+		back, err := transformationFromWire(wire)
+		if err != nil {
+			t.Fatalf("%s from wire: %v", expressible.ID, err)
+		}
+		if back.ID != expressible.ID || back.Operator != expressible.Operator {
+			t.Fatalf("%s roundtrip mismatch: got ID %s, Operator %v", expressible.ID, back.ID, back.Operator)
 		}
 	}
 }

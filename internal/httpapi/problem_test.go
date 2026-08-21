@@ -15,27 +15,14 @@ import (
 // a problem document to any conforming client, so error handling silently
 // degrades to "some 4xx with a body".
 func TestProblemsRenderTheRatifiedContract(t *testing.T) {
-	tests := []struct {
-		kind   problemKind
-		status int
-		slug   string
-	}{
-		{problemInvalidRequest, http.StatusBadRequest, "invalid-request"},
-		{problemTenantRequired, http.StatusBadRequest, "tenant-required"},
-		{problemNotFound, http.StatusNotFound, "not-found"},
-		{problemUnsupportedMediaType, http.StatusUnsupportedMediaType, "unsupported-media-type"},
-		{problemInvalidPlan, http.StatusUnprocessableEntity, "invalid-plan"},
-		{problemInvalidSemanticInput, http.StatusUnprocessableEntity, "invalid-semantic-input"},
-		{problemInternalError, http.StatusInternalServerError, "internal-error"},
-		{problemDependencyUnavailable, http.StatusServiceUnavailable, "dependency-unavailable"},
-	}
-	for _, test := range tests {
-		t.Run(test.slug, func(t *testing.T) {
+	for kind, def := range problemCatalog {
+		slug := string(kind)
+		t.Run(slug, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			writeProblem(recorder, test.kind, nil)
+			writeProblem(recorder, kind, nil)
 
-			if recorder.Code != test.status {
-				t.Errorf("status = %d, want %d", recorder.Code, test.status)
+			if recorder.Code != def.status {
+				t.Errorf("status = %d, want %d", recorder.Code, def.status)
 			}
 			if got := recorder.Header().Get("Content-Type"); got != "application/problem+json" {
 				t.Errorf("Content-Type = %q, want application/problem+json", got)
@@ -44,11 +31,11 @@ func TestProblemsRenderTheRatifiedContract(t *testing.T) {
 			if err := json.Unmarshal(recorder.Body.Bytes(), &problem); err != nil {
 				t.Fatalf("problem body is not valid JSON: %v", err)
 			}
-			if want := problemBaseURI + test.slug; problem.Type != want {
+			if want := problemBaseURI + slug; problem.Type != want {
 				t.Errorf("type = %q, want %q", problem.Type, want)
 			}
-			if problem.Status != int32(test.status) {
-				t.Errorf("body status = %d, want %d", problem.Status, test.status)
+			if problem.Status != int32(def.status) {
+				t.Errorf("body status = %d, want %d", problem.Status, def.status)
 			}
 			if problem.Title == "" {
 				t.Error("problem has no title")

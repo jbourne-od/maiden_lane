@@ -20,13 +20,11 @@ func TestAssessC1ForCMAndOptimizer(t *testing.T) {
 	if got := cmAssessment.Verdict(); got != Ready {
 		t.Fatalf("CM=%s", got)
 	}
-	// Ready assessments retain the satisfied per-entity results rather than
-	// encoding only an empty failure list.
 	cmResults := cmAssessment.EntityResults()
-	if len(cmResults) != 1 || len(cmResults[0].Results()) != 1 {
+	if len(cmResults) != 2 || len(cmResults[0].Results()) != 2 {
 		t.Fatalf("CM entity results=%v", cmResults)
 	}
-	if result := cmResults[0].Results()[0]; !result.Satisfied() || result.Code() != TeamAssignmentKeyRequired || len(result.FactRefs()) != 1 {
+	if result := cmResults[0].Results()[0]; !result.Satisfied() || result.Code() != "DriverAssignmentRequired" || len(result.FactRefs()) != 1 {
 		t.Fatalf("CM satisfied result=%v", result)
 	}
 
@@ -39,7 +37,7 @@ func TestAssessC1ForCMAndOptimizer(t *testing.T) {
 		t.Fatalf("optimizer=%s", assessment.Verdict())
 	}
 	assertMissingRequirementCodes(t, assessment,
-		TeamAggregationAnchorRequired, TeamElapsedDurationRequired, TeamDrivingDurationRequired)
+		"DriverDrivingDurationRequired", "DriverElapsedDurationRequired", "DriverReconciledAnchorRequired")
 	if assessment.CheckpointArtifactID() != c1.ID() || assessment.ProfileID() != optimizer.ID() {
 		t.Fatal("assessment does not link its exact checkpoint/profile question")
 	}
@@ -105,7 +103,7 @@ func TestAssessMutatesNoSemanticArtifact(t *testing.T) {
 func TestAssessCannotOmitSecondIncompleteTeam(t *testing.T) {
 	fixture := newReadinessFixture(t)
 	complete := fixture.c2.State()
-	incompleteRef := EntityRef{Kind: "team", ID: SourceEntityID(complete.InputLineageID(), "team", "second")}
+	incompleteRef := EntityRef{Kind: "driver", ID: SourceEntityID(complete.InputLineageID(), "driver", "third")}
 	incomplete := mustEntity(t, incompleteRef.Kind, incompleteRef.ID, map[FieldName]Value{
 		"assignment_key": mustString(t, "Y"),
 	})
@@ -123,31 +121,31 @@ func TestAssessCannotOmitSecondIncompleteTeam(t *testing.T) {
 		t.Fatalf("verdict=%q is outside the closed vocabulary", assessment.Verdict())
 	}
 	if assessment.Verdict() != NeedsInput {
-		t.Fatal("incomplete selected team did not force needs_input")
+		t.Fatal("incomplete selected driver did not force needs_input")
 	}
 	entities := assessment.EntityResults()
-	if len(entities) != 2 {
-		t.Fatalf("selected entities=%d, want every team in scope", len(entities))
+	if len(entities) != 3 {
+		t.Fatalf("selected entities=%d, want every driver in scope", len(entities))
 	}
 	var found bool
 	for _, entity := range entities {
 		if entity.Entity() != incompleteRef {
 			for _, result := range entity.Results() {
 				if !result.Satisfied() {
-					t.Fatalf("complete team %v reported missing %s", entity.Entity(), result.Code())
+					t.Fatalf("complete driver %v reported missing %s", entity.Entity(), result.Code())
 				}
 			}
 			continue
 		}
 		found = true
 		missing := missingCodes(entity.Results())
-		want := []RequirementCode{TeamAggregationAnchorRequired, TeamDrivingDurationRequired, TeamElapsedDurationRequired}
+		want := []RequirementCode{"DriverAssignmentStatusRequired", "DriverDrivingDurationRequired", "DriverElapsedDurationRequired", "DriverReconciledAnchorRequired"}
 		if !slices.Equal(missing, want) {
-			t.Fatalf("incomplete team missing=%v, want %v", missing, want)
+			t.Fatalf("incomplete driver missing=%v, want %v", missing, want)
 		}
 	}
 	if !found {
-		t.Fatal("non-ready in-scope team was dropped from the assessment")
+		t.Fatal("non-ready in-scope driver was dropped from the assessment")
 	}
 }
 
@@ -279,21 +277,21 @@ func TestAssessOptimizerReadyImpliesCMReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewInputLineageID: %v", err)
 	}
-	fieldNames := []FieldName{"assignment_key", "aggregation_anchor", "elapsed_duration_hours", "driving_duration_hours"}
+	fieldNames := []FieldName{"assignment_key", "reconciled_anchor", "elapsed_duration_hours", "driving_duration_hours"}
 	fieldValues := map[FieldName]Value{
 		"assignment_key":         mustString(t, "X"),
-		"aggregation_anchor":     mustAtom(t, "T0"),
+		"reconciled_anchor":      mustAtom(t, "T0"),
 		"elapsed_duration_hours": NewInt64Value(10),
 		"driving_duration_hours": NewInt64Value(8),
 	}
-	teamWithFields := func(key string, mask int) Entity {
+	driverWithFields := func(key string, mask int) Entity {
 		fields := make(map[FieldName]Value)
 		for bit, name := range fieldNames {
 			if mask&(1<<bit) != 0 {
 				fields[name] = fieldValues[name]
 			}
 		}
-		return mustEntity(t, "team", SourceEntityID(lineage, "team", key), fields)
+		return mustEntity(t, "driver", SourceEntityID(lineage, "driver", key), fields)
 	}
 
 	assessVerdict := func(state State, profile CompiledProfile) ReadinessVerdict {
@@ -312,9 +310,9 @@ func TestAssessOptimizerReadyImpliesCMReady(t *testing.T) {
 	}
 
 	for mask := 0; mask < 1<<len(fieldNames); mask++ {
-		checkState([]Entity{teamWithFields("solo", mask)})
+		checkState([]Entity{driverWithFields("solo", mask)})
 		for second := 0; second < 1<<len(fieldNames); second++ {
-			checkState([]Entity{teamWithFields("first", mask), teamWithFields("second", second)})
+			checkState([]Entity{driverWithFields("first", mask), driverWithFields("second", second)})
 		}
 	}
 }
@@ -399,20 +397,20 @@ func TestAssessmentCanonicalVectors(t *testing.T) {
 			name:          "ready",
 			fields:        map[FieldName]Value{"g": mustString(t, "X"), "x": mustAtom(t, "T0")},
 			stateDigest:   "sha256:3f782780c51b15f1e5d5fe39c7595d80857c93258de2b4949bc98a643acd5817",
-			idHex:         "000000000000001c6d616964656e2d6c616e652e6173736573736d656e742d69642e76316224a7a204464c7491ea7009787b3e53cbc61da7c905f32490e3b478b86ed7dc38a503b6b92ae6d64fcacd9653f014707e10f0edf237707d1879ea9cea542271",
-			assessmentID:  "sha256:9b87834e936126f711d21fd29d9c2b7750bd8d073924d7c39326f0d6d4cc5dc7",
-			assessmentHex: "00000000000000236d616964656e2d6c616e652e72656164696e6573732d6173736573736d656e742e763100000000000000236d616964656e2d6c616e652e6173736573736d656e742d73656d616e746963732e76316224a7a204464c7491ea7009787b3e53cbc61da7c905f32490e3b478b86ed7dc38a503b6b92ae6d64fcacd9653f014707e10f0edf237707d1879ea9cea5422710000000000000005726561647900000000000000010000000000000001624d8cc35e11383c2e26063e688076708413fa2689be1f5b547241aec89d0489e1000000000000000200000000000000205445414d5f4147475245474154494f4e5f414e43484f525f52455155495245440100000000000000010000000000000001624d8cc35e11383c2e26063e688076708413fa2689be1f5b547241aec89d0489e1000000000000000178000000000000001c5445414d5f41535349474e4d454e545f4b45595f52455155495245440100000000000000010000000000000001624d8cc35e11383c2e26063e688076708413fa2689be1f5b547241aec89d0489e10000000000000001670000000000000000",
-			digest:        "sha256:fdadb39573d77dc4f2269da041c15cc04a1bab56b2ecf7488da939acb3aadf85",
+			idHex:         "000000000000001c6d616964656e2d6c616e652e6173736573736d656e742d69642e76316224a7a204464c7491ea7009787b3e53cbc61da7c905f32490e3b478b86ed7dcab63b577f75697ab6be236751d891d2840eb0a158fbc693a75eda259772a511b",
+			assessmentID:  "sha256:c96e7fe621026311241a49d3c5ccd564506a53cc1114007f15cd90a7abb63ab5",
+			assessmentHex: "00000000000000236d616964656e2d6c616e652e72656164696e6573732d6173736573736d656e742e763100000000000000236d616964656e2d6c616e652e6173736573736d656e742d73656d616e746963732e76316224a7a204464c7491ea7009787b3e53cbc61da7c905f32490e3b478b86ed7dcab63b577f75697ab6be236751d891d2840eb0a158fbc693a75eda259772a511b0000000000000005726561647900000000000000010000000000000001624d8cc35e11383c2e26063e688076708413fa2689be1f5b547241aec89d0489e10000000000000002000000000000000c625f675f72657175697265640100000000000000010000000000000001624d8cc35e11383c2e26063e688076708413fa2689be1f5b547241aec89d0489e1000000000000000167000000000000000c625f785f72657175697265640100000000000000010000000000000001624d8cc35e11383c2e26063e688076708413fa2689be1f5b547241aec89d0489e10000000000000001780000000000000000",
+			digest:        "sha256:1f05fc1c90eb69c2f04e0b93592fd313e1973122f1295e17869cab97bb9be1b6",
 			verdict:       Ready,
 		},
 		{
 			name:          "needs_input",
 			fields:        map[FieldName]Value{"g": mustString(t, "X")},
 			stateDigest:   "sha256:6956bb85032600ae955d7c21563b6ddff1c649941e4ad2c720b5ca15fa4247a0",
-			idHex:         "000000000000001c6d616964656e2d6c616e652e6173736573736d656e742d69642e76314d5087c27554035f79f579fe97467e7703bc637f063e2beb62fb677e83caa69b38a503b6b92ae6d64fcacd9653f014707e10f0edf237707d1879ea9cea542271",
-			assessmentID:  "sha256:72f790a971a64ed62524d32b44abd1ea8fdd26795db622e1db20efa9a59a3680",
-			assessmentHex: "00000000000000236d616964656e2d6c616e652e72656164696e6573732d6173736573736d656e742e763100000000000000236d616964656e2d6c616e652e6173736573736d656e742d73656d616e746963732e76314d5087c27554035f79f579fe97467e7703bc637f063e2beb62fb677e83caa69b38a503b6b92ae6d64fcacd9653f014707e10f0edf237707d1879ea9cea542271000000000000000b6e656564735f696e70757400000000000000010000000000000001624d8cc35e11383c2e26063e688076708413fa2689be1f5b547241aec89d0489e1000000000000000200000000000000205445414d5f4147475245474154494f4e5f414e43484f525f5245515549524544020000000000000000000000000000001c5445414d5f41535349474e4d454e545f4b45595f52455155495245440100000000000000010000000000000001624d8cc35e11383c2e26063e688076708413fa2689be1f5b547241aec89d0489e10000000000000001670000000000000000",
-			digest:        "sha256:c446ee0d9663d46fc48186636096af92e5261f871721b39643fd4b38a8a9e8eb",
+			idHex:         "000000000000001c6d616964656e2d6c616e652e6173736573736d656e742d69642e76314d5087c27554035f79f579fe97467e7703bc637f063e2beb62fb677e83caa69bab63b577f75697ab6be236751d891d2840eb0a158fbc693a75eda259772a511b",
+			assessmentID:  "sha256:b07256e866bb279ee2cc7bc077c9ceef493dd6e13a99ac0e55c3b204f2a67a69",
+			assessmentHex: "00000000000000236d616964656e2d6c616e652e72656164696e6573732d6173736573736d656e742e763100000000000000236d616964656e2d6c616e652e6173736573736d656e742d73656d616e746963732e76314d5087c27554035f79f579fe97467e7703bc637f063e2beb62fb677e83caa69bab63b577f75697ab6be236751d891d2840eb0a158fbc693a75eda259772a511b000000000000000b6e656564735f696e70757400000000000000010000000000000001624d8cc35e11383c2e26063e688076708413fa2689be1f5b547241aec89d0489e10000000000000002000000000000000c625f675f72657175697265640100000000000000010000000000000001624d8cc35e11383c2e26063e688076708413fa2689be1f5b547241aec89d0489e1000000000000000167000000000000000c625f785f72657175697265640200000000000000000000000000000000",
+			digest:        "sha256:304a0756d142c15adf493b04b0b65bff95018e1bace21778150d440606e8616a",
 			verdict:       NeedsInput,
 		},
 	}
@@ -454,10 +452,8 @@ func TestAssessEmptyScopeIsVacuouslyReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewInputLineageID: %v", err)
 	}
-	// Drivers only: the explicit `all team entities` scope selects nothing.
-	state, err := NewState(schema, lineage, []Entity{
-		mustEntity(t, "driver", SourceEntityID(lineage, "driver", "A"), map[FieldName]Value{"assignment_key": mustString(t, "X")}),
-	}, nil)
+	// Empty state: the explicit `all driver entities` scope selects nothing.
+	state, err := NewState(schema, lineage, []Entity{}, nil)
 	if err != nil {
 		t.Fatalf("NewState: %v", err)
 	}

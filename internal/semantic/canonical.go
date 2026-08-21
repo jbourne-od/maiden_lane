@@ -54,12 +54,8 @@ import (
 //                 compiler-derived invariant declarations, sorted checkpoint
 //                 declarations
 //   transformation declaration: rule ID, operator byte, declared reads,
-//                 declared writes, dependency IDs, then the union payloads in
-//                 order -- Form and Aggregate each behind a one-byte presence
-//                 marker, and SelectAssign written only when present and with
-//                 NO marker, so that adding it left the bytes of every
-//                 declaration that lacks it unchanged. A payload appended
-//                 later must do the same
+//                 declared writes, dependency IDs, then the select-assign
+//                 payload behind a one-byte presence marker (0x02)
 //   select-assign payload: selector kind, cardinality kind and count, optional
 //                 filter predicate, optional grouping expression, group guard,
 //                 then each assignment as target path and value expression
@@ -150,6 +146,12 @@ const (
 	// the only two values encoder.optional writes, so the payload's presence is decidable at
 	// one byte without consulting anything around it. See encodeTransformationDeclaration.
 	selectAssignPresent         byte = 0x02
+	insertEntityPresent         byte = 0x03
+	deleteEntityPresent         byte = 0x04
+	relateEntitiesPresent       byte = 0x05
+	unrelateEntitiesPresent     byte = 0x06
+	mergeEntitiesPresent        byte = 0x07
+	splitEntityPresent          byte = 0x08
 	compilationInputDomainTag        = "maiden-lane.compilation-input.v1"
 	planDomainTag                    = "maiden-lane.plan.v1"
 	compiledProfileDomainTag         = "maiden-lane.compiled-profile.v1"
@@ -276,6 +278,14 @@ func (e *canonicalEncoder) byte(value byte) {
 	}
 }
 
+func (e *canonicalEncoder) bool(value bool) {
+	if value {
+		e.byte(0x01)
+	} else {
+		e.byte(0x00)
+	}
+}
+
 func (e *canonicalEncoder) value(value Value) {
 	if !value.Valid() {
 		if e.err == nil {
@@ -289,6 +299,16 @@ func (e *canonicalEncoder) value(value Value) {
 		e.string(value.text)
 	case ValueInt64:
 		e.int64(value.integer)
+	case ValueTimestamp:
+		e.string(value.text)
+	case ValueDuration:
+		e.int64(value.integer)
+	case ValueDecimal:
+		e.string(value.text)
+	case ValueDate:
+		e.string(value.text)
+	default:
+		e.fail(fmt.Errorf("value kind %d has no canonical encoding", value.Kind()))
 	}
 }
 
@@ -358,6 +378,16 @@ func lineageRootCanonicalBytes(namespace, rootKey string) ([]byte, error) {
 // malformed named values; NewEntity also rejects that zero at its boundary.
 func SourceEntityID(lineage InputLineageID, kind EntityKind, canonicalSourceKey string) EntityID {
 	canonical, err := sourceEntityIDCanonicalBytes(lineage, kind, canonicalSourceKey)
+	if err != nil {
+		return ""
+	}
+	return EntityID(canonicalDigest(canonical))
+}
+
+// SyntheticEntityID deterministically derives a content-addressed entity identity
+// for an entity created during rule execution.
+func SyntheticEntityID(lineage InputLineageID, kind EntityKind, rule RuleID, progenitors []EntityRef, discriminator Value) EntityID {
+	canonical, err := encodeSyntheticEntityIdentity(lineage, kind, rule, canonicalEntityRefs(progenitors), discriminator)
 	if err != nil {
 		return ""
 	}
@@ -570,6 +600,10 @@ func encodeOperationPayload(encoder *canonicalEncoder, operation Operation) {
 			})
 			encoder.value(change.After)
 		}
+	case OperationDelete:
+		encodeEntity(encoder, operation.delete.entity)
+	case OperationUnrelate:
+		encodeRelation(encoder, operation.unrelate.relation)
 	default:
 		if encoder.err == nil {
 			encoder.err = fmt.Errorf("unknown operation kind %d", operation.kind)
@@ -639,19 +673,21 @@ func encodeRuleset(rules normalizedRuleset) ([]byte, error) {
 	}
 	invariants := make([]InvariantDeclaration, 0)
 	for _, transformation := range rules.transformations {
-		switch transformation.Operator {
-		case OperatorFormRelatedEntity:
-			if transformation.Form != nil {
-				invariants = append(invariants, formInvariants(transformation.ID, transformation.Form.GroupingField)...)
-			}
-		case OperatorAggregateRelatedFields:
-			if transformation.Aggregate != nil {
-				invariants = append(invariants, aggregateInvariants(transformation.ID, transformation.Aggregate)...)
-			}
-		case OperatorSelectAndAssign:
-			if transformation.SelectAssign != nil {
-				invariants = append(invariants, selectAssignInvariants(transformation.ID, transformation.SelectAssign)...)
-			}
+		switch {
+		case transformation.SelectAssign != nil:
+			invariants = append(invariants, selectAssignInvariants(transformation.ID, transformation.SelectAssign)...)
+		case transformation.InsertEntity != nil:
+			invariants = append(invariants, insertEntityInvariants(transformation.ID, transformation.InsertEntity)...)
+		case transformation.DeleteEntity != nil:
+			invariants = append(invariants, deleteEntityInvariants(transformation.ID, transformation.DeleteEntity)...)
+		case transformation.RelateEntities != nil:
+			invariants = append(invariants, relationInvariants(transformation.ID, transformation.RelateEntities.FromSelector, transformation.RelateEntities.ToSelector, transformation.RelateEntities.Guard)...)
+		case transformation.UnrelateEntities != nil:
+			invariants = append(invariants, relationInvariants(transformation.ID, transformation.UnrelateEntities.FromSelector, transformation.UnrelateEntities.ToSelector, transformation.UnrelateEntities.Guard)...)
+		case transformation.MergeEntities != nil:
+			invariants = append(invariants, mergeEntityInvariants(transformation.ID, transformation.MergeEntities)...)
+		case transformation.SplitEntity != nil:
+			invariants = append(invariants, splitEntityInvariants(transformation.ID, transformation.SplitEntity)...)
 		}
 	}
 	sort.Slice(invariants, func(i, j int) bool { return invariants[i].key < invariants[j].key })
@@ -746,6 +782,22 @@ func encodeCompilationFailure(input CompilationInputDigest, diagnostics []Compil
 	return encoder.bytes()
 }
 
+func encodeSelectorPayload(encoder *canonicalEncoder, selector Selector) {
+	encoder.string(string(selector.Kind))
+	encoder.byte(byte(selector.Members.Kind))
+	encoder.uint64(selector.Members.Count)
+	encoder.optional(selector.Where != nil, func() { encodeExpr(encoder, *selector.Where) })
+	encoder.optional(selector.GroupBy != nil, func() { encodeExpr(encoder, *selector.GroupBy) })
+}
+
+func encodeFieldAssignments(encoder *canonicalEncoder, assignments []FieldAssignment) {
+	encoder.uint64(uint64(len(assignments)))
+	for _, assignment := range assignments {
+		encoder.string(string(assignment.Target))
+		encodeExpr(encoder, assignment.Value)
+	}
+}
+
 func encodeTransformationDeclaration(encoder *canonicalEncoder, transformation TransformationDeclaration) {
 	encoder.string(string(transformation.ID))
 	encoder.byte(byte(transformation.Operator))
@@ -755,110 +807,61 @@ func encodeTransformationDeclaration(encoder *canonicalEncoder, transformation T
 	for _, dependency := range transformation.After {
 		encoder.string(string(dependency))
 	}
-	encoder.optional(transformation.Form != nil, func() {
-		form := transformation.Form
-		encoder.string(string(form.SourceKind))
-		encoder.uint64(uint64(len(form.Sources)))
-		for _, source := range form.Sources {
-			encoder.string(string(source.Kind))
-			encoder.string(source.CanonicalSourceKey)
-		}
-		encoder.string(string(form.OutputKind))
-		encoder.string(string(form.OutputSlot))
-		encoder.string(string(form.GroupingField))
-		encoder.uint64(form.SourceCount)
-		encoder.uint64(uint64(len(form.CopiedFields)))
-		for _, copied := range form.CopiedFields {
-			encoder.string(string(copied.Source))
-			encoder.string(string(copied.Destination))
-		}
-		encoder.string(string(form.RelationKind))
-		encoder.optional(form.OutputKey != nil, func() {
-			encoder.byte(byte(form.OutputKey.Kind))
-			encoder.string(string(form.OutputKey.Field))
-		})
-	})
-	// APPEND-ONLY, AND DELIBERATELY NOT AN encoder.optional. Form and Aggregate each write a
-	// presence byte, so mirroring them here would have written one more byte into EVERY
-	// transformation ever encoded -- re-identifying every stored ruleset, plan, checkpoint
-	// and journal in a scheme whose durability argument is that storage cannot lie about
-	// identity because the reader recompiles and compares. The golden vectors caught it.
-	//
-	// WHAT KEEPS THIS INJECTIVE IS NOT THE OPERATOR BYTE, and an earlier version of this
-	// comment claimed it was. The claim was that a declaration carrying this payload also
-	// carries operator byte 0x03, which no v1 ruleset could hold -- but encodeRuleset runs
-	// inside Compile BEFORE deriveTransformation, so the operator/payload agreement check has
-	// not happened yet, and a declaration reaching here may carry byte 0x01 and this payload
-	// at once. The discriminator that argument named is not reliable where it is needed.
-	//
-	// A ONE-BYTE SENTINEL, written only when the payload is present, is what makes the
-	// boundary unambiguous -- and it is why this is now an argument rather than a hope.
-	//
-	// Absent, the next byte is Aggregate's presence marker, which encoder.optional writes as
-	// 0x00 or 0x01 and nothing else. Present, the next byte is selectAssignPresent, which is
-	// neither. So the two cases are separated at the very first byte, whatever follows them,
-	// and no alignment of later fields can make one read as the other. An earlier version
-	// wrote the selector kind's uint64 length there instead, whose leading byte is 0x00 for
-	// any kind shorter than 2^56 -- indistinguishable from "no payload, no aggregate" at that
-	// position, leaving the separation to depend on the lengths of everything after it. That
-	// was an argument nobody could finish by hand, which is a poor foundation for the digest
-	// that identifies a plan.
-	//
-	// The sentinel costs nothing in append-only terms: a declaration WITHOUT the payload
-	// still writes zero bytes here, which is what kept every stored ruleset's identity
-	// unchanged, and the golden vectors still pass.
-	//
-	// The presence bytes on Form and Aggregate stay. They are what v1 encoded, and removing
-	// them would be the same break in the other direction.
-	if transformation.SelectAssign != nil {
-		payload := transformation.SelectAssign
-		selector := payload.Selector
+	switch {
+	case transformation.SelectAssign != nil:
 		encoder.byte(selectAssignPresent)
-		encoder.string(string(selector.Kind))
-		encoder.byte(byte(selector.Members.Kind))
-		encoder.uint64(selector.Members.Count)
-		// Presence is explicit for the same reason encodeSelector makes it explicit: a
-		// selector with no predicate must not encode as one whose predicate is absent for
-		// some other reason.
-		encoder.optional(selector.Where != nil, func() { encodeExpr(encoder, *selector.Where) })
-		encoder.optional(selector.GroupBy != nil, func() { encodeExpr(encoder, *selector.GroupBy) })
-		// THE GUARD PARTICIPATES IN THE RULESET DIGEST, and therefore in the PlanID. Two
-		// rulesets differing only in their guard mean different things, produce different
-		// patches, and must not share an identity -- the acceptance test for this operator
-		// asserts exactly that, because a payload absent from this function would be
-		// invisible here and correct everywhere else.
-		encodeExpr(encoder, payload.Guard)
-		encoder.uint64(uint64(len(payload.Assignments)))
-		for _, assignment := range payload.Assignments {
-			encoder.string(string(assignment.Target))
-			encodeExpr(encoder, assignment.Value)
-		}
-	}
-	encoder.optional(transformation.Aggregate != nil, func() {
-		aggregate := transformation.Aggregate
-		encoder.string(string(aggregate.Target.Rule))
-		encoder.string(string(aggregate.Target.Slot))
-		encoder.string(string(aggregate.RelationKind))
-		encoder.string(string(aggregate.SourceKind))
-		encodeFieldPaths(encoder, aggregate.RequiredSourceTuple)
-		encodePredicates(encoder, aggregate.Predicates)
-		encoder.string(string(aggregate.Anchor.Source))
-		encoder.string(string(aggregate.Anchor.Destination))
-		encoder.uint64(uint64(len(aggregate.Reductions)))
-		for _, reduction := range aggregate.Reductions {
-			encoder.byte(byte(reduction.Kind))
-			encoder.string(string(reduction.Source))
-			encoder.string(string(reduction.Destination))
-		}
-		encodePredicates(encoder, aggregate.ResultPredicates)
-	})
-}
+		encodeSelectorPayload(encoder, transformation.SelectAssign.Selector)
+		encodeExpr(encoder, transformation.SelectAssign.Guard)
+		encodeFieldAssignments(encoder, transformation.SelectAssign.Assignments)
 
-func encodePredicates(encoder *canonicalEncoder, predicates []AggregatePredicate) {
-	encoder.uint64(uint64(len(predicates)))
-	for _, predicate := range predicates {
-		encoder.byte(byte(predicate.Kind))
-		encodeFieldPaths(encoder, predicate.Fields)
+	case transformation.InsertEntity != nil:
+		encoder.byte(insertEntityPresent)
+		encodeSelectorPayload(encoder, transformation.InsertEntity.Selector)
+		encoder.string(string(transformation.InsertEntity.TargetKind))
+		encodeExpr(encoder, transformation.InsertEntity.Discriminator)
+		encodeExpr(encoder, transformation.InsertEntity.Guard)
+		encodeFieldAssignments(encoder, transformation.InsertEntity.Assignments)
+
+	case transformation.DeleteEntity != nil:
+		encoder.byte(deleteEntityPresent)
+		encodeSelectorPayload(encoder, transformation.DeleteEntity.Selector)
+		encodeExpr(encoder, transformation.DeleteEntity.Guard)
+
+	case transformation.RelateEntities != nil:
+		encoder.byte(relateEntitiesPresent)
+		encodeSelectorPayload(encoder, transformation.RelateEntities.FromSelector)
+		encodeSelectorPayload(encoder, transformation.RelateEntities.ToSelector)
+		encoder.string(string(transformation.RelateEntities.RelationKind))
+		encodeExpr(encoder, transformation.RelateEntities.Guard)
+
+	case transformation.UnrelateEntities != nil:
+		encoder.byte(unrelateEntitiesPresent)
+		encodeSelectorPayload(encoder, transformation.UnrelateEntities.FromSelector)
+		encodeSelectorPayload(encoder, transformation.UnrelateEntities.ToSelector)
+		encoder.string(string(transformation.UnrelateEntities.RelationKind))
+		encodeExpr(encoder, transformation.UnrelateEntities.Guard)
+
+	case transformation.MergeEntities != nil:
+		encoder.byte(mergeEntitiesPresent)
+		encodeSelectorPayload(encoder, transformation.MergeEntities.Selector)
+		encoder.string(string(transformation.MergeEntities.TargetKind))
+		encodeExpr(encoder, transformation.MergeEntities.Discriminator)
+		encodeExpr(encoder, transformation.MergeEntities.Guard)
+		encoder.bool(transformation.MergeEntities.RetainSources)
+		encoder.bool(transformation.MergeEntities.ReanchorRelations)
+		encodeFieldAssignments(encoder, transformation.MergeEntities.Assignments)
+
+	case transformation.SplitEntity != nil:
+		encoder.byte(splitEntityPresent)
+		encodeSelectorPayload(encoder, transformation.SplitEntity.Selector)
+		encoder.string(string(transformation.SplitEntity.TargetKind))
+		encodeExpr(encoder, transformation.SplitEntity.Guard)
+		encoder.bool(transformation.SplitEntity.RetainSource)
+		encoder.uint64(uint64(len(transformation.SplitEntity.Partitions)))
+		for _, p := range transformation.SplitEntity.Partitions {
+			encodeExpr(encoder, p.Discriminator)
+			encodeFieldAssignments(encoder, p.Assignments)
+		}
 	}
 }
 

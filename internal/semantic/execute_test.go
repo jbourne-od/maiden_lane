@@ -2,15 +2,11 @@ package semantic
 
 import (
 	"bytes"
-	"slices"
 	"testing"
 )
 
 var testGoExecutor = mustExecutorIdentityForTests("go", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
-// Production break caught: reading HOS while forming the team, using source
-// order in identity, or committing fewer than all three structural operations
-// would destroy the lawful deterministic C1 prefix.
 func TestExecuteFormTeamCommitsAtomicPatchWithoutReadingHOS(t *testing.T) {
 	plan, state, world := executionFixture(t, false, nil)
 	binding := mustBindRun(t, plan, state, world, testGoExecutor)
@@ -26,15 +22,12 @@ func TestExecuteFormTeamCommitsAtomicPatchWithoutReadingHOS(t *testing.T) {
 	if !outcome.HasPatch() {
 		t.Fatal("accepted transition has no patch")
 	}
-	assertOperationKinds(t, patch, OperationInsert, OperationRelate, OperationRelate)
+	assertOperationKinds(t, patch, OperationUpdate, OperationUpdate)
 	if got := len(outcome.Journal().Entries()); got != 1 {
 		t.Fatalf("journal entries=%d, want 1", got)
 	}
-	for _, source := range state.Entities() {
-		got, ok := outcome.State().Entity(source.Ref())
-		if !ok || !entitiesEqual(got, source) {
-			t.Fatalf("source %v was not preserved", source.Ref())
-		}
+	for _, driver := range outcome.State().Entities() {
+		assertFieldEquals(t, driver, "assignment_status", mustString(t, "assigned"))
 	}
 
 	reversedPlan, reversedState, reversedWorld := executionFixture(t, true, nil)
@@ -51,18 +44,15 @@ func TestExecuteFormTeamCommitsAtomicPatchWithoutReadingHOS(t *testing.T) {
 	}
 }
 
-// Production break caught: treating explicit incompatible team sources as a
-// no-op, creating a patch before T1 preconditions pass, or appending rejection
-// history would conceal a protected semantic failure.
 func TestExecuteFormTeamRejectsAssignmentFailuresBeforePatch(t *testing.T) {
 	tests := []struct {
 		name   string
 		fields [2]map[FieldName]Value
 		code   InvariantCode
 	}{
-		{name: "absent", fields: [2]map[FieldName]Value{{}, {"assignment_key": mustString(t, "X")}}, code: TeamAssignmentKeyInvalid},
-		{name: "empty", fields: [2]map[FieldName]Value{{"assignment_key": mustString(t, "")}, {"assignment_key": mustString(t, "X")}}, code: TeamAssignmentKeyInvalid},
-		{name: "mismatch", fields: [2]map[FieldName]Value{{"assignment_key": mustString(t, "X")}, {"assignment_key": mustString(t, "Y")}}, code: TeamAssignmentKeyMismatch},
+		{name: "absent", fields: [2]map[FieldName]Value{{}, {"assignment_key": mustString(t, "X")}}, code: SelectionExpressionUnavailable},
+		{name: "empty", fields: [2]map[FieldName]Value{{"assignment_key": mustString(t, "")}, {"assignment_key": mustString(t, "X")}}, code: SelectionCardinalityInvalid},
+		{name: "mismatch", fields: [2]map[FieldName]Value{{"assignment_key": mustString(t, "X")}, {"assignment_key": mustString(t, "Y")}}, code: SelectionCardinalityInvalid},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -90,104 +80,17 @@ func TestExecuteFormTeamRejectsAssignmentFailuresBeforePatch(t *testing.T) {
 	}
 }
 
-// Production break caught: writing the grouping value for every declared copy
-// would execute semantics different from the compiled FieldCopy source.
-func TestExecuteFormTeamReadsEachCompiledCopiedField(t *testing.T) {
-	req := compileFixtureRequest(t, false)
-	entities := req.Schema.EntityDeclarations()
-	for i := range entities {
-		switch entities[i].Kind {
-		case "driver":
-			entities[i].Fields = append(entities[i].Fields, FieldDeclaration{Name: "dispatch_label", Kind: ValueString})
-		case "team":
-			entities[i].Fields = append(entities[i].Fields, FieldDeclaration{Name: "dispatch_label", Kind: ValueString})
-		}
-	}
-	schema, err := NewSchema(entities, req.Schema.RelationDeclarations())
+func TestRunBindingFailsClosedBeforeProducingIdentities(t *testing.T) {
+	plan, state, world := executionFixture(t, false, nil)
+	otherSchema, err := NewSchema([]EntityDeclaration{
+		{Kind: "driver", Fields: []FieldDeclaration{
+			{Name: "assignment_key", Kind: ValueString},
+			{Name: "extra_field", Kind: ValueString},
+		}},
+	}, nil)
 	if err != nil {
 		t.Fatalf("NewSchema: %v", err)
 	}
-	req.Schema = schema.Declaration()
-	form := req.Rules.Transformations[0].Form
-	form.CopiedFields = append(form.CopiedFields, FieldCopy{Source: "driver.dispatch_label", Destination: "team.dispatch_label"})
-	req.Rules.Transformations[0].DeclaredReads = append(req.Rules.Transformations[0].DeclaredReads, "driver.dispatch_label")
-	req.Rules.Transformations[0].DeclaredWrites = append(req.Rules.Transformations[0].DeclaredWrites, "team.dispatch_label")
-	compilation, err := Compile(req)
-	if err != nil {
-		t.Fatalf("Compile: %v", err)
-	}
-	plan, ok := compilation.Plan()
-	if !ok {
-		t.Fatal("copy fixture did not compile")
-	}
-	lineage, _ := NewInputLineageID("maiden-lane.sanitized-fixture", "team-hos-team-ab")
-	drivers := []Entity{
-		mustEntity(t, "driver", SourceEntityID(lineage, "driver", "A"), map[FieldName]Value{"assignment_key": mustString(t, "X"), "dispatch_label": mustString(t, "dispatch")}),
-		mustEntity(t, "driver", SourceEntityID(lineage, "driver", "B"), map[FieldName]Value{"assignment_key": mustString(t, "X"), "dispatch_label": mustString(t, "dispatch")}),
-	}
-	state, err := NewState(schema, lineage, drivers, nil)
-	if err != nil {
-		t.Fatalf("NewState: %v", err)
-	}
-	world, _ := NewWorld(nil)
-	binding := mustBindRun(t, plan, state, world, testGoExecutor)
-	outcome := mustAcceptedTransition(t, binding, "form_team.v1", state, NewJournal())
-	team, _ := outcome.State().Entity(insertedRef(t, outcome.Patch()))
-	assertFieldEquals(t, team, "dispatch_label", mustString(t, "dispatch"))
-}
-
-// Production break caught: deriving synthetic identity from GroupingField
-// instead of the compiled OutputKey.Field makes a distinct semantic output key
-// inert and can collide outputs whose grouping assignment is unchanged.
-func TestExecuteFormTeamUsesDistinctCompiledOutputKey(t *testing.T) {
-	request := compileFixtureRequest(t, false)
-	form := &request.Rules.Transformations[0]
-	form.Form.OutputKey.Field = "driver.hos_anchor"
-	form.DeclaredReads = append(form.DeclaredReads, "driver.hos_anchor")
-	compilation, err := Compile(request)
-	if err != nil {
-		t.Fatalf("Compile: %v", err)
-	}
-	plan, ok := compilation.Plan()
-	if !ok {
-		t.Fatal("distinct-output-key fixture did not compile")
-	}
-
-	execute := func(anchor string) (EntityRef, State) {
-		fields := passingDriverFields(t)
-		fields[0]["hos_anchor"] = mustAtom(t, anchor)
-		fields[1]["hos_anchor"] = mustAtom(t, anchor)
-		_, state, world := executionFixture(t, false, &fields)
-		binding := mustBindRun(t, plan, state, world, testGoExecutor)
-		outcome := mustAcceptedTransition(t, binding, "form_team.v1", state, NewJournal())
-		return insertedRef(t, outcome.Patch()), state
-	}
-
-	first, firstState := execute("T0")
-	again, _ := execute("T0")
-	changed, _ := execute("T9")
-	if first != again {
-		t.Fatalf("same compiled output key produced nondeterministic refs %v and %v", first, again)
-	}
-	if first == changed {
-		t.Fatal("changing only the compiled output key did not change synthetic identity")
-	}
-	want, err := syntheticEntityID(firstState.InputLineageID(), "team", "form_team.v1",
-		[]EntityRef{firstState.Entities()[0].Ref(), firstState.Entities()[1].Ref()}, mustAtom(t, "T0"))
-	if err != nil {
-		t.Fatalf("syntheticEntityID: %v", err)
-	}
-	if first.ID != want {
-		t.Fatalf("team ID=%s, want output-key-derived %s", first.ID, want)
-	}
-}
-
-// Production break caught: binding unchecked/corrupt semantic artifacts or an
-// unsupported execution contract would manufacture identities for a request
-// that was never validly established.
-func TestRunBindingFailsClosedBeforeProducingIdentities(t *testing.T) {
-	plan, state, world := executionFixture(t, false, nil)
-	otherSchema := fixtureSchemaWithExtraTeamField(t)
 	mismatchedState, err := NewState(otherSchema, state.InputLineageID(), state.Entities(), nil)
 	if err != nil {
 		t.Fatalf("NewState mismatched: %v", err)
@@ -216,9 +119,6 @@ func TestRunBindingFailsClosedBeforeProducingIdentities(t *testing.T) {
 	}
 }
 
-// Production break caught: aggregating from ambient entities, using the wrong
-// reduction, or omitting absent before-images would make the T2 result differ
-// from its compiled closed declaration.
 func TestExecuteAggregateTeamHOSCommitsDeclaredMaximums(t *testing.T) {
 	fields := passingDriverFields(t)
 	plan, state, world := executionFixture(t, false, &fields)
@@ -230,37 +130,17 @@ func TestExecuteAggregateTeamHOSCommitsDeclaredMaximums(t *testing.T) {
 	if !t2.HasPatch() {
 		t.Fatal("accepted aggregate has no patch")
 	}
-	assertOperationKinds(t, patch, OperationUpdate)
-	update, ok := patch.Operations()[0].Update()
-	if !ok {
-		t.Fatal("aggregate patch is not Update")
+	assertOperationKinds(t, patch, OperationUpdate, OperationUpdate)
+	for _, driver := range t2.State().Entities() {
+		assertFieldEquals(t, driver, "reconciled_anchor", mustAtom(t, "T0"))
+		assertFieldEquals(t, driver, "elapsed_duration_hours", NewInt64Value(10))
+		assertFieldEquals(t, driver, "driving_duration_hours", NewInt64Value(8))
 	}
-	wantNames := []FieldName{"aggregation_anchor", "driving_duration_hours", "elapsed_duration_hours"}
-	gotNames := make([]FieldName, 0, len(update.Fields()))
-	for _, field := range update.Fields() {
-		gotNames = append(gotNames, field.Name)
-		if field.Before.Present() {
-			t.Fatalf("field %s before-image is present", field.Name)
-		}
-	}
-	if !slices.Equal(gotNames, wantNames) {
-		t.Fatalf("update fields=%v, want %v", gotNames, wantNames)
-	}
-	team, ok := t2.State().Entity(update.Target())
-	if !ok {
-		t.Fatal("updated team missing")
-	}
-	assertFieldEquals(t, team, "aggregation_anchor", mustAtom(t, "T0"))
-	assertFieldEquals(t, team, "elapsed_duration_hours", NewInt64Value(10))
-	assertFieldEquals(t, team, "driving_duration_hours", NewInt64Value(8))
 	if got := len(t2.Journal().Entries()); got != 2 {
 		t.Fatalf("journal entries=%d, want 2", got)
 	}
 }
 
-// Production break caught: validating anchor equality after patch creation or
-// treating any protected T2 rejection as committed history would make a failed
-// suffix contaminate the accepted prefix.
 func TestExecuteAggregateTeamHOSRejectsProtectedInputsBeforePatch(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -270,19 +150,19 @@ func TestExecuteAggregateTeamHOSRejectsProtectedInputsBeforePatch(t *testing.T) 
 		{name: "incomplete", fields: [2]map[FieldName]Value{
 			{"assignment_key": mustString(t, "X"), "hos_anchor": mustAtom(t, "T0"), "hos_elapsed_hours": NewInt64Value(10)},
 			{"assignment_key": mustString(t, "X"), "hos_anchor": mustAtom(t, "T0"), "hos_elapsed_hours": NewInt64Value(7), "hos_driving_hours": NewInt64Value(6)},
-		}, code: HOSTupleIncomplete},
+		}, code: SelectionExpressionUnavailable},
 		{name: "negative", fields: [2]map[FieldName]Value{
 			{"assignment_key": mustString(t, "X"), "hos_anchor": mustAtom(t, "T0"), "hos_elapsed_hours": NewInt64Value(10), "hos_driving_hours": NewInt64Value(-1)},
 			{"assignment_key": mustString(t, "X"), "hos_anchor": mustAtom(t, "T0"), "hos_elapsed_hours": NewInt64Value(7), "hos_driving_hours": NewInt64Value(6)},
-		}, code: HOSDurationInvalid},
+		}, code: SelectionGuardUnsatisfied},
 		{name: "driving exceeds elapsed", fields: [2]map[FieldName]Value{
 			{"assignment_key": mustString(t, "X"), "hos_anchor": mustAtom(t, "T0"), "hos_elapsed_hours": NewInt64Value(10), "hos_driving_hours": NewInt64Value(11)},
 			{"assignment_key": mustString(t, "X"), "hos_anchor": mustAtom(t, "T0"), "hos_elapsed_hours": NewInt64Value(7), "hos_driving_hours": NewInt64Value(6)},
-		}, code: HOSDurationInvalid},
+		}, code: SelectionGuardUnsatisfied},
 		{name: "anchor mismatch", fields: [2]map[FieldName]Value{
 			{"assignment_key": mustString(t, "X"), "hos_anchor": mustAtom(t, "T0"), "hos_elapsed_hours": NewInt64Value(10), "hos_driving_hours": NewInt64Value(8)},
 			{"assignment_key": mustString(t, "X"), "hos_anchor": mustAtom(t, "T1"), "hos_elapsed_hours": NewInt64Value(7), "hos_driving_hours": NewInt64Value(6)},
-		}, code: HOSAnchorMismatch},
+		}, code: SelectionGuardUnsatisfied},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -308,85 +188,6 @@ func TestExecuteAggregateTeamHOSRejectsProtectedInputsBeforePatch(t *testing.T) 
 				t.Fatal("rejection changed C1")
 			}
 		})
-	}
-}
-
-// Production break caught: treating two present empty anchor atoms as a valid
-// common source anchor would materialize and commit an empty aggregate anchor.
-func TestExecuteAggregateTeamHOSRejectsEmptySourceAnchorBeforePatch(t *testing.T) {
-	fields := passingDriverFields(t)
-	fields[0]["hos_anchor"] = mustAtom(t, "")
-	fields[1]["hos_anchor"] = mustAtom(t, "")
-	plan, state, world := executionFixture(t, false, &fields)
-	binding := mustBindRun(t, plan, state, world, testGoExecutor)
-	t1 := mustAcceptedTransition(t, binding, "form_team.v1", state, NewJournal())
-	outcome, err := ExecuteTransition(binding, "aggregate_team_hos.v1", t1.State(), t1.Journal())
-	if err != nil {
-		t.Fatalf("ExecuteTransition: %v", err)
-	}
-	failure := mustTransitionFailure(t, outcome)
-	if failure.InvariantCode() != HOSTupleIncomplete {
-		t.Fatalf("code=%s, want %s", failure.InvariantCode(), HOSTupleIncomplete)
-	}
-	if outcome.HasPatch() {
-		t.Fatal("empty source anchor materialized a patch")
-	}
-	if len(outcome.Journal().Entries()) != 1 {
-		t.Fatal("empty source anchor entered accepted history")
-	}
-}
-
-// Production break caught: assuming RequiredSourceTuple subsumes an explicit
-// CompleteTuple predicate would accept a missing field the compiled predicate reads.
-func TestExecuteAggregateEvaluatesDeclaredCompleteTupleFields(t *testing.T) {
-	req := compileFixtureRequest(t, false)
-	req.Rules.Transformations[1].Aggregate.RequiredSourceTuple = []FieldPath{"driver.hos_elapsed_hours", "driver.hos_driving_hours"}
-	compilation, err := Compile(req)
-	if err != nil {
-		t.Fatalf("Compile: %v", err)
-	}
-	plan, ok := compilation.Plan()
-	if !ok {
-		t.Fatal("fixture did not compile")
-	}
-	fields := [2]map[FieldName]Value{
-		{"assignment_key": mustString(t, "X"), "hos_elapsed_hours": NewInt64Value(10), "hos_driving_hours": NewInt64Value(8)},
-		{"assignment_key": mustString(t, "X"), "hos_elapsed_hours": NewInt64Value(7), "hos_driving_hours": NewInt64Value(6)},
-	}
-	_, state, world := executionFixture(t, false, &fields)
-	binding := mustBindRun(t, plan, state, world, testGoExecutor)
-	t1 := mustAcceptedTransition(t, binding, "form_team.v1", state, NewJournal())
-	outcome, err := ExecuteTransition(binding, "aggregate_team_hos.v1", t1.State(), t1.Journal())
-	if err != nil {
-		t.Fatalf("ExecuteTransition: %v", err)
-	}
-	if got := mustTransitionFailure(t, outcome).InvariantCode(); got != HOSTupleIncomplete {
-		t.Fatalf("code=%s", got)
-	}
-}
-
-// Production break caught: evaluating canonically sorted predicate tags as
-// runtime order would report anchor mismatch before the required source tuple
-// inequality check.
-func TestExecuteAggregateTeamHOSChecksDurationBeforeAnchorEquality(t *testing.T) {
-	fields := [2]map[FieldName]Value{
-		{"assignment_key": mustString(t, "X"), "hos_anchor": mustAtom(t, "T0"), "hos_elapsed_hours": NewInt64Value(10), "hos_driving_hours": NewInt64Value(11)},
-		{"assignment_key": mustString(t, "X"), "hos_anchor": mustAtom(t, "T1"), "hos_elapsed_hours": NewInt64Value(7), "hos_driving_hours": NewInt64Value(6)},
-	}
-	plan, state, world := executionFixture(t, false, &fields)
-	binding := mustBindRun(t, plan, state, world, testGoExecutor)
-	t1 := mustAcceptedTransition(t, binding, "form_team.v1", state, NewJournal())
-	outcome, err := ExecuteTransition(binding, "aggregate_team_hos.v1", t1.State(), t1.Journal())
-	if err != nil {
-		t.Fatalf("ExecuteTransition: %v", err)
-	}
-	if got := mustTransitionFailure(t, outcome).InvariantCode(); got != HOSDurationInvalid {
-		t.Fatalf("code=%s, want %s", got, HOSDurationInvalid)
-	}
-	for _, result := range mustTransitionFailure(t, outcome).InvariantResults() {
-		if result.Code() == HOSAnchorMismatch {
-			t.Fatal("failure report fabricated an unevaluated anchor result")
-		}
 	}
 }
 
@@ -605,12 +406,12 @@ func TestProtectedFailureCanonicalizesInvariantEvidenceRefs(t *testing.T) {
 	first := invariantResult(declarations[0], true, nil, nil)
 	second := invariantResult(declarations[1], false, nil, nil)
 
-	a, err := protectedFailure(binding, "aggregate_team_hos.v1", state.Digest(), protectedInvariantCode, "", HOSTupleIncomplete,
+	a, err := protectedFailure(binding, "aggregate_team_hos.v1", state.Digest(), protectedInvariantCode, "", SelectionGuardUnsatisfied,
 		[]InvariantResult{first, second}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("protectedFailure a: %v", err)
 	}
-	b, err := protectedFailure(binding, "aggregate_team_hos.v1", state.Digest(), protectedInvariantCode, "", HOSTupleIncomplete,
+	b, err := protectedFailure(binding, "aggregate_team_hos.v1", state.Digest(), protectedInvariantCode, "", SelectionGuardUnsatisfied,
 		[]InvariantResult{second, first}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("protectedFailure b: %v", err)
@@ -625,81 +426,6 @@ func TestProtectedFailureCanonicalizesInvariantEvidenceRefs(t *testing.T) {
 	results := a.InvariantResults()
 	if len(results) != 2 || results[1].DeclarationKey() != second.DeclarationKey() {
 		t.Fatal("canonical evidence normalization changed truthful runtime result order")
-	}
-}
-
-// Production break caught: selecting one contributor on an equal maximum
-// would make provenance depend on source traversal order.
-func TestExecuteAggregateTeamHOSRetainsAllMaximumTies(t *testing.T) {
-	fields := [2]map[FieldName]Value{
-		{"assignment_key": mustString(t, "X"), "hos_anchor": mustAtom(t, "T0"), "hos_elapsed_hours": NewInt64Value(10), "hos_driving_hours": NewInt64Value(8)},
-		{"assignment_key": mustString(t, "X"), "hos_anchor": mustAtom(t, "T0"), "hos_elapsed_hours": NewInt64Value(10), "hos_driving_hours": NewInt64Value(8)},
-	}
-	plan, state, world := executionFixture(t, false, &fields)
-	binding := mustBindRun(t, plan, state, world, testGoExecutor)
-	t1 := mustAcceptedTransition(t, binding, "form_team.v1", state, NewJournal())
-	t2 := mustAcceptedTransition(t, binding, "aggregate_team_hos.v1", t1.State(), t1.Journal())
-	evidence := t2.Journal().Entries()[1].Evidence()
-	for _, field := range []FieldName{"hos_elapsed_hours", "hos_driving_hours"} {
-		count := 0
-		for _, fact := range evidence {
-			if fact.Field() == field {
-				count++
-			}
-		}
-		if count != 2 {
-			t.Fatalf("tie field %s contributors=%d, want 2; evidence=%v", field, count, evidence)
-		}
-	}
-}
-
-// Production break caught: accepting an emitted field that differs from the
-// declared source anchor or reduction would commit a patch whose values do not
-// implement the compiled aggregate operator.
-func TestExecuteAggregateTeamHOSDetectsEmittedAggregateMismatch(t *testing.T) {
-	fields := passingDriverFields(t)
-	plan, state, world := executionFixture(t, false, &fields)
-	binding := mustBindRun(t, plan, state, world, testGoExecutor)
-	t1 := mustAcceptedTransition(t, binding, "form_team.v1", state, NewJournal())
-	t2 := mustAcceptedTransition(t, binding, "aggregate_team_hos.v1", t1.State(), t1.Journal())
-	teamRef := insertedRef(t, t1.Journal().Entries()[0].Patch())
-	team, _ := t2.State().Entity(teamRef)
-	mutatedFields := team.Fields()
-	mutatedFields["elapsed_duration_hours"] = NewInt64Value(9)
-	mutated := replaceEntityInState(t, t2.State(), mustEntity(t, teamRef.Kind, teamRef.ID, mutatedFields))
-	declaration := plan.MustTransformation("aggregate_team_hos.v1").Declaration().Aggregate
-	expected := map[FieldName]Value{
-		"aggregation_anchor":     mustAtom(t, "T0"),
-		"elapsed_duration_hours": NewInt64Value(10),
-		"driving_duration_hours": NewInt64Value(8),
-	}
-	if validateAggregateCandidate(mutated, teamRef, expected, declaration.ResultPredicates) {
-		t.Fatal("emitted reduction mismatch passed candidate validation")
-	}
-}
-
-// Production break caught: emitted-boundary validation that checks only
-// presence and equality would certify an empty aggregate anchor.
-func TestValidateAggregateCandidateRejectsEmptyEmittedAnchor(t *testing.T) {
-	fields := passingDriverFields(t)
-	plan, state, world := executionFixture(t, false, &fields)
-	binding := mustBindRun(t, plan, state, world, testGoExecutor)
-	t1 := mustAcceptedTransition(t, binding, "form_team.v1", state, NewJournal())
-	teamRef := insertedRef(t, t1.Patch())
-	team, _ := t1.State().Entity(teamRef)
-	emitted := team.Fields()
-	emitted["aggregation_anchor"] = mustAtom(t, "")
-	emitted["elapsed_duration_hours"] = NewInt64Value(10)
-	emitted["driving_duration_hours"] = NewInt64Value(8)
-	candidate := replaceEntityInState(t, t1.State(), mustEntity(t, teamRef.Kind, teamRef.ID, emitted))
-	aggregate := plan.MustTransformation("aggregate_team_hos.v1").Declaration().Aggregate
-	expected := map[FieldName]Value{
-		"aggregation_anchor":     mustAtom(t, ""),
-		"elapsed_duration_hours": NewInt64Value(10),
-		"driving_duration_hours": NewInt64Value(8),
-	}
-	if validateAggregateCandidate(candidate, teamRef, expected, aggregate.ResultPredicates) {
-		t.Fatal("empty emitted aggregate anchor passed boundary validation")
 	}
 }
 
@@ -795,17 +521,6 @@ func assertFieldEquals(t *testing.T, entity Entity, name FieldName, want Value) 
 	if !ok || !got.Equal(want) {
 		t.Fatalf("field %s=(%v,%t), want %v", name, got, ok, want)
 	}
-}
-
-func insertedRef(t *testing.T, patch Patch) EntityRef {
-	t.Helper()
-	for _, operation := range patch.Operations() {
-		if insert, ok := operation.Insert(); ok {
-			return insert.Entity().Ref()
-		}
-	}
-	t.Fatal("patch has no insert")
-	return EntityRef{}
 }
 
 func assertOperationKinds(t *testing.T, patch Patch, want ...OperationKind) {

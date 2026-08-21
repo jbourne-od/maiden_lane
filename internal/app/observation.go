@@ -180,26 +180,15 @@ const (
 	CodeWriteConflictUnresolved
 	CodeDependencyCycle
 	CodeProfileOrderUnprovable
-	CodeOpEntityIdentityCollision
+	CodeOpEntityIdentityCollision ObservationCode = iota + 7
 	CodeOpUpdateTargetNotFound
 	CodeOpBeforeImageMismatch
 	CodeOpRelationAlreadyPresent
 	CodeOpRelationEndpointMissing
-	CodeDeclaredSourceNotFound
-	CodeDeclaredSourceKindInvalid
-	CodeTeamAssignmentKeyInvalid
-	CodeTeamAssignmentKeyMismatch
-	CodeTeamMemberCardinalityInvalid
-	CodeHOSTupleIncomplete
-	CodeHOSDurationInvalid
-	CodeHOSAnchorMismatch
-	CodeHOSAggregateInvalid
 	CodeArtifactDigestMismatch
 	CodeArtifactLinkInconsistent
 	CodeAssessmentIdentityConflict
 	CodeReplayDivergence
-	// Appended, not inserted: the values above are an iota run, and renumbering them would
-	// change every code a stored observation holds.
 	CodeSelectionCardinalityInvalid
 	CodeSelectionEmpty
 	CodeSelectionGuardUnsatisfied
@@ -231,24 +220,6 @@ func (c ObservationCode) String() string {
 		return "OP_RELATION_ALREADY_PRESENT"
 	case CodeOpRelationEndpointMissing:
 		return "OP_RELATION_ENDPOINT_MISSING"
-	case CodeDeclaredSourceNotFound:
-		return "DECLARED_SOURCE_NOT_FOUND"
-	case CodeDeclaredSourceKindInvalid:
-		return "DECLARED_SOURCE_KIND_INVALID"
-	case CodeTeamAssignmentKeyInvalid:
-		return "TEAM_ASSIGNMENT_KEY_INVALID"
-	case CodeTeamAssignmentKeyMismatch:
-		return "TEAM_ASSIGNMENT_KEY_MISMATCH"
-	case CodeTeamMemberCardinalityInvalid:
-		return "TEAM_MEMBER_CARDINALITY_INVALID"
-	case CodeHOSTupleIncomplete:
-		return "HOS_TUPLE_INCOMPLETE"
-	case CodeHOSDurationInvalid:
-		return "HOS_DURATION_INVALID"
-	case CodeHOSAnchorMismatch:
-		return "HOS_ANCHOR_MISMATCH"
-	case CodeHOSAggregateInvalid:
-		return "HOS_AGGREGATE_INVALID"
 	case CodeSelectionCardinalityInvalid:
 		return "SELECTION_CARDINALITY_INVALID"
 	case CodeSelectionEmpty:
@@ -467,38 +438,15 @@ func ObservationCodeForInvariant(code semantic.InvariantCode) ObservationCode {
 
 func codeForInvariant(code semantic.InvariantCode) ObservationCode {
 	switch code {
-	case semantic.DeclaredSourceNotFound:
-		return CodeDeclaredSourceNotFound
-	case semantic.DeclaredSourceKindInvalid:
-		return CodeDeclaredSourceKindInvalid
-	case semantic.TeamAssignmentKeyInvalid:
-		return CodeTeamAssignmentKeyInvalid
-	case semantic.TeamAssignmentKeyMismatch:
-		return CodeTeamAssignmentKeyMismatch
-	case semantic.TeamMemberCardinalityInvalid:
-		return CodeTeamMemberCardinalityInvalid
-	case semantic.HOSTupleIncomplete:
-		return CodeHOSTupleIncomplete
-	case semantic.HOSDurationInvalid:
-		return CodeHOSDurationInvalid
-	case semantic.HOSAnchorMismatch:
-		return CodeHOSAnchorMismatch
-	case semantic.HOSAggregateInvalid:
-		return CodeHOSAggregateInvalid
 	case semantic.SelectionCardinalityInvalid:
 		return CodeSelectionCardinalityInvalid
 	case semantic.SelectionEmpty:
 		return CodeSelectionEmpty
-
 	case semantic.SelectionGuardUnsatisfied:
 		return CodeSelectionGuardUnsatisfied
 	case semantic.SelectionExpressionUnavailable:
 		return CodeSelectionExpressionUnavailable
 	default:
-		// Zero, and a test over semantic.AllInvariantCodes is what keeps this arm from being
-		// where a new code quietly lands. A code that reaches here renders as the empty
-		// token, so the refusal still happens and only its NAME is lost -- which is the
-		// worst possible failure to detect by reading an observation.
 		return 0
 	}
 }

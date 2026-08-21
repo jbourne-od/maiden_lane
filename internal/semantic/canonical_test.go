@@ -363,3 +363,194 @@ func stateWithOrder(t *testing.T, entityOrder, fieldOrder []string) State {
 	}
 	return state
 }
+
+func TestCanonicalValueEncoding(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   Value
+		wantHex string
+	}{
+		{"string", mustString(t, "hello"), "01000000000000000568656c6c6f"},
+		{"atom", mustAtom(t, "team_a"), "0200000000000000067465616d5f61"},
+		{"int64", NewInt64Value(42), "03000000000000002a"},
+		{"timestamp", mustTimestamp(t, "2026-08-21T10:00:00Z"), "040000000000000014323032362d30382d32315431303a30303a30305a"},
+		{"duration", NewDurationValue(3600), "050000000000000e10"},
+		{"decimal", mustDecimal(t, "123.45"), "0600000000000000063132332e3435"},
+		{"date", mustDate(t, "2026-08-21"), "07000000000000000a323032362d30382d3231"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var enc canonicalEncoder
+			enc.value(tc.value)
+			b, err := enc.bytes()
+			if err != nil {
+				t.Fatalf("encode value %v: %v", tc.value, err)
+			}
+			gotHex := hex.EncodeToString(b)
+			if gotHex != tc.wantHex {
+				t.Errorf("value %v canonical hex = %s, want %s", tc.value, gotHex, tc.wantHex)
+			}
+		})
+	}
+}
+
+func TestCanonicalTransformationPayloadEncodingDifferentiatesStructuralRules(t *testing.T) {
+	encode := func(decl TransformationDeclaration) []byte {
+		var enc canonicalEncoder
+		encodeTransformationDeclaration(&enc, decl)
+		b, err := enc.bytes()
+		if err != nil {
+			t.Fatalf("encode %s: %v", decl.ID, err)
+		}
+		return b
+	}
+
+	trueLit := Expr{Kind: ExprLiteral, Literal: &Value{}}
+	v1 := NewInt64Value(1)
+	trueLit.Literal = &v1
+
+	v2 := NewInt64Value(2)
+	twoLit := Expr{Kind: ExprLiteral, Literal: &v2}
+
+	// InsertEntity rules differing in Discriminator or Assignments produce distinct bytes
+	insertA := TransformationDeclaration{
+		ID:       "insert.v1",
+		Operator: OperatorInsertEntity,
+		InsertEntity: &InsertEntityDeclaration{
+			Selector:      Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityExactly, Count: 1}},
+			TargetKind:    "team",
+			Discriminator: trueLit,
+			Guard:         trueLit,
+			Assignments:   []FieldAssignment{{Target: "team.depot", Value: trueLit}},
+		},
+	}
+	insertB := TransformationDeclaration{
+		ID:       "insert.v1",
+		Operator: OperatorInsertEntity,
+		InsertEntity: &InsertEntityDeclaration{
+			Selector:      Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityExactly, Count: 1}},
+			TargetKind:    "team",
+			Discriminator: twoLit,
+			Guard:         trueLit,
+			Assignments:   []FieldAssignment{{Target: "team.depot", Value: trueLit}},
+		},
+	}
+	if bytes.Equal(encode(insertA), encode(insertB)) {
+		t.Fatal("distinct InsertEntity payloads encoded to identical bytes")
+	}
+
+	// MergeEntities rules differing in ReanchorRelations flag produce distinct bytes
+	mergeA := TransformationDeclaration{
+		ID:       "merge.v1",
+		Operator: OperatorMergeEntities,
+		MergeEntities: &MergeEntitiesDeclaration{
+			Selector:          Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityExactly, Count: 2}},
+			TargetKind:        "driver",
+			Discriminator:     trueLit,
+			Guard:             trueLit,
+			RetainSources:     false,
+			ReanchorRelations: false,
+			Assignments:       []FieldAssignment{{Target: "driver.depot", Value: trueLit}},
+		},
+	}
+	mergeB := TransformationDeclaration{
+		ID:       "merge.v1",
+		Operator: OperatorMergeEntities,
+		MergeEntities: &MergeEntitiesDeclaration{
+			Selector:          Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityExactly, Count: 2}},
+			TargetKind:        "driver",
+			Discriminator:     trueLit,
+			Guard:             trueLit,
+			RetainSources:     false,
+			ReanchorRelations: true,
+			Assignments:       []FieldAssignment{{Target: "driver.depot", Value: trueLit}},
+		},
+	}
+	if bytes.Equal(encode(mergeA), encode(mergeB)) {
+		t.Fatal("distinct MergeEntities payloads encoded to identical bytes")
+	}
+
+	// DeleteEntity rules differing in Guard produce distinct bytes
+	deleteA := TransformationDeclaration{
+		ID:       "delete.v1",
+		Operator: OperatorDeleteEntity,
+		DeleteEntity: &DeleteEntityDeclaration{
+			Selector: Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityExactly, Count: 1}},
+			Guard:    trueLit,
+		},
+	}
+	deleteB := TransformationDeclaration{
+		ID:       "delete.v1",
+		Operator: OperatorDeleteEntity,
+		DeleteEntity: &DeleteEntityDeclaration{
+			Selector: Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityExactly, Count: 1}},
+			Guard:    twoLit,
+		},
+	}
+	if bytes.Equal(encode(deleteA), encode(deleteB)) {
+		t.Fatal("distinct DeleteEntity payloads encoded to identical bytes")
+	}
+
+	// RelateEntities vs UnrelateEntities produce distinct bytes
+	relateA := TransformationDeclaration{
+		ID:       "relate.v1",
+		Operator: OperatorRelateEntities,
+		RelateEntities: &RelateEntitiesDeclaration{
+			FromSelector: Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityExactly, Count: 1}},
+			ToSelector:   Selector{Kind: "truck", Members: Cardinality{Kind: CardinalityExactly, Count: 1}},
+			RelationKind: "assigned_truck",
+			Guard:        trueLit,
+		},
+	}
+	unrelateA := TransformationDeclaration{
+		ID:       "relate.v1",
+		Operator: OperatorUnrelateEntities,
+		UnrelateEntities: &UnrelateEntitiesDeclaration{
+			FromSelector: Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityExactly, Count: 1}},
+			ToSelector:   Selector{Kind: "truck", Members: Cardinality{Kind: CardinalityExactly, Count: 1}},
+			RelationKind: "assigned_truck",
+			Guard:        trueLit,
+		},
+	}
+	if bytes.Equal(encode(relateA), encode(unrelateA)) {
+		t.Fatal("RelateEntities and UnrelateEntities encoded to identical bytes")
+	}
+}
+
+func TestRulesetCanonicalEncodingIncludesStructuralInvariants(t *testing.T) {
+	trueLit := Expr{Kind: ExprLiteral, Literal: &Value{}}
+	v1 := NewInt64Value(1)
+	trueLit.Literal = &v1
+
+	rules := normalizedRuleset{
+		transformations: []TransformationDeclaration{
+			{
+				ID:       "insert.v1",
+				Operator: OperatorInsertEntity,
+				InsertEntity: &InsertEntityDeclaration{
+					Selector:      Selector{Kind: "driver", Members: Cardinality{Kind: CardinalityExactly, Count: 2}},
+					TargetKind:    "team",
+					Discriminator: trueLit,
+					Guard:         trueLit,
+					Assignments:   []FieldAssignment{{Target: "team.depot", Value: trueLit}},
+				},
+			},
+		},
+	}
+
+	bytesWithStructural, err := encodeRuleset(rules)
+	if err != nil {
+		t.Fatalf("encodeRuleset: %v", err)
+	}
+
+	// Empty ruleset should differ
+	emptyBytes, err := encodeRuleset(normalizedRuleset{})
+	if err != nil {
+		t.Fatalf("encode empty ruleset: %v", err)
+	}
+
+	if bytes.Equal(bytesWithStructural, emptyBytes) {
+		t.Fatal("structural ruleset encoded identically to empty ruleset")
+	}
+}
