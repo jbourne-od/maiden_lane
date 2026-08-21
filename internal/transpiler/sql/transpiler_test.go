@@ -25,8 +25,11 @@ func TestTranspileTeamHOSPlan(t *testing.T) {
 		t.Fatalf("compilation did not produce a plan: %v", fail)
 	}
 
+	schema := fixture.InitialState.Schema()
+
 	pipeline, err := TranspilePlan(plan, PipelineOptions{
 		Dialect: Postgres(),
+		Schema:  &schema,
 	})
 	if err != nil {
 		t.Fatalf("TranspilePlan failed: %v", err)
@@ -58,6 +61,75 @@ func TestTranspileTeamHOSPlan(t *testing.T) {
 	}
 	if _, ok := pipeline.CheckpointViews[string(teamhos.CheckpointTeamHOSAggregated)]; !ok {
 		t.Errorf("missing checkpoint view for %s", teamhos.CheckpointTeamHOSAggregated)
+	}
+}
+
+func TestTranspilePlanRequiresSchema(t *testing.T) {
+	fixture, err := teamhos.New(teamhos.Passing)
+	if err != nil {
+		t.Fatalf("teamhos.New: %v", err)
+	}
+
+	compilation, err := semantic.Compile(fixture.Compilation)
+	if err != nil {
+		t.Fatalf("semantic.Compile: %v", err)
+	}
+
+	plan, ok := compilation.Plan()
+	if !ok {
+		t.Fatal("compilation produced no plan")
+	}
+
+	_, err = TranspilePlan(plan, PipelineOptions{
+		Dialect: Postgres(),
+		Schema:  nil,
+	})
+	if err == nil {
+		t.Fatal("expected error when Schema is nil, got nil")
+	}
+	if !strings.Contains(err.Error(), "schema is required") {
+		t.Errorf("expected 'schema is required' error, got %v", err)
+	}
+}
+
+func TestTranspilerDeterminism(t *testing.T) {
+	fixture, err := teamhos.New(teamhos.Passing)
+	if err != nil {
+		t.Fatalf("teamhos.New: %v", err)
+	}
+
+	compilation, err := semantic.Compile(fixture.Compilation)
+	if err != nil {
+		t.Fatalf("semantic.Compile: %v", err)
+	}
+
+	plan, ok := compilation.Plan()
+	if !ok {
+		t.Fatal("compilation produced no plan")
+	}
+
+	schema := fixture.InitialState.Schema()
+
+	firstPipeline, err := TranspilePlan(plan, PipelineOptions{
+		Dialect: Postgres(),
+		Schema:  &schema,
+	})
+	if err != nil {
+		t.Fatalf("TranspilePlan: %v", err)
+	}
+
+	// Transpile 100 times and verify identical SQL output
+	for i := 0; i < 100; i++ {
+		pipeline, err := TranspilePlan(plan, PipelineOptions{
+			Dialect: Postgres(),
+			Schema:  &schema,
+		})
+		if err != nil {
+			t.Fatalf("TranspilePlan iteration %d failed: %v", i, err)
+		}
+		if pipeline.SQL != firstPipeline.SQL {
+			t.Fatalf("nondeterministic SQL generated on iteration %d", i)
+		}
 	}
 }
 

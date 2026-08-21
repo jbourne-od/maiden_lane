@@ -29,15 +29,18 @@ func TranspilePlan(plan semantic.Plan, opts PipelineOptions) (TranspiledPipeline
 		d = Postgres()
 	}
 
-	// Build entity fields map from schema if provided, otherwise discover from plan
+	if opts.Schema == nil {
+		return TranspiledPipeline{}, fmt.Errorf("transpile plan: schema is required for complete entity projection")
+	}
+
+	// Build entity fields map from schema in canonical alphabetical order
 	entityFields := make(map[string][]string)
-	if opts.Schema != nil {
-		for _, ed := range opts.Schema.Declaration().EntityDeclarations() {
-			k := string(ed.Kind)
-			for _, fd := range ed.Fields {
-				entityFields[k] = append(entityFields[k], string(fd.Name))
-			}
+	for _, ed := range opts.Schema.Declaration().EntityDeclarations() {
+		k := string(ed.Kind)
+		for _, fd := range ed.Fields {
+			entityFields[k] = append(entityFields[k], string(fd.Name))
 		}
+		slices.Sort(entityFields[k])
 	}
 
 	transformations := plan.Transformations()
@@ -56,6 +59,9 @@ func TranspilePlan(plan semantic.Plan, opts PipelineOptions) (TranspiledPipeline
 				entityFields[k] = append(entityFields[k], f)
 			}
 		}
+	}
+	for k := range entityFields {
+		slices.Sort(entityFields[k])
 	}
 
 	ctx := TranspileContext{
@@ -113,7 +119,14 @@ func TranspilePlan(plan semantic.Plan, opts PipelineOptions) (TranspiledPipeline
 		}
 	}
 
+	// Deterministic canonical sorting for initial staging CTEs
+	sortedKinds := make([]string, 0, len(seenKinds))
 	for kind := range seenKinds {
+		sortedKinds = append(sortedKinds, kind)
+	}
+	slices.Sort(sortedKinds)
+
+	for _, kind := range sortedKinds {
 		stgName := fmt.Sprintf("stg_entities_%s", kind)
 		currentTables[kind] = stgName
 		allCTEs = append(allCTEs, NamedCTE{
@@ -212,9 +225,14 @@ func TranspilePlan(plan semantic.Plan, opts PipelineOptions) (TranspiledPipeline
 		// Append step CTEs
 		allCTEs = append(allCTEs, step.CTEs...)
 
-		// Update active current tables
-		for k, tbl := range step.OutputTables {
-			currentTables[k] = tbl
+		// Update active current tables in deterministic sorted key order
+		stepOutputKinds := make([]string, 0, len(step.OutputTables))
+		for k := range step.OutputTables {
+			stepOutputKinds = append(stepOutputKinds, k)
+		}
+		slices.Sort(stepOutputKinds)
+		for _, k := range stepOutputKinds {
+			currentTables[k] = step.OutputTables[k]
 		}
 
 		// Check if any declared checkpoints coincide with this step
@@ -224,8 +242,13 @@ func TranspilePlan(plan semantic.Plan, opts PipelineOptions) (TranspiledPipeline
 				if checkpointViews[cpKey] == nil {
 					checkpointViews[cpKey] = make(map[string]string)
 				}
-				for k, tbl := range currentTables {
-					checkpointViews[cpKey][k] = tbl
+				currentKinds := make([]string, 0, len(currentTables))
+				for k := range currentTables {
+					currentKinds = append(currentKinds, k)
+				}
+				slices.Sort(currentKinds)
+				for _, k := range currentKinds {
+					checkpointViews[cpKey][k] = currentTables[k]
 				}
 			}
 		}

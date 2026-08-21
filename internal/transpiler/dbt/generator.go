@@ -48,6 +48,10 @@ func GenerateProject(plan semantic.Plan, opts Options) (Project, error) {
 		opts.Dialect = sql.Postgres()
 	}
 
+	if opts.Schema == nil {
+		return Project{}, fmt.Errorf("generate dbt project: schema is required for complete entity projection")
+	}
+
 	var files []ProjectFile
 
 	// 1. dbt_project.yml
@@ -74,15 +78,14 @@ models:
 		Content: dbtProjectYML,
 	})
 
-	// 2. Build entity fields map from schema or plan
+	// 2. Build entity fields map from schema in canonical alphabetical order
 	entityFields := make(map[string][]string)
-	if opts.Schema != nil {
-		for _, ed := range opts.Schema.Declaration().EntityDeclarations() {
-			k := string(ed.Kind)
-			for _, fd := range ed.Fields {
-				entityFields[k] = append(entityFields[k], string(fd.Name))
-			}
+	for _, ed := range opts.Schema.Declaration().EntityDeclarations() {
+		k := string(ed.Kind)
+		for _, fd := range ed.Fields {
+			entityFields[k] = append(entityFields[k], string(fd.Name))
 		}
+		slices.Sort(entityFields[k])
 	}
 
 	transformations := plan.Transformations()
@@ -99,6 +102,9 @@ models:
 				entityFields[k] = append(entityFields[k], f)
 			}
 		}
+	}
+	for k := range entityFields {
+		slices.Sort(entityFields[k])
 	}
 
 	// 3. Discover all entity kinds across transformations
@@ -141,8 +147,15 @@ models:
 
 	currentModels := make(map[string]string) // entity/relation kind -> current model name
 
-	// Staging Models
+	// Deterministic sorting of staging models
+	sortedKinds := make([]string, 0, len(seenKinds))
 	for kind := range seenKinds {
+		sortedKinds = append(sortedKinds, kind)
+	}
+	slices.Sort(sortedKinds)
+
+	// Staging Models
+	for _, kind := range sortedKinds {
 		modelName := fmt.Sprintf("stg_entities_%s", kind)
 		currentModels[kind] = modelName
 		stgSQL := fmt.Sprintf(`{{ config(materialized='view') }}
@@ -264,8 +277,15 @@ SELECT * FROM {{ source('maiden_lane', 'raw_relations') }}
 			return Project{}, err
 		}
 
-		// Generate a distinct dbt model for EACH modified table in OutputTables
-		for tableKind, outCTE := range step.OutputTables {
+		// Sort output tables for deterministic dbt model generation
+		outputTableKinds := make([]string, 0, len(step.OutputTables))
+		for tableKind := range step.OutputTables {
+			outputTableKinds = append(outputTableKinds, tableKind)
+		}
+		slices.Sort(outputTableKinds)
+
+		for _, tableKind := range outputTableKinds {
+			outCTE := step.OutputTables[tableKind]
 			modelName := fmt.Sprintf("tx_%02d_%s_%s", i, sanitizedRule, tableKind)
 			var modelSQL strings.Builder
 			modelSQL.WriteString("{{ config(materialized='table') }}\n\nWITH\n")
@@ -300,7 +320,6 @@ SELECT * FROM {{ source('maiden_lane', 'raw_relations') }}
 		for _, cp := range plan.Checkpoints() {
 			if cp.After == ruleID {
 				cpKey := string(cp.Key)
-				// Target model for primary entity or target kind
 				if targetModel := currentModels[step.TargetKind]; targetModel != "" {
 					checkpointModels[cpKey] = targetModel
 				}

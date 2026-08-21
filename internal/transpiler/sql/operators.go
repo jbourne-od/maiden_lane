@@ -88,7 +88,7 @@ func TranspileSelectAssign(
 FROM %s s`, groupKeySQL, guardExpr, selectCTEName)
 	ctes = append(ctes, NamedCTE{Name: qualifiedCTEName, Query: guardQuery})
 
-	// 3. Project updated entity table via LEFT JOIN with prevEntityTable to preserve ALL columns
+	// 3. Project updated entity table via LEFT JOIN with prevEntityTable to preserve ALL schema columns
 	outputCTEName := fmt.Sprintf("%s_output_%s", stepName, entityKind)
 
 	// Determine fields to project
@@ -104,6 +104,7 @@ FROM %s s`, groupKeySQL, guardExpr, selectCTEName)
 			}
 		}
 	}
+	slices.Sort(fields)
 
 	assignedMap := make(map[string]semantic.Expr)
 	for _, assign := range decl.Assignments {
@@ -222,8 +223,8 @@ FROM %s s %s`, discExpr, guardExpr, prevSourceTable, whereClause)
 		fmt.Fprintf(&assignmentsSQL, `,\n    (%s) AS %s`, valExpr, col)
 	}
 
-	// Canonical domain prefix derivation matching Go synthetic entity derivation
-	idHashExpr := d.DigestSHA256(fmt.Sprintf(`'ml:synthetic_entity:v1\x00' || COALESCE(src."lineage_id", '') || ':' || %s || ':' || %s || ':' || src."id" || ':' || COALESCE(src."_ml_discriminator"::text, '')`,
+	// Canonical domain tag prefix derivation in SQL
+	idHashExpr := d.DigestSHA256(fmt.Sprintf(`'maiden-lane.synthetic-entity.v1\x00' || COALESCE(src."lineage_id", '') || ':' || %s || ':' || %s || ':' || src."id" || ':' || COALESCE(src."_ml_discriminator"::text, '')`,
 		d.QuoteString(targetKind), d.QuoteString(string(ruleID))))
 
 	newEntitiesQuery := fmt.Sprintf(`SELECT 
@@ -561,7 +562,7 @@ FROM %s s %s`, groupKeyExpr, discExpr, guardExpr, prevSourceTable, whereClause)
 		fmt.Fprintf(&assignmentsSQL, `,\n    (%s) AS %s`, valExpr, col)
 	}
 
-	idHashExpr := d.DigestSHA256(fmt.Sprintf(`'ml:synthetic_entity:v1\x00' || COALESCE(MAX(grp."lineage_id"), '') || ':' || %s || ':' || %s || ':' || STRING_AGG(grp."id", ',' ORDER BY grp."id") || ':' || COALESCE(MAX(grp."_ml_discriminator"::text), '')`,
+	idHashExpr := d.DigestSHA256(fmt.Sprintf(`'maiden-lane.synthetic-entity.v1\x00' || COALESCE(MAX(grp."lineage_id"), '') || ':' || %s || ':' || %s || ':' || STRING_AGG(grp."id", ',' ORDER BY grp."id") || ':' || COALESCE(MAX(grp."_ml_discriminator"::text), '')`,
 		d.QuoteString(targetKind), d.QuoteString(string(ruleID))))
 
 	mergedQuery := fmt.Sprintf(`SELECT 
@@ -685,7 +686,7 @@ FROM %s s %s`, guardExpr, prevSourceTable, whereClause)
 			fmt.Fprintf(&assignmentsSQL, `,\n    (%s) AS %s`, valExpr, col)
 		}
 
-		idHashExpr := d.DigestSHA256(fmt.Sprintf(`'ml:synthetic_entity:v1\x00' || COALESCE(src."lineage_id", '') || ':' || %s || ':' || %s || ':' || src."id" || ':' || COALESCE((%s)::text, '')`,
+		idHashExpr := d.DigestSHA256(fmt.Sprintf(`'maiden-lane.synthetic-entity.v1\x00' || COALESCE(src."lineage_id", '') || ':' || %s || ':' || %s || ':' || src."id" || ':' || COALESCE((%s)::text, '')`,
 			d.QuoteString(targetKind), d.QuoteString(string(ruleID)), discExpr))
 
 		pQuery := fmt.Sprintf(`SELECT 

@@ -88,6 +88,79 @@ func TestGenerateDBTProject(t *testing.T) {
 	}
 }
 
+func TestGenerateDBTProjectRequiresSchema(t *testing.T) {
+	fixture, err := teamhos.New(teamhos.Passing)
+	if err != nil {
+		t.Fatalf("teamhos.New: %v", err)
+	}
+
+	compilation, err := semantic.Compile(fixture.Compilation)
+	if err != nil {
+		t.Fatalf("semantic.Compile: %v", err)
+	}
+
+	plan, ok := compilation.Plan()
+	if !ok {
+		t.Fatal("compilation produced no plan")
+	}
+
+	_, err = GenerateProject(plan, Options{
+		ProjectName: "test_proj",
+		Schema:      nil,
+	})
+	if err == nil {
+		t.Fatal("expected error when Schema is nil, got nil")
+	}
+	if !strings.Contains(err.Error(), "schema is required") {
+		t.Errorf("expected 'schema is required' error, got %v", err)
+	}
+}
+
+func TestDBTGeneratorDeterminism(t *testing.T) {
+	fixture, err := teamhos.New(teamhos.Passing)
+	if err != nil {
+		t.Fatalf("teamhos.New: %v", err)
+	}
+	compilation, err := semantic.Compile(fixture.Compilation)
+	if err != nil {
+		t.Fatalf("semantic.Compile: %v", err)
+	}
+	plan, ok := compilation.Plan()
+	if !ok {
+		t.Fatal("compilation produced no plan")
+	}
+
+	schema := fixture.InitialState.Schema()
+	firstProj, err := GenerateProject(plan, Options{
+		ProjectName: "teamhos_dbt",
+		Schema:      &schema,
+	})
+	if err != nil {
+		t.Fatalf("GenerateProject: %v", err)
+	}
+
+	for i := 0; i < 100; i++ {
+		proj, err := GenerateProject(plan, Options{
+			ProjectName: "teamhos_dbt",
+			Schema:      &schema,
+		})
+		if err != nil {
+			t.Fatalf("GenerateProject iteration %d failed: %v", i, err)
+		}
+		if len(proj.Files) != len(firstProj.Files) {
+			t.Fatalf("iteration %d: file count mismatch (%d vs %d)", i, len(proj.Files), len(firstProj.Files))
+		}
+		for fIdx := range proj.Files {
+			if proj.Files[fIdx].Path != firstProj.Files[fIdx].Path {
+				t.Fatalf("iteration %d file %d path mismatch: %s vs %s", i, fIdx, proj.Files[fIdx].Path, firstProj.Files[fIdx].Path)
+			}
+			if proj.Files[fIdx].Content != firstProj.Files[fIdx].Content {
+				t.Fatalf("iteration %d file %d content mismatch", i, fIdx)
+			}
+		}
+	}
+}
+
 func TestDBTMultiTableOperatorGeneration(t *testing.T) {
 	fixture, err := teamhos.New(teamhos.Passing)
 	if err != nil {
