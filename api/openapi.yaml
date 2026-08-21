@@ -41,6 +41,10 @@ tags:
     description: Publication targets and promotion gate evaluation.
   - name: comparisons
     description: Declarative checkpoint comparison contracts over replay corpora.
+  - name: policies
+    description: Target promotion policies.
+  - name: corpora
+    description: Replay corpora for regression testing and comparison contracts.
 
 paths:
   /healthz:
@@ -398,6 +402,205 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
         "503": { $ref: "#/components/responses/DependencyUnavailable" }
 
+  /v1/policies/{customerID}/{target}:
+    put:
+      operationId: putPolicy
+      tags: [policies]
+      summary: Create or advance a target policy
+      description: |
+        Appends a versioned target promotion policy for a customer target destination.
+        Writing a policy is a compare-and-swap on `version` (must be `current + 1`, or 1 for new targets).
+        Submitting identical content under an existing version is idempotent.
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+        - name: customerID
+          in: path
+          required: true
+          description: The customer identifier.
+          schema: { type: string, minLength: 1 }
+        - name: target
+          in: path
+          required: true
+          description: The publication target key.
+          schema: { type: string, minLength: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutPolicyRequest"
+      responses:
+        "200":
+          description: The policy version was already recorded with identical content (idempotent write).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TargetPolicy"
+        "201":
+          description: The new policy version was appended.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TargetPolicy"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "409": { $ref: "#/components/responses/PolicyConflict" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+    get:
+      operationId: getPolicy
+      tags: [policies]
+      summary: Retrieve a target policy
+      description: |
+        Retrieves the active policy for a customer target, or a historical policy if `version` query parameter is supplied.
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+        - name: customerID
+          in: path
+          required: true
+          description: The customer identifier.
+          schema: { type: string, minLength: 1 }
+        - name: target
+          in: path
+          required: true
+          description: The publication target key.
+          schema: { type: string, minLength: 1 }
+        - name: version
+          in: query
+          required: false
+          description: Optional historical policy version to retrieve.
+          schema: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: The target policy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TargetPolicy"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+
+  /v1/corpora:
+    post:
+      operationId: createCorpus
+      tags: [corpora]
+      summary: Register a replay corpus
+      description: |
+        Accepts a set of distinct initial states and registers an immutable, content-addressed replay corpus.
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCorpusRequest"
+      responses:
+        "201":
+          description: The corpus was registered and stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Corpus"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "422": { $ref: "#/components/responses/UnprocessableEntity" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+
+  /v1/corpora/{corpusID}:
+    get:
+      operationId: getCorpus
+      tags: [corpora]
+      summary: Retrieve a replay corpus
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+        - name: corpusID
+          in: path
+          required: true
+          description: The content-derived corpus identity.
+          schema:
+            $ref: "#/components/schemas/Digest"
+      responses:
+        "200":
+          description: The registered replay corpus.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Corpus"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+
+  /v1/executions/{executionID}/reattempt:
+    post:
+      operationId: reattemptExecution
+      tags: [executions]
+      summary: Reattempt a failed execution
+      description: |
+        Unblocks an execution whose attempt failed for retry by workers.
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+        - name: executionID
+          in: path
+          required: true
+          description: The execution identity to reattempt.
+          schema:
+            $ref: "#/components/schemas/Digest"
+      responses:
+        "202":
+          description: The execution was re-enqueued for attempt.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionAccepted"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "409": { $ref: "#/components/responses/ExecutionConflict" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+
+  /v1/executions/{executionID}/checkpoints/{checkpointKey}:
+    get:
+      operationId: getExecutionCheckpoint
+      tags: [executions]
+      summary: Retrieve an execution checkpoint record
+      description: |
+        Retrieves the sealed checkpoint artifact details and assessments for a specific checkpoint key in a finished execution.
+      parameters:
+        - $ref: "#/components/parameters/TenantHeader"
+        - name: executionID
+          in: path
+          required: true
+          description: The execution identity.
+          schema:
+            $ref: "#/components/schemas/Digest"
+        - name: checkpointKey
+          in: path
+          required: true
+          description: The declared checkpoint key in the plan.
+          schema: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: The detailed checkpoint record.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecutionCheckpointDetail"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+
 components:
   parameters:
     TenantHeader:
@@ -457,6 +660,20 @@ components:
         against a state that no longer holds. This is a problem rather than a
         refusal: the gate said nothing about the candidate, and the fix is to read
         the target again and decide afresh.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    PolicyConflict:
+      description: |
+        The target policy version conflicts with recorded history. Either the
+        version is not the immediate successor of current history or it attempts
+        to rewrite an existing version with conflicting content.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    ExecutionConflict:
+      description: |
+        The execution cannot be reattempted because it is not in a failed state.
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
@@ -1448,5 +1665,85 @@ components:
         correspondences:
           type: array
           items: { $ref: "#/components/schemas/ComparisonCorrespondence" }
+      additionalProperties: false
+
+    PutPolicyRequest:
+      type: object
+      description: Request to create or advance a target promotion policy.
+      required: [version, requiredProfileID]
+      properties:
+        version:
+          type: integer
+          minimum: 1
+          description: The expected target policy version to record (must be current version + 1, or 1 for new targets).
+        requiredProfileID:
+          $ref: "#/components/schemas/Digest"
+      additionalProperties: false
+
+    TargetPolicy:
+      type: object
+      description: An immutable, versioned statement of what a destination target requires before promotion.
+      required: [customerID, target, version, requiredProfileID]
+      properties:
+        customerID: { type: string }
+        target: { type: string }
+        version: { type: integer, minimum: 1 }
+        requiredProfileID: { $ref: "#/components/schemas/Digest" }
+      additionalProperties: false
+
+    CorpusCaseInput:
+      type: object
+      description: One initial state case within a replay corpus.
+      required: [schema, state]
+      properties:
+        schema: { $ref: "#/components/schemas/SchemaDeclaration" }
+        state: { $ref: "#/components/schemas/StateInput" }
+      additionalProperties: false
+
+    CreateCorpusRequest:
+      type: object
+      description: Request to register a replay corpus.
+      required: [cases]
+      properties:
+        cases:
+          type: array
+          minItems: 1
+          description: The set of initial state cases comprising the corpus.
+          items: { $ref: "#/components/schemas/CorpusCaseInput" }
+      additionalProperties: false
+
+    Corpus:
+      type: object
+      description: The canonical projection of a stored replay corpus.
+      required: [corpusID, caseCount, cases]
+      properties:
+        corpusID: { $ref: "#/components/schemas/Digest" }
+        caseCount: { type: integer, minimum: 1 }
+        cases:
+          type: array
+          items: { $ref: "#/components/schemas/Digest" }
+      additionalProperties: false
+
+    ExecutionCheckpointDetail:
+      type: object
+      description: Complete artifact details and assessments for one sealed checkpoint of a finished execution.
+      required:
+        - checkpointKey
+        - checkpointID
+        - checkpointArtifactID
+        - digest
+        - stateDigest
+        - invariantResultDigest
+        - assessments
+      properties:
+        checkpointKey: { type: string }
+        checkpointID: { $ref: "#/components/schemas/Digest" }
+        checkpointArtifactID: { $ref: "#/components/schemas/Digest" }
+        digest: { $ref: "#/components/schemas/Digest" }
+        stateDigest: { $ref: "#/components/schemas/Digest" }
+        invariantResultDigest: { $ref: "#/components/schemas/Digest" }
+        assessments:
+          type: array
+          items: { $ref: "#/components/schemas/Assessment" }
       additionalProperties: false
 

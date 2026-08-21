@@ -27,10 +27,16 @@ var wantOperations = []string{
 	"GetPlan",
 	"CreateExecution",
 	"GetExecution",
+	"ReattemptExecution",
+	"GetExecutionCheckpoint",
 	"CreatePublication",
 	"GetPublication",
 	"CreateComparison",
 	"GetComparison",
+	"PutPolicy",
+	"GetPolicy",
+	"CreateCorpus",
+	"GetCorpus",
 }
 
 // Production break caught: adding an operation to the contract without

@@ -20,7 +20,7 @@ type Dependencies struct {
 	Executions ports.ExecutionStore
 	Observer   app.Observer
 
-	// Policies, Publications, and Comparisons serve the promotion gate, the
+	// Policies, Publications, Comparisons, and Corpora serve the promotion gate, the
 	// publication pointer, and replay comparison contracts. All are optional:
 	// a nil store makes the corresponding routes report the feature as
 	// unavailable rather than panicking, which is what lets a deployment serve
@@ -28,6 +28,7 @@ type Dependencies struct {
 	Policies     ports.PolicyStore
 	Publications ports.PublicationStore
 	Comparisons  ports.ComparisonStore
+	Corpora      ports.CorpusStore
 
 	// Instrumenter wraps versioned routes in HTTP telemetry. It is optional:
 	// a nil instrumenter serves the same routes untelemetered, which is what

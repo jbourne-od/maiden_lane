@@ -133,6 +133,119 @@ func (s *server) GetExecution(w http.ResponseWriter, r *http.Request, executionI
 	writeJSON(w, http.StatusOK, executionToWire(record))
 }
 
+// ReattemptExecution unblocks a failed execution for retry.
+func (s *server) ReattemptExecution(
+	w http.ResponseWriter, r *http.Request, executionID openapiv1.Digest, params openapiv1.ReattemptExecutionParams,
+) {
+	tenant, ok := s.scope(w, params.XMaidenLaneTenant)
+	if !ok {
+		return
+	}
+	if s.deps.Executions == nil {
+		writeProblem(w, problemDependencyUnavailable, nil)
+		return
+	}
+	if executionID == "" {
+		writeProblem(w, problemInvalidRequest, nil)
+		return
+	}
+
+	record, found, err := s.deps.Executions.Get(r.Context(), tenant, semantic.ExecutionID(executionID))
+	if err != nil {
+		writeStorageProblem(w, err)
+		return
+	}
+	if !found {
+		writeProblem(w, problemNotFound, nil)
+		return
+	}
+	if record.Status != ports.ExecutionFailed {
+		writeProblem(w, problemExecutionConflict, nil)
+		return
+	}
+
+	if err := s.deps.Executions.Reattempt(r.Context(), tenant, semantic.ExecutionID(executionID)); err != nil {
+		writeStorageProblem(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, openapiv1.ExecutionAccepted{
+		ExecutionID:     openapiv1.Digest(record.Request.ExecutionID),
+		SemanticRunID:   openapiv1.Digest(record.Request.RunID),
+		PlanID:          openapiv1.Digest(record.Request.PlanID),
+		ExecutionStatus: openapiv1.ExecutionStatusPending,
+	})
+}
+
+// GetExecutionCheckpoint retrieves detailed artifact records for one sealed checkpoint of a finished execution.
+func (s *server) GetExecutionCheckpoint(
+	w http.ResponseWriter, r *http.Request, executionID openapiv1.Digest, checkpointKey string, params openapiv1.GetExecutionCheckpointParams,
+) {
+	tenant, ok := s.scope(w, params.XMaidenLaneTenant)
+	if !ok {
+		return
+	}
+	if s.deps.Executions == nil {
+		writeProblem(w, problemDependencyUnavailable, nil)
+		return
+	}
+	if executionID == "" || checkpointKey == "" {
+		writeProblem(w, problemInvalidRequest, nil)
+		return
+	}
+
+	record, found, err := s.deps.Executions.Get(r.Context(), tenant, semantic.ExecutionID(executionID))
+	if err != nil {
+		writeStorageProblem(w, err)
+		return
+	}
+	if !found || record.Result == nil {
+		writeProblem(w, problemNotFound, nil)
+		return
+	}
+
+	var matchedCheckpoint *ports.SealedCheckpoint
+	for _, cp := range record.Result.Checkpoints {
+		if string(cp.CheckpointKey) == checkpointKey {
+			matchedCheckpoint = &cp
+			break
+		}
+	}
+	if matchedCheckpoint == nil {
+		writeProblem(w, problemNotFound, nil)
+		return
+	}
+
+	var matchedAssessments []openapiv1.Assessment
+	for _, a := range record.Result.Assessments {
+		if a.CheckpointArtifactID == matchedCheckpoint.CheckpointArtifactID {
+			missing := make([]string, 0, len(a.MissingRequirements))
+			for _, code := range a.MissingRequirements {
+				missing = append(missing, string(code))
+			}
+			matchedAssessments = append(matchedAssessments, openapiv1.Assessment{
+				AssessmentID:         openapiv1.Digest(a.AssessmentID),
+				Digest:               openapiv1.Digest(a.Digest),
+				CheckpointArtifactID: openapiv1.Digest(a.CheckpointArtifactID),
+				ProfileID:            openapiv1.Digest(a.ProfileID),
+				ProfileKey:           string(a.ProfileKey),
+				Verdict:              verdictToWire(a.Verdict),
+				MissingRequirements:  &missing,
+			})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, openapiv1.ExecutionCheckpointDetail{
+		CheckpointKey:         string(matchedCheckpoint.CheckpointKey),
+		CheckpointID:          openapiv1.Digest(matchedCheckpoint.CheckpointID),
+		CheckpointArtifactID:  openapiv1.Digest(matchedCheckpoint.CheckpointArtifactID),
+		Digest:                openapiv1.Digest(matchedCheckpoint.Digest),
+		StateDigest:           openapiv1.Digest(matchedCheckpoint.StateDigest),
+		InvariantResultDigest: openapiv1.Digest(matchedCheckpoint.InvariantResultDigest),
+		Assessments:           matchedAssessments,
+	})
+}
+
 // executionToWire projects a stored execution outward.
 //
 // The worker projects a spine result into the stored form, and this projects the

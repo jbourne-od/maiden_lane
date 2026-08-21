@@ -376,3 +376,91 @@ func executionRequest(t *testing.T, planID openapiv1.Digest, variant teamhos.Var
 }
 
 func stringPtr(s string) *string { return &s }
+
+func TestReattemptFailedExecution(t *testing.T) {
+	fixture := newExecutionFixture(t)
+	plan := createPlan(t, fixture.router, "acme", fixtureDeclarations(t))
+	accepted := acceptExecution(t, fixture.router, "acme", executionRequest(t, plan.PlanID, teamhos.Passing))
+
+	// Claim and fail the attempt
+	attempt, ok, err := fixture.store.Claim(context.Background(), time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("Claim: ok=%v, err=%v", ok, err)
+	}
+	if err := fixture.store.Fail(context.Background(), "acme", semantic.ExecutionID(accepted.ExecutionID), attempt.AttemptID, "worker_crashed"); err != nil {
+		t.Fatalf("Fail: %v", err)
+	}
+
+	// Verify status is failed
+	exec := getExecution(t, fixture.router, "acme", accepted.ExecutionID)
+	if exec.ExecutionStatus != openapiv1.ExecutionStatusFailed {
+		t.Fatalf("status = %s, want failed", exec.ExecutionStatus)
+	}
+
+	// Reattempt execution -> 202 Accepted
+	reattemptRecorder := postJSON(t, fixture.router, "/v1/executions/"+string(accepted.ExecutionID)+"/reattempt", "acme", nil)
+	if reattemptRecorder.Code != http.StatusAccepted {
+		t.Fatalf("reattempt status = %d, want 202; body = %s", reattemptRecorder.Code, reattemptRecorder.Body.String())
+	}
+
+	// Verify status returned to pending
+	execAfter := getExecution(t, fixture.router, "acme", accepted.ExecutionID)
+	if execAfter.ExecutionStatus != openapiv1.ExecutionStatusPending {
+		t.Fatalf("status after reattempt = %s, want pending", execAfter.ExecutionStatus)
+	}
+
+	// Reattempt while pending -> 409 Conflict
+	conflictRecorder := postJSON(t, fixture.router, "/v1/executions/"+string(accepted.ExecutionID)+"/reattempt", "acme", nil)
+	if conflictRecorder.Code != http.StatusConflict {
+		t.Fatalf("conflict status = %d, want 409", conflictRecorder.Code)
+	}
+
+	// Reattempt non-existent execution -> 404 Not Found
+	missingRecorder := postJSON(t, fixture.router, "/v1/executions/sha256:0000000000000000000000000000000000000000000000000000000000000000/reattempt", "acme", nil)
+	if missingRecorder.Code != http.StatusNotFound {
+		t.Fatalf("missing execution status = %d, want 404", missingRecorder.Code)
+	}
+}
+
+func TestGetExecutionCheckpoint(t *testing.T) {
+	fixture := newExecutionFixture(t)
+	plan := createPlan(t, fixture.router, "acme", fixtureDeclarations(t))
+	accepted := acceptExecution(t, fixture.router, "acme", executionRequest(t, plan.PlanID, teamhos.Passing))
+
+	// Run worker to finish the execution
+	workerInstance := worker.New(worker.Options{
+		Plans:      fixture.store,
+		Executions: fixture.store,
+		Runner:     spineRunner{},
+	})
+	ran, err := workerInstance.RunOnce(context.Background())
+	if err != nil || !ran {
+		t.Fatalf("RunOnce: ran=%v, err=%v", ran, err)
+	}
+
+	// 1. GET valid checkpoint -> 200 OK
+	recorder := get(t, fixture.router, "/v1/executions/"+string(accepted.ExecutionID)+"/checkpoints/team_formed.v1", "acme")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("GET checkpoint status = %d, want 200; body = %s", recorder.Code, recorder.Body.String())
+	}
+	var detail openapiv1.ExecutionCheckpointDetail
+	decodeBody(t, recorder, &detail)
+	if detail.CheckpointKey != "team_formed.v1" || detail.CheckpointID == "" || detail.CheckpointArtifactID == "" {
+		t.Fatalf("unexpected checkpoint detail: %+v", detail)
+	}
+	if len(detail.Assessments) == 0 {
+		t.Fatalf("expected assessments on checkpoint detail, got 0")
+	}
+
+	// 2. GET non-existent checkpoint key on finished execution -> 404 Not Found
+	missingCPRecorder := get(t, fixture.router, "/v1/executions/"+string(accepted.ExecutionID)+"/checkpoints/unknown_checkpoint", "acme")
+	if missingCPRecorder.Code != http.StatusNotFound {
+		t.Fatalf("missing checkpoint status = %d, want 404", missingCPRecorder.Code)
+	}
+
+	// 3. GET checkpoint cross-tenant -> 404 Not Found
+	crossRecorder := get(t, fixture.router, "/v1/executions/"+string(accepted.ExecutionID)+"/checkpoints/team_formed.v1", "other-tenant")
+	if crossRecorder.Code != http.StatusNotFound {
+		t.Fatalf("cross-tenant status = %d, want 404", crossRecorder.Code)
+	}
+}
