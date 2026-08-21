@@ -794,3 +794,82 @@ func TestGroupSumRefusesOverflow(t *testing.T) {
 		t.Fatal("evaluateGroupExpr sum did not refuse int64 overflow")
 	}
 }
+
+func TestGroupReductionsOnExtendedTypes(t *testing.T) {
+	schema := extendedExpressionSchema(t)
+	lineage, err := NewInputLineageID("maiden-lane.sanitized-fixture", "group-ext")
+	if err != nil {
+		t.Fatalf("NewInputLineageID: %v", err)
+	}
+	e1, _ := NewEntity(EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "d1")},
+		map[FieldName]Value{
+			"pay_rate":       mustDecimal(t, "20.50"),
+			"shift_duration": NewDurationValue(3600),
+			"created_at":     mustTimestamp(t, "2026-08-21T08:00:00Z"),
+			"effective_date": mustDate(t, "2026-08-20"),
+		})
+	e2, _ := NewEntity(EntityRef{Kind: "driver", ID: SourceEntityID(lineage, "driver", "d2")},
+		map[FieldName]Value{
+			"pay_rate":       mustDecimal(t, "30.25"),
+			"shift_duration": NewDurationValue(7200),
+			"created_at":     mustTimestamp(t, "2026-08-21T12:00:00Z"),
+			"effective_date": mustDate(t, "2026-08-22"),
+		})
+	extGroup := []Entity{e1, e2}
+
+	t.Run("sum decimals in assignment", func(t *testing.T) {
+		val, err := evaluateAssignmentValue(schema, sumExpr("driver.pay_rate"), extGroup, e1)
+		if err != nil {
+			t.Fatalf("evaluateAssignmentValue sum decimal: %v", err)
+		}
+		if !val.Equal(mustDecimal(t, "50.75")) {
+			t.Fatalf("sum decimal = %v, want 50.75", val)
+		}
+	})
+
+	t.Run("sum durations in assignment", func(t *testing.T) {
+		val, err := evaluateAssignmentValue(schema, sumExpr("driver.shift_duration"), extGroup, e1)
+		if err != nil {
+			t.Fatalf("evaluateAssignmentValue sum duration: %v", err)
+		}
+		if !val.Equal(NewDurationValue(10800)) {
+			t.Fatalf("sum duration = %v, want 10800", val)
+		}
+	})
+
+	t.Run("min and max timestamp in assignment", func(t *testing.T) {
+		minV, err := evaluateAssignmentValue(schema, minExpr("driver.created_at"), extGroup, e1)
+		if err != nil {
+			t.Fatalf("min timestamp: %v", err)
+		}
+		if !minV.Equal(mustTimestamp(t, "2026-08-21T08:00:00Z")) {
+			t.Fatalf("min timestamp = %v, want 08:00", minV)
+		}
+
+		maxV, err := evaluateAssignmentValue(schema, maxExpr("driver.created_at"), extGroup, e1)
+		if err != nil {
+			t.Fatalf("max timestamp: %v", err)
+		}
+		if !maxV.Equal(mustTimestamp(t, "2026-08-21T12:00:00Z")) {
+			t.Fatalf("max timestamp = %v, want 12:00", maxV)
+		}
+	})
+
+	t.Run("min and max date in assignment", func(t *testing.T) {
+		minV, err := evaluateAssignmentValue(schema, minExpr("driver.effective_date"), extGroup, e1)
+		if err != nil {
+			t.Fatalf("min date: %v", err)
+		}
+		if !minV.Equal(mustDate(t, "2026-08-20")) {
+			t.Fatalf("min date = %v, want 2026-08-20", minV)
+		}
+
+		maxV, err := evaluateAssignmentValue(schema, maxExpr("driver.effective_date"), extGroup, e1)
+		if err != nil {
+			t.Fatalf("max date: %v", err)
+		}
+		if !maxV.Equal(mustDate(t, "2026-08-22")) {
+			t.Fatalf("max date = %v, want 2026-08-22", maxV)
+		}
+	})
+}

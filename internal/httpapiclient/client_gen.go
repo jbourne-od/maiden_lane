@@ -129,27 +129,43 @@ func (e ExecutionStatus) Valid() bool {
 
 // Defines values for ExprKind.
 const (
-	ExprKindAdd        ExprKind = "add"
-	ExprKindAll        ExprKind = "all"
-	ExprKindAllEqual   ExprKind = "all_equal"
-	ExprKindAllMembers ExprKind = "all_members"
-	ExprKindAny        ExprKind = "any"
-	ExprKindAnyMembers ExprKind = "any_members"
-	ExprKindCount      ExprKind = "count"
-	ExprKindEqual      ExprKind = "equal"
-	ExprKindExists     ExprKind = "exists"
-	ExprKindField      ExprKind = "field"
-	ExprKindLess       ExprKind = "less"
-	ExprKindLiteral    ExprKind = "literal"
-	ExprKindMax        ExprKind = "max"
-	ExprKindMin        ExprKind = "min"
-	ExprKindNot        ExprKind = "not"
-	ExprKindSum        ExprKind = "sum"
+	ExprKindAbs           ExprKind = "abs"
+	ExprKindAdd           ExprKind = "add"
+	ExprKindAll           ExprKind = "all"
+	ExprKindAllEqual      ExprKind = "all_equal"
+	ExprKindAllMembers    ExprKind = "all_members"
+	ExprKindAny           ExprKind = "any"
+	ExprKindAnyMembers    ExprKind = "any_members"
+	ExprKindClamp         ExprKind = "clamp"
+	ExprKindCoalesce      ExprKind = "coalesce"
+	ExprKindConcat        ExprKind = "concat"
+	ExprKindCount         ExprKind = "count"
+	ExprKindDateExtract   ExprKind = "date_extract"
+	ExprKindDivide        ExprKind = "divide"
+	ExprKindEqual         ExprKind = "equal"
+	ExprKindExists        ExprKind = "exists"
+	ExprKindField         ExprKind = "field"
+	ExprKindIf            ExprKind = "if"
+	ExprKindLess          ExprKind = "less"
+	ExprKindLiteral       ExprKind = "literal"
+	ExprKindMax           ExprKind = "max"
+	ExprKindMin           ExprKind = "min"
+	ExprKindModulo        ExprKind = "modulo"
+	ExprKindMultiply      ExprKind = "multiply"
+	ExprKindNot           ExprKind = "not"
+	ExprKindSubstring     ExprKind = "substring"
+	ExprKindSubtract      ExprKind = "subtract"
+	ExprKindSum           ExprKind = "sum"
+	ExprKindTimestampAdd  ExprKind = "timestamp_add"
+	ExprKindTimestampDiff ExprKind = "timestamp_diff"
+	ExprKindTrim          ExprKind = "trim"
 )
 
 // Valid indicates whether the value is a known member of the ExprKind enum.
 func (e ExprKind) Valid() bool {
 	switch e {
+	case ExprKindAbs:
+		return true
 	case ExprKindAdd:
 		return true
 	case ExprKindAll:
@@ -162,13 +178,25 @@ func (e ExprKind) Valid() bool {
 		return true
 	case ExprKindAnyMembers:
 		return true
+	case ExprKindClamp:
+		return true
+	case ExprKindCoalesce:
+		return true
+	case ExprKindConcat:
+		return true
 	case ExprKindCount:
+		return true
+	case ExprKindDateExtract:
+		return true
+	case ExprKindDivide:
 		return true
 	case ExprKindEqual:
 		return true
 	case ExprKindExists:
 		return true
 	case ExprKindField:
+		return true
+	case ExprKindIf:
 		return true
 	case ExprKindLess:
 		return true
@@ -178,9 +206,23 @@ func (e ExprKind) Valid() bool {
 		return true
 	case ExprKindMin:
 		return true
+	case ExprKindModulo:
+		return true
+	case ExprKindMultiply:
+		return true
 	case ExprKindNot:
 		return true
+	case ExprKindSubstring:
+		return true
+	case ExprKindSubtract:
+		return true
 	case ExprKindSum:
+		return true
+	case ExprKindTimestampAdd:
+		return true
+	case ExprKindTimestampDiff:
+		return true
+	case ExprKindTrim:
 		return true
 	default:
 		return false
@@ -408,9 +450,13 @@ func (e TransformationDeclarationOperator) Valid() bool {
 
 // Defines values for ValueKind.
 const (
-	ValueKindAtom   ValueKind = "atom"
-	ValueKindInt64  ValueKind = "int64"
-	ValueKindString ValueKind = "string"
+	ValueKindAtom      ValueKind = "atom"
+	ValueKindDate      ValueKind = "date"
+	ValueKindDecimal   ValueKind = "decimal"
+	ValueKindDuration  ValueKind = "duration"
+	ValueKindInt64     ValueKind = "int64"
+	ValueKindString    ValueKind = "string"
+	ValueKindTimestamp ValueKind = "timestamp"
 )
 
 // Valid indicates whether the value is a known member of the ValueKind enum.
@@ -418,9 +464,17 @@ func (e ValueKind) Valid() bool {
 	switch e {
 	case ValueKindAtom:
 		return true
+	case ValueKindDate:
+		return true
+	case ValueKindDecimal:
+		return true
+	case ValueKindDuration:
+		return true
 	case ValueKindInt64:
 		return true
 	case ValueKindString:
+		return true
+	case ValueKindTimestamp:
 		return true
 	default:
 		return false
@@ -1127,6 +1181,15 @@ type Value struct {
 	// Atom Present when kind is atom.
 	Atom *string `json:"atom,omitempty"`
 
+	// Date Present when kind is date. ISO-8601 calendar date YYYY-MM-DD.
+	Date *string `json:"date,omitempty"`
+
+	// Decimal Present when kind is decimal. Normalized base-10 ASCII string.
+	Decimal *string `json:"decimal,omitempty"`
+
+	// Duration Present when kind is duration. Integer elapsed seconds.
+	Duration *int64 `json:"duration,omitempty"`
+
 	// Int64 Present when kind is int64.
 	Int64 *int64 `json:"int64,omitempty"`
 
@@ -1135,6 +1198,9 @@ type Value struct {
 
 	// String Present when kind is string. Exact UTF-8 bytes, never normalized.
 	String *string `json:"string,omitempty"`
+
+	// Timestamp Present when kind is timestamp. RFC 3339 UTC representation.
+	Timestamp *string `json:"timestamp,omitempty"`
 }
 
 // ValueKind The closed typed-value vocabulary.

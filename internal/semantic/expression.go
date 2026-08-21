@@ -55,30 +55,44 @@ const (
 	ExprSum
 	ExprMin
 	ExprMax
+
+	// Numerical & Arithmetic Operations
+	ExprSubtract
+	ExprMultiply
+	ExprDivide
+	ExprModulo
+	ExprAbs
+	ExprClamp
+
+	// Temporal Operations
+	ExprTimestampAdd
+	ExprTimestampDiff
+	ExprDateExtract
+
+	// String Operations
+	ExprConcat
+	ExprSubstring
+	ExprTrim
+
+	// Conditionals
+	ExprIf
+	ExprCoalesce
 )
 
 // AllExprKinds is the complete v1 node vocabulary, in kind-byte order.
-//
-// It exists so a boundary that must map every kind can be tested against the vocabulary
-// rather than against a list re-typed into a test file. Like AllInvariantCodes, it is itself
-// hand-maintained and nothing forces it to agree with the const block above -- Go cannot
-// enumerate a const group -- so it reduces the number of hand-kept lists rather than removing
-// the hazard.
 func AllExprKinds() []ExprKind {
 	return []ExprKind{
 		ExprLiteral, ExprField, ExprExists, ExprNot, ExprAll, ExprAny,
 		ExprEqual, ExprLess, ExprAdd, ExprAllMembers, ExprAnyMembers, ExprAllEqual,
 		ExprCount, ExprSum, ExprMin, ExprMax,
+		ExprSubtract, ExprMultiply, ExprDivide, ExprModulo, ExprAbs, ExprClamp,
+		ExprTimestampAdd, ExprTimestampDiff, ExprDateExtract,
+		ExprConcat, ExprSubstring, ExprTrim,
+		ExprIf, ExprCoalesce,
 	}
 }
 
 // String renders a kind for a human.
-//
-// IT IS NOT A WIRE TOKEN, however exactly the strings happen to coincide with one today. This
-// function is total and falls back to kind(%d) for anything unrecognised, which is right for a
-// diagnostic and wrong for a contract: a boundary using it would ship an off-enum token for a
-// kind nobody had mapped, silently, in the fail-open direction. internal/httpapi keeps its own
-// switch with no fallback for exactly that reason.
 func (k ExprKind) String() string {
 	switch k {
 	case ExprLiteral:
@@ -113,27 +127,52 @@ func (k ExprKind) String() string {
 		return "min"
 	case ExprMax:
 		return "max"
+	case ExprSubtract:
+		return "subtract"
+	case ExprMultiply:
+		return "multiply"
+	case ExprDivide:
+		return "divide"
+	case ExprModulo:
+		return "modulo"
+	case ExprAbs:
+		return "abs"
+	case ExprClamp:
+		return "clamp"
+	case ExprTimestampAdd:
+		return "timestamp_add"
+	case ExprTimestampDiff:
+		return "timestamp_diff"
+	case ExprDateExtract:
+		return "date_extract"
+	case ExprConcat:
+		return "concat"
+	case ExprSubstring:
+		return "substring"
+	case ExprTrim:
+		return "trim"
+	case ExprIf:
+		return "if"
+	case ExprCoalesce:
+		return "coalesce"
 	default:
 		return fmt.Sprintf("kind(%d)", uint8(k))
 	}
 }
 
 // ExprType is the type an expression evaluates to.
-//
-// It is not ValueKind. Expressions range over {Bool, String, Atom, Int64} while a Value ranges
-// over {String, Atom, Int64}, and adding a boolean Value would change the canonical encoding
-// of every value in the system to buy a literal nothing needs.
 type ExprType uint8
 
 const (
-	// TypeInvalid is the zero value and is not a type. Every exported struct here has a
-	// constructible zero value, so a CompiledExpression nobody built reports a type that
-	// refuses rather than one that happens to be first in the enumeration.
 	TypeInvalid ExprType = iota
 	TypeBool
 	TypeString
 	TypeAtom
 	TypeInt64
+	TypeTimestamp
+	TypeDuration
+	TypeDecimal
+	TypeDate
 )
 
 // String names the type for diagnostics.
@@ -147,6 +186,14 @@ func (t ExprType) String() string {
 		return "atom"
 	case TypeInt64:
 		return "int64"
+	case TypeTimestamp:
+		return "timestamp"
+	case TypeDuration:
+		return "duration"
+	case TypeDecimal:
+		return "decimal"
+	case TypeDate:
+		return "date"
 	default:
 		return "invalid"
 	}
@@ -255,116 +302,10 @@ func CompileExpression(
 	}, nil
 }
 
-// checkExpr derives the type of one node, refusing anything the schema or the vocabulary does
-// not admit.
+// checkExpr derives the type of one node in member scope, refusing anything the schema
+// or the vocabulary does not admit.
 func checkExpr(schema Schema, expr Expr, depth int) (ExprType, error) {
-	if depth > maxExprDepth {
-		return TypeInvalid, fmt.Errorf("expression nests deeper than %d", maxExprDepth)
-	}
-	if err := checkOperandShape(expr); err != nil {
-		return TypeInvalid, err
-	}
-
-	switch expr.Kind {
-	case ExprLiteral:
-		return literalType(*expr.Literal)
-
-	case ExprField:
-		kind, declared := schema.fieldKind(expr.Field)
-		if !declared {
-			return TypeInvalid, fmt.Errorf("expression reads undeclared field %q", expr.Field)
-		}
-		return valueKindType(kind)
-
-	case ExprExists:
-		if _, declared := schema.fieldKind(expr.Field); !declared {
-			return TypeInvalid, fmt.Errorf("expression asks about undeclared field %q", expr.Field)
-		}
-		return TypeBool, nil
-
-	case ExprNot:
-		argument, err := checkExpr(schema, expr.Args[0], depth+1)
-		if err != nil {
-			return TypeInvalid, err
-		}
-		if argument != TypeBool {
-			return TypeInvalid, fmt.Errorf("not requires bool, got %s", argument)
-		}
-		return TypeBool, nil
-
-	case ExprAll, ExprAny:
-		for i := range expr.Args {
-			argument, err := checkExpr(schema, expr.Args[i], depth+1)
-			if err != nil {
-				return TypeInvalid, err
-			}
-			if argument != TypeBool {
-				return TypeInvalid, fmt.Errorf("boolean composition requires bool arguments, "+
-					"argument %d is %s", i, argument)
-			}
-		}
-		return TypeBool, nil
-
-	case ExprEqual:
-		left, right, err := checkPair(schema, expr, depth)
-		if err != nil {
-			return TypeInvalid, err
-		}
-		// HLD §9.1 lists type-incompatible comparisons as a static validation failure.
-		if left != right {
-			return TypeInvalid, fmt.Errorf("equal compares %s with %s", left, right)
-		}
-		return TypeBool, nil
-
-	case ExprLess:
-		left, right, err := checkPair(schema, expr, depth)
-		if err != nil {
-			return TypeInvalid, err
-		}
-		// Int64 only, and the restriction is deliberate rather than unfinished. An atom is an
-		// opaque token, so ordering atoms asserts a meaning they do not carry; ordering
-		// strings needs a collation this kernel deliberately does not define, since v1
-		// performs no Unicode normalization. Reaching for byte order here would invent one.
-		if left != TypeInt64 || right != TypeInt64 {
-			return TypeInvalid, fmt.Errorf("less requires int64 on both sides, got %s and %s",
-				left, right)
-		}
-		return TypeBool, nil
-
-	case ExprAdd:
-		left, right, err := checkPair(schema, expr, depth)
-		if err != nil {
-			return TypeInvalid, err
-		}
-		if left != TypeInt64 || right != TypeInt64 {
-			return TypeInvalid, fmt.Errorf("add requires int64 on both sides, got %s and %s",
-				left, right)
-		}
-		return TypeInt64, nil
-
-	case ExprAllMembers, ExprAnyMembers, ExprAllEqual, ExprCount, ExprSum, ExprMin, ExprMax:
-		// checkExpr is the MEMBER-scope checker. A group predicate or reduction reaching it
-		// means the expression was checked in the wrong scope, which is refused rather than delegated:
-		// answering it here would require picking a member.
-		return TypeInvalid, fmt.Errorf(
-			"%s is a group expression and cannot appear in member scope", expr.Kind)
-
-	default:
-		return TypeInvalid, fmt.Errorf("unknown expression kind %d", expr.Kind)
-	}
-}
-
-// checkPair types both arguments of a binary node.
-func checkPair(schema Schema, expr Expr, depth int) (ExprType, ExprType, error) {
-	left, err := checkExpr(schema, expr.Args[0], depth+1)
-	if err != nil {
-		return TypeInvalid, TypeInvalid, err
-	}
-	right, err := checkExpr(schema, expr.Args[1], depth+1)
-	if err != nil {
-		return TypeInvalid, TypeInvalid, err
-	}
-	return left, right, nil
+	return checkExprInScope(schema, "", expr, memberScope, depth)
 }
 
 // checkOperandShape refuses a node whose populated operands do not match its kind.
@@ -383,7 +324,7 @@ func checkOperandShape(expr Expr) error {
 		wantLiteral = true
 	case ExprField, ExprExists:
 		wantField = true
-	case ExprNot:
+	case ExprNot, ExprAbs, ExprTrim:
 		wantArgs = 1
 	case ExprAll, ExprAny:
 		// Variadic, but never empty: with no boolean literal there is no way to write the
@@ -393,8 +334,23 @@ func checkOperandShape(expr Expr) error {
 			return fmt.Errorf("boolean composition requires at least one argument")
 		}
 		wantArgs = len(expr.Args)
-	case ExprEqual, ExprLess, ExprAdd:
+	case ExprEqual, ExprLess, ExprAdd, ExprSubtract, ExprMultiply, ExprDivide, ExprModulo, ExprTimestampAdd, ExprTimestampDiff:
 		wantArgs = 2
+	case ExprClamp, ExprSubstring, ExprIf:
+		wantArgs = 3
+	case ExprConcat:
+		if len(expr.Args) < 2 {
+			return fmt.Errorf("concat requires at least 2 arguments, got %d", len(expr.Args))
+		}
+		wantArgs = len(expr.Args)
+	case ExprCoalesce:
+		if len(expr.Args) == 0 {
+			return fmt.Errorf("coalesce requires at least one argument")
+		}
+		wantArgs = len(expr.Args)
+	case ExprDateExtract:
+		wantField = true
+		wantArgs = 1
 	case ExprAllMembers, ExprAnyMembers:
 		wantArgs = 1
 	case ExprAllEqual, ExprSum, ExprMin, ExprMax:
@@ -445,6 +401,14 @@ func valueKindType(kind ValueKind) (ExprType, error) {
 		return TypeAtom, nil
 	case ValueInt64:
 		return TypeInt64, nil
+	case ValueTimestamp:
+		return TypeTimestamp, nil
+	case ValueDuration:
+		return TypeDuration, nil
+	case ValueDecimal:
+		return TypeDecimal, nil
+	case ValueDate:
+		return TypeDate, nil
 	default:
 		return TypeInvalid, fmt.Errorf("unknown value kind %d", kind)
 	}
@@ -457,31 +421,9 @@ func cloneCompiledExpression(input CompiledExpression) CompiledExpression {
 }
 
 // maxExprNodes bounds the NODE COUNT of an authored tree, which depth does not.
-//
-// Expr.Args is a slice of values, so one Expr may appear as several children without being
-// copied: forty levels of Expr{Kind: ExprAll, Args: []Expr{node, node}} is depth forty --
-// comfortably inside maxExprDepth -- and 2^40 nodes. An earlier version of the bound below
-// checked only depth, so it walked all 2^40 of them and never returned. Iterative was the
-// right shape and the wrong dimension: it stopped the stack overflow and left an unbounded
-// amount of work, which is the fail-open half of the same hazard.
-//
-// The number is generous against any authored rule and negligible against an aliased DAG,
-// which is the only gap it has to close.
 const maxExprNodes = 4096
 
 // checkAuthoredExprBound refuses an authored tree deeper, or larger, than the language admits.
-//
-// ITERATIVE, WITH AN EXPLICIT STACK, because it is the guard that protects the recursive
-// walks and must not be one itself.
-//
-// maxExprDepth is enforced by checkExpr and checkExprInScope, which for a selector-scoped
-// rule run inside deriveTransformation -- and normalizeRuleset clones the authored trees and
-// encodeRuleset walks them, both BEFORE that. Those two recursions therefore consumed a tree
-// nothing had bounded: a guard nested a million deep exhausted the goroutine stack in
-// cloneExpr, which is a fatal runtime error rather than a refusal, and the bound that would
-// have rejected it at 64 never ran. The same shape as a specialized traversal closing over
-// its own recursion, one layer out: a new caller reached the walk without crossing the guard
-// that owns its invariant.
 func checkAuthoredExprBound(expr Expr) error {
 	type framed struct {
 		node  Expr
@@ -497,8 +439,6 @@ func checkAuthoredExprBound(expr Expr) error {
 		}
 		visited++
 		if visited > maxExprNodes {
-			// Counted as the walk proceeds rather than measured up front, because measuring
-			// the size of the tree is the very walk that has to be bounded.
 			return fmt.Errorf("expression expands to more than %d nodes", maxExprNodes)
 		}
 		for i := range current.node.Args {
@@ -509,42 +449,29 @@ func checkAuthoredExprBound(expr Expr) error {
 }
 
 // encodeExpr writes one node and its operands.
-//
-// Recursive, with no domain tag of its own: the tag is written once at the top by
-// CompileExpression, exactly as encodeTransformationDeclaration nests its payloads.
 func encodeExpr(encoder *canonicalEncoder, expr Expr) {
 	encoder.byte(byte(expr.Kind))
 	switch expr.Kind {
 	case ExprLiteral:
 		encoder.value(*expr.Literal)
 	case ExprField, ExprExists, ExprAllEqual, ExprSum, ExprMin, ExprMax:
-		// ExprAllEqual and reductions encode exactly as the other field-carrying kinds:
-		// the kind byte is what separates them, which is the scheme the golden vectors pin.
 		encoder.string(string(expr.Field))
+	case ExprDateExtract:
+		encoder.string(string(expr.Field))
+		encodeExpr(encoder, expr.Args[0])
 	case ExprCount:
 		// Takes no operands beyond its kind byte.
-	case ExprNot, ExprAll, ExprAny, ExprEqual, ExprLess, ExprAdd, ExprAllMembers, ExprAnyMembers:
+	case ExprNot, ExprAll, ExprAny, ExprEqual, ExprLess, ExprAdd,
+		ExprAllMembers, ExprAnyMembers,
+		ExprSubtract, ExprMultiply, ExprDivide, ExprModulo, ExprAbs, ExprClamp,
+		ExprTimestampAdd, ExprTimestampDiff,
+		ExprConcat, ExprSubstring, ExprTrim,
+		ExprIf, ExprCoalesce:
 		encoder.uint64(uint64(len(expr.Args)))
 		for i := range expr.Args {
 			encodeExpr(encoder, expr.Args[i])
 		}
 	default:
-		// EXHAUSTIVE AND FAIL-CLOSED, and the default arm is the point rather than a
-		// formality.
-		//
-		// The three group kinds got their arms above when OperatorSelectAndAssign made them
-		// reachable -- a transformation declaration encodes its authored guard, and a guard
-		// is group-scoped -- together with the golden vectors that entry promised. Until
-		// then encodeExpr had two entry points, CompileExpression and encodeSelector, and
-		// neither could reach a group kind; there are now three.
-		//
-		// checkExpr and checkOperandShape both refuse an unrecognised kind, so
-		// this arm is unreachable today. It exists because adding a kind is the expected
-		// change: a new kind with a new operand would be caught by both refusal switches,
-		// which error loudly if a case is forgotten, but an encoder whose default merely
-		// wrote the argument list would compile, run, and silently omit the new operand from
-		// the identity. The one switch that must not be forgotten was the only one that
-		// could not complain.
 		encoder.fail(fmt.Errorf("expression kind %d has no canonical encoding", expr.Kind))
 	}
 }

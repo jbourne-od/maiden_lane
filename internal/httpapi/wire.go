@@ -57,6 +57,18 @@ func valueFromWire(value openapiv1.Value) (semantic.Value, error) {
 	if value.Int64 != nil {
 		present++
 	}
+	if value.Timestamp != nil {
+		present++
+	}
+	if value.Duration != nil {
+		present++
+	}
+	if value.Decimal != nil {
+		present++
+	}
+	if value.Date != nil {
+		present++
+	}
 	if present != 1 {
 		return semantic.Value{}, translationError("value carries %d payloads, want exactly 1", present)
 	}
@@ -77,6 +89,26 @@ func valueFromWire(value openapiv1.Value) (semantic.Value, error) {
 			return semantic.Value{}, translationError("int64 value carries a different payload")
 		}
 		return semantic.NewInt64Value(*value.Int64), nil
+	case openapiv1.ValueKindTimestamp:
+		if value.Timestamp == nil {
+			return semantic.Value{}, translationError("timestamp value carries a different payload")
+		}
+		return semantic.NewTimestampValue(*value.Timestamp)
+	case openapiv1.ValueKindDuration:
+		if value.Duration == nil {
+			return semantic.Value{}, translationError("duration value carries a different payload")
+		}
+		return semantic.NewDurationValue(*value.Duration), nil
+	case openapiv1.ValueKindDecimal:
+		if value.Decimal == nil {
+			return semantic.Value{}, translationError("decimal value carries a different payload")
+		}
+		return semantic.NewDecimalValue(*value.Decimal)
+	case openapiv1.ValueKindDate:
+		if value.Date == nil {
+			return semantic.Value{}, translationError("date value carries a different payload")
+		}
+		return semantic.NewDateValue(*value.Date)
 	default:
 		return semantic.Value{}, translationError("unknown value kind")
 	}
@@ -96,6 +128,18 @@ func valueToWire(value semantic.Value) openapiv1.Value {
 	case semantic.ValueInt64:
 		number, _ := value.Int64()
 		return openapiv1.Value{Kind: openapiv1.ValueKindInt64, Int64: &number}
+	case semantic.ValueTimestamp:
+		ts, _ := value.Timestamp()
+		return openapiv1.Value{Kind: openapiv1.ValueKindTimestamp, Timestamp: &ts}
+	case semantic.ValueDuration:
+		dur, _ := value.Duration()
+		return openapiv1.Value{Kind: openapiv1.ValueKindDuration, Duration: &dur}
+	case semantic.ValueDecimal:
+		dec, _ := value.Decimal()
+		return openapiv1.Value{Kind: openapiv1.ValueKindDecimal, Decimal: &dec}
+	case semantic.ValueDate:
+		dt, _ := value.Date()
+		return openapiv1.Value{Kind: openapiv1.ValueKindDate, Date: &dt}
 	default:
 		return openapiv1.Value{}
 	}
@@ -149,6 +193,14 @@ func valueKindFromWire(kind openapiv1.ValueKind) (semantic.ValueKind, error) {
 		return semantic.ValueAtom, nil
 	case openapiv1.ValueKindInt64:
 		return semantic.ValueInt64, nil
+	case openapiv1.ValueKindTimestamp:
+		return semantic.ValueTimestamp, nil
+	case openapiv1.ValueKindDuration:
+		return semantic.ValueDuration, nil
+	case openapiv1.ValueKindDecimal:
+		return semantic.ValueDecimal, nil
+	case openapiv1.ValueKindDate:
+		return semantic.ValueDate, nil
 	default:
 		return 0, translationError("unknown value kind")
 	}
@@ -160,6 +212,16 @@ func valueKindToWire(kind semantic.ValueKind) openapiv1.ValueKind {
 		return openapiv1.ValueKindString
 	case semantic.ValueAtom:
 		return openapiv1.ValueKindAtom
+	case semantic.ValueInt64:
+		return openapiv1.ValueKindInt64
+	case semantic.ValueTimestamp:
+		return openapiv1.ValueKindTimestamp
+	case semantic.ValueDuration:
+		return openapiv1.ValueKindDuration
+	case semantic.ValueDecimal:
+		return openapiv1.ValueKindDecimal
+	case semantic.ValueDate:
+		return openapiv1.ValueKindDate
 	default:
 		return openapiv1.ValueKindInt64
 	}

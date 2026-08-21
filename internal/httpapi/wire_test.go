@@ -81,6 +81,10 @@ func TestValueTranslationRejectsKindPayloadDisagreement(t *testing.T) {
 		{"int64 kind carrying a string", openapiv1.Value{Kind: openapiv1.ValueKindInt64, String: ptr("ten")}},
 		{"string kind carrying an int", openapiv1.Value{Kind: openapiv1.ValueKindString, Int64: ptrInt(10)}},
 		{"atom kind with no payload", openapiv1.Value{Kind: openapiv1.ValueKindAtom}},
+		{"timestamp kind with int", openapiv1.Value{Kind: openapiv1.ValueKindTimestamp, Int64: ptrInt(123)}},
+		{"duration kind with string", openapiv1.Value{Kind: openapiv1.ValueKindDuration, String: ptr("3600s")}},
+		{"decimal kind with int", openapiv1.Value{Kind: openapiv1.ValueKindDecimal, Int64: ptrInt(100)}},
+		{"date kind with timestamp string", openapiv1.Value{Kind: openapiv1.ValueKindDate, String: ptr("2026-08-21T10:00:00Z")}},
 		{"two payloads present", openapiv1.Value{Kind: openapiv1.ValueKindString, String: ptr("a"), Int64: ptrInt(1)}},
 		{"unknown kind", openapiv1.Value{Kind: openapiv1.ValueKind("float"), String: ptr("1.5")}},
 	}
@@ -88,6 +92,41 @@ func TestValueTranslationRejectsKindPayloadDisagreement(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := valueFromWire(test.value); err == nil {
 				t.Fatal("translation accepted a malformed value")
+			}
+		})
+	}
+}
+
+func TestValueTranslationRoundTripsAllKinds(t *testing.T) {
+	tests := []struct {
+		name  string
+		value openapiv1.Value
+	}{
+		{"string", openapiv1.Value{Kind: openapiv1.ValueKindString, String: ptr("hello")}},
+		{"atom", openapiv1.Value{Kind: openapiv1.ValueKindAtom, Atom: ptr("alpha")}},
+		{"int64", openapiv1.Value{Kind: openapiv1.ValueKindInt64, Int64: ptrInt(42)}},
+		{"timestamp", openapiv1.Value{Kind: openapiv1.ValueKindTimestamp, Timestamp: ptr("2026-08-21T10:00:00Z")}},
+		{"duration", openapiv1.Value{Kind: openapiv1.ValueKindDuration, Duration: ptrInt(3600)}},
+		{"decimal", openapiv1.Value{Kind: openapiv1.ValueKindDecimal, Decimal: ptr("123.45")}},
+		{"date", openapiv1.Value{Kind: openapiv1.ValueKindDate, Date: ptr("2026-08-21")}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			val, err := valueFromWire(tc.value)
+			if err != nil {
+				t.Fatalf("valueFromWire: %v", err)
+			}
+			wireVal := valueToWire(val)
+			if wireVal.Kind != tc.value.Kind {
+				t.Fatalf("kind = %s, want %s", wireVal.Kind, tc.value.Kind)
+			}
+			roundTripped, err := valueFromWire(wireVal)
+			if err != nil {
+				t.Fatalf("valueFromWire second: %v", err)
+			}
+			if !roundTripped.Equal(val) {
+				t.Fatalf("roundtripped = %v, want %v", roundTripped, val)
 			}
 		})
 	}

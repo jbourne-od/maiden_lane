@@ -92,6 +92,10 @@ const (
 	ValueString ValueKind = iota + 1
 	ValueAtom
 	ValueInt64
+	ValueTimestamp
+	ValueDuration
+	ValueDecimal
+	ValueDate
 )
 
 // Value is an immutable scalar. String and atom bytes are retained exactly;
@@ -103,38 +107,6 @@ type Value struct {
 }
 
 // MarshalText and UnmarshalText exist because a Value travels inside a stored declaration.
-//
-// TEXT RATHER THAN JSON, deliberately. The kernel's import allowlist excludes encoding/json,
-// and it should: a transport encoding in the kernel is exactly the coupling Inviolate 12
-// forbids. encoding.TextMarshaler is an interface, not a dependency -- json, YAML and any
-// other codec pick it up on their own -- so the kernel describes its value in one canonical
-// text form and owes nothing to any particular transport.
-//
-// THIS IS NOT A CANONICAL DECODER and does not weaken the encoders-only rule. Canonical bytes
-// identify artifacts and are deliberately one-way. A declaration is an authored INPUT that the
-// plan store round-trips and recompiles, checking the reproduced identity against the stored
-// one; what could not be allowed is a Value that serializes to something recompilation does
-// not reproduce.
-//
-// Which is what happened. Value's fields are unexported and it had no marshaller, so
-// encoding/json wrote `{}` and returned NO ERROR. Before the select-and-assign operator no
-// declaration contained a Value at all -- neither frozen operator carries one -- so the first
-// authored rule with a literal was writable to Postgres and unreadable afterwards: the row
-// stored, every read recompiled to an UnsupportedOperator diagnostic, GetPlan became a
-// permanent 500, and the worker treated the storage error as transient and retried it forever.
-//
-// Marshal REFUSES an invalid value rather than emitting a form that cannot be read back, so a
-// declaration that could not survive storage is rejected at write time instead of at every
-// read.
-//
-// It consults Valid(), not the kind alone, and an earlier version consulted the kind while
-// this comment claimed otherwise. Value{kind: ValueString, text: "\xff"} would then marshal;
-// encoding/json substitutes U+FFFD for the invalid byte on the way out, and UnmarshalText
-// accepts what comes back -- so the value round-trips into a DIFFERENT value with no error at
-// any layer, which is worse than failing to read back. Unreachable from production, because
-// such a Value is constructible only inside this package, and fixed anyway: mapping a value
-// by its kind while ignoring its content is the precise defect the compiler and the evaluator
-// shipped once already, and this would have been a third mapping doing it.
 func (v Value) MarshalText() ([]byte, error) {
 	if !v.Valid() {
 		return nil, fmt.Errorf("value is invalid and cannot be serialized")
@@ -146,14 +118,20 @@ func (v Value) MarshalText() ([]byte, error) {
 		return []byte("atom:" + v.text), nil
 	case ValueInt64:
 		return []byte("int64:" + strconv.FormatInt(v.integer, 10)), nil
+	case ValueTimestamp:
+		return []byte("timestamp:" + v.text), nil
+	case ValueDuration:
+		return []byte("duration:" + strconv.FormatInt(v.integer, 10)), nil
+	case ValueDecimal:
+		return []byte("decimal:" + v.text), nil
+	case ValueDate:
+		return []byte("date:" + v.text), nil
 	default:
 		return nil, fmt.Errorf("value has no kind and cannot be serialized")
 	}
 }
 
-// UnmarshalText rebuilds a Value through the same constructors an author would use, so a
-// stored value that is no longer legal -- invalid UTF-8, an empty atom, an out-of-range
-// integer -- refuses here rather than becoming a Value the constructors would never produce.
+// UnmarshalText rebuilds a Value through the same constructors an author would use.
 func (v *Value) UnmarshalText(data []byte) error {
 	text := string(data)
 	// The first colon only: a string value may contain as many more as it likes.
@@ -180,6 +158,30 @@ func (v *Value) UnmarshalText(data []byte) error {
 			return fmt.Errorf("int64 value is not a base-ten integer: %w", err)
 		}
 		*v = NewInt64Value(number)
+	case "timestamp":
+		result, err := NewTimestampValue(payload)
+		if err != nil {
+			return err
+		}
+		*v = result
+	case "duration":
+		number, err := strconv.ParseInt(payload, 10, 64)
+		if err != nil {
+			return fmt.Errorf("duration value is not a base-ten integer: %w", err)
+		}
+		*v = NewDurationValue(number)
+	case "decimal":
+		result, err := NewDecimalValue(payload)
+		if err != nil {
+			return err
+		}
+		*v = result
+	case "date":
+		result, err := NewDateValue(payload)
+		if err != nil {
+			return err
+		}
+		*v = result
 	default:
 		return fmt.Errorf("value kind %q is not in the closed vocabulary", kind)
 	}
@@ -208,6 +210,38 @@ func NewInt64Value(value int64) Value {
 	return Value{kind: ValueInt64, integer: value}
 }
 
+// NewTimestampValue constructs an exact UTC RFC3339 instant value.
+func NewTimestampValue(value string) (Value, error) {
+	ts, err := parseTimestamp(value)
+	if err != nil {
+		return Value{}, fmt.Errorf("timestamp value: %w", err)
+	}
+	return Value{kind: ValueTimestamp, text: ts.String(), integer: ts.unixNano}, nil
+}
+
+// NewDurationValue constructs an exact duration value in seconds.
+func NewDurationValue(seconds int64) Value {
+	return Value{kind: ValueDuration, integer: seconds}
+}
+
+// NewDecimalValue constructs an exact validated fixed-point decimal value.
+func NewDecimalValue(value string) (Value, error) {
+	d, err := parseDecimal(value)
+	if err != nil {
+		return Value{}, fmt.Errorf("decimal value: %w", err)
+	}
+	return Value{kind: ValueDecimal, text: d.String()}, nil
+}
+
+// NewDateValue constructs an exact ISO-8601 calendar date value (YYYY-MM-DD).
+func NewDateValue(value string) (Value, error) {
+	d, err := parseDate(value)
+	if err != nil {
+		return Value{}, fmt.Errorf("date value: %w", err)
+	}
+	return Value{kind: ValueDate, text: d.String(), integer: d.daysSinceEpoch}, nil
+}
+
 // Kind returns the closed scalar variant.
 func (v Value) Kind() ValueKind {
 	return v.kind
@@ -219,8 +253,17 @@ func (v Value) Valid() bool {
 	switch v.kind {
 	case ValueString, ValueAtom:
 		return utf8.ValidString(v.text)
-	case ValueInt64:
+	case ValueInt64, ValueDuration:
 		return true
+	case ValueTimestamp:
+		_, err := parseTimestamp(v.text)
+		return err == nil
+	case ValueDecimal:
+		_, err := parseDecimal(v.text)
+		return err == nil
+	case ValueDate:
+		_, err := parseDate(v.text)
+		return err == nil
 	default:
 		return false
 	}
@@ -242,15 +285,47 @@ func (v Value) Int64() (int64, bool) {
 	return v.integer, true
 }
 
+// Timestamp returns the RFC3339 timestamp string and reports false for other kinds.
+func (v Value) Timestamp() (string, bool) {
+	if v.kind != ValueTimestamp {
+		return "", false
+	}
+	return v.text, true
+}
+
+// Duration returns duration in seconds and reports false for other kinds.
+func (v Value) Duration() (int64, bool) {
+	if v.kind != ValueDuration {
+		return 0, false
+	}
+	return v.integer, true
+}
+
+// Decimal returns normalized decimal string and reports false for other kinds.
+func (v Value) Decimal() (string, bool) {
+	if v.kind != ValueDecimal {
+		return "", false
+	}
+	return v.text, true
+}
+
+// Date returns ISO-8601 date string and reports false for other kinds.
+func (v Value) Date() (string, bool) {
+	if v.kind != ValueDate {
+		return "", false
+	}
+	return v.text, true
+}
+
 // Equal compares the closed variant and its exact semantic value.
 func (v Value) Equal(other Value) bool {
 	if v.kind != other.kind {
 		return false
 	}
 	switch v.kind {
-	case ValueString, ValueAtom:
+	case ValueString, ValueAtom, ValueTimestamp, ValueDecimal, ValueDate:
 		return v.text == other.text
-	case ValueInt64:
+	case ValueInt64, ValueDuration:
 		return v.integer == other.integer
 	default:
 		return false
@@ -258,7 +333,7 @@ func (v Value) Equal(other Value) bool {
 }
 
 func validValueKind(kind ValueKind) bool {
-	return kind == ValueString || kind == ValueAtom || kind == ValueInt64
+	return kind >= ValueString && kind <= ValueDate
 }
 
 func validSemanticName(value string) bool {

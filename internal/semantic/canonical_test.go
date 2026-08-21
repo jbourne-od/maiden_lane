@@ -363,3 +363,34 @@ func stateWithOrder(t *testing.T, entityOrder, fieldOrder []string) State {
 	}
 	return state
 }
+
+func TestCanonicalValueEncoding(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   Value
+		wantHex string
+	}{
+		{"string", mustString(t, "hello"), "01000000000000000568656c6c6f"},
+		{"atom", mustAtom(t, "team_a"), "0200000000000000067465616d5f61"},
+		{"int64", NewInt64Value(42), "03000000000000002a"},
+		{"timestamp", mustTimestamp(t, "2026-08-21T10:00:00Z"), "040000000000000014323032362d30382d32315431303a30303a30305a"},
+		{"duration", NewDurationValue(3600), "050000000000000e10"},
+		{"decimal", mustDecimal(t, "123.45"), "0600000000000000063132332e3435"},
+		{"date", mustDate(t, "2026-08-21"), "07000000000000000a323032362d30382d3231"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var enc canonicalEncoder
+			enc.value(tc.value)
+			b, err := enc.bytes()
+			if err != nil {
+				t.Fatalf("encode value %v: %v", tc.value, err)
+			}
+			gotHex := hex.EncodeToString(b)
+			if gotHex != tc.wantHex {
+				t.Errorf("value %v canonical hex = %s, want %s", tc.value, gotHex, tc.wantHex)
+			}
+		})
+	}
+}

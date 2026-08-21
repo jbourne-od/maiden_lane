@@ -285,6 +285,16 @@ func (e *canonicalEncoder) value(value Value) {
 		e.string(value.text)
 	case ValueInt64:
 		e.int64(value.integer)
+	case ValueTimestamp:
+		e.string(value.text)
+	case ValueDuration:
+		e.int64(value.integer)
+	case ValueDecimal:
+		e.string(value.text)
+	case ValueDate:
+		e.string(value.text)
+	default:
+		e.fail(fmt.Errorf("value kind %d has no canonical encoding", value.Kind()))
 	}
 }
 

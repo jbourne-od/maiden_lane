@@ -517,7 +517,7 @@ components:
     ValueKind:
       type: string
       description: The closed typed-value vocabulary.
-      enum: [string, atom, int64]
+      enum: [string, atom, int64, timestamp, duration, decimal, date]
 
     Value:
       type: object
@@ -535,6 +535,23 @@ components:
           type: integer
           format: int64
           description: Present when kind is int64.
+        timestamp:
+          type: string
+          description: Present when kind is timestamp. RFC 3339 UTC representation.
+          example: "2026-08-21T10:00:00Z"
+        duration:
+          type: integer
+          format: int64
+          description: Present when kind is duration. Integer elapsed seconds.
+          example: 3600
+        decimal:
+          type: string
+          description: Present when kind is decimal. Normalized base-10 ASCII string.
+          example: "123.45"
+        date:
+          type: string
+          description: Present when kind is date. ISO-8601 calendar date YYYY-MM-DD.
+          example: "2026-08-21"
       additionalProperties: false
 
     ExprKind:
@@ -562,6 +579,20 @@ components:
         - sum
         - min
         - max
+        - subtract
+        - multiply
+        - divide
+        - modulo
+        - abs
+        - clamp
+        - timestamp_add
+        - timestamp_diff
+        - date_extract
+        - concat
+        - substring
+        - trim
+        - if
+        - coalesce
 
     Expr:
       type: object
