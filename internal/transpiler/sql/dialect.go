@@ -58,6 +58,10 @@ type Dialect interface {
 
 	// DigestSHA256 formats an expression that computes a hex SHA-256 digest with 'sha256:' prefix.
 	DigestSHA256(expr string) string
+
+	// SyntheticEntityID formats an expression that computes a canonical content-addressed
+	// synthetic entity identity matching semantic.SyntheticEntityID.
+	SyntheticEntityID(targetKind string, ruleID string, lineageExpr string, progenitorExpr string, discriminatorExpr string) string
 }
 
 // PostgreSQL dialect implementation.
@@ -138,6 +142,29 @@ func (p postgresDialect) CastBoolean(expr string) string {
 
 func (p postgresDialect) DigestSHA256(expr string) string {
 	return fmt.Sprintf("('sha256:' || ENCODE(DIGEST(%s, 'sha256'), 'hex'))", expr)
+}
+
+func (p postgresDialect) SyntheticEntityID(targetKind string, ruleID string, lineageExpr string, progenitorExpr string, discriminatorExpr string) string {
+	return fmt.Sprintf(`('sha256:' || ENCODE(DIGEST(
+    '\x000000000000001f'::bytea
+    || convert_to('maiden-lane.synthetic-entity.v1', 'UTF8')
+    || decode(SUBSTRING(COALESCE(%s, 'sha256:0000000000000000000000000000000000000000000000000000000000000000') FROM 8), 'hex')
+    || decode(LPAD(TO_HEX(OCTET_LENGTH(%s)), 16, '0'), 'hex')
+    || convert_to(%s, 'UTF8')
+    || decode(LPAD(TO_HEX(OCTET_LENGTH(%s)), 16, '0'), 'hex')
+    || convert_to(%s, 'UTF8')
+    || (%s)
+    || '\x01'::bytea
+    || decode(LPAD(TO_HEX(OCTET_LENGTH((%s)::text)), 16, '0'), 'hex')
+    || convert_to((%s)::text, 'UTF8'),
+    'sha256'
+), 'hex'))`,
+		lineageExpr,
+		p.QuoteString(targetKind), p.QuoteString(targetKind),
+		p.QuoteString(ruleID), p.QuoteString(ruleID),
+		progenitorExpr,
+		discriminatorExpr, discriminatorExpr,
+	)
 }
 
 // ANSISQL returns a standard ANSI SQL dialect.

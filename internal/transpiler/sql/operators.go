@@ -195,8 +195,7 @@ func TranspileInsertEntity(
 	discCtx.EntityTableAlias = "s"
 
 	var selectQuery string
-	var aCtx TranspileContext = ctx
-	aCtx.EntityTableAlias = "src"
+	var newEntitiesAssignmentsSQL strings.Builder
 
 	if decl.Selector.GroupBy != nil {
 		gCtx := ctx
@@ -221,15 +220,33 @@ func TranspileInsertEntity(
 			return TranspiledStep{}, fmt.Errorf("transpile guard in rule %s: %w", ruleID, err)
 		}
 
+		// Compute all windowed group assignments in the selection CTE so that aggregates
+		// evaluate over all group members before row_num filtering.
+		assignCtx := ctx
+		assignCtx.EntityTableAlias = "s"
+		assignCtx.IsGroupScope = true
+		assignCtx.GroupPartitionClause = partitionClause
+
+		var windowedAssignmentsSQL strings.Builder
+		for _, assign := range decl.Assignments {
+			_, fieldName := splitFieldPath(assign.Target)
+			col := d.QuoteIdentifier(fieldName)
+			valExpr, err := TranspileExpr(assignCtx, assign.Value)
+			if err != nil {
+				return TranspiledStep{}, fmt.Errorf("transpile assignment %s in rule %s: %w", assign.Target, ruleID, err)
+			}
+			assignCol := fmt.Sprintf("_ml_assign_%s", sanitizeID(fieldName))
+			fmt.Fprintf(&windowedAssignmentsSQL, ",\n    (%s) AS %s", valExpr, d.QuoteIdentifier(assignCol))
+			fmt.Fprintf(&newEntitiesAssignmentsSQL, ",\n    src.%s AS %s", d.QuoteIdentifier(assignCol), col)
+		}
+
 		selectQuery = fmt.Sprintf(`SELECT s.*, 
     (%s) AS _ml_group_key,
     (%s) AS _ml_discriminator,
     (%s) AS _ml_guard_passed,
-    ROW_NUMBER() OVER (PARTITION BY (%s) ORDER BY s."id") AS _ml_row_num
-FROM %s s %s`, gk, discExpr, guardExpr, gk, prevSourceTable, whereClause)
+    ROW_NUMBER() OVER (PARTITION BY (%s) ORDER BY s."id") AS _ml_row_num%s
+FROM %s s %s`, gk, discExpr, guardExpr, gk, windowedAssignmentsSQL.String(), prevSourceTable, whereClause)
 
-		aCtx.IsGroupScope = true
-		aCtx.GroupPartitionClause = `PARTITION BY (src."_ml_group_key")`
 	} else {
 		guardCtx.GroupPartitionClause = "PARTITION BY (s.\"id\")"
 		discCtx.GroupPartitionClause = "PARTITION BY (s.\"id\")"
@@ -248,27 +265,27 @@ FROM %s s %s`, gk, discExpr, guardExpr, gk, prevSourceTable, whereClause)
     (%s) AS _ml_discriminator,
     (%s) AS _ml_guard_passed
 FROM %s s %s`, discExpr, guardExpr, prevSourceTable, whereClause)
+
+		aCtx := ctx
+		aCtx.EntityTableAlias = "src"
+		for _, assign := range decl.Assignments {
+			_, fieldName := splitFieldPath(assign.Target)
+			col := d.QuoteIdentifier(fieldName)
+
+			valExpr, err := TranspileExpr(aCtx, assign.Value)
+			if err != nil {
+				return TranspiledStep{}, fmt.Errorf("transpile assignment %s in rule %s: %w", assign.Target, ruleID, err)
+			}
+			fmt.Fprintf(&newEntitiesAssignmentsSQL, ",\n    (%s) AS %s", valExpr, col)
+		}
 	}
 
 	ctes = append(ctes, NamedCTE{Name: selectCTEName, Query: selectQuery})
 
-	// 2. Synthesize new entities
+	// 2. Synthesize new entities with canonical content-addressed identity
 	newEntitiesCTEName := fmt.Sprintf("%s_new_entities", stepName)
-	var assignmentsSQL strings.Builder
-	for _, assign := range decl.Assignments {
-		_, fieldName := splitFieldPath(assign.Target)
-		col := d.QuoteIdentifier(fieldName)
-
-		valExpr, err := TranspileExpr(aCtx, assign.Value)
-		if err != nil {
-			return TranspiledStep{}, fmt.Errorf("transpile assignment %s in rule %s: %w", assign.Target, ruleID, err)
-		}
-		fmt.Fprintf(&assignmentsSQL, ",\n    (%s) AS %s", valExpr, col)
-	}
-
-	// Canonical domain tag prefix derivation in SQL
-	idHashExpr := d.DigestSHA256(fmt.Sprintf(`'maiden-lane.synthetic-entity.v1\x00' || COALESCE(src."lineage_id", '') || ':' || %s || ':' || %s || ':' || src."id" || ':' || COALESCE(src."_ml_discriminator"::text, '')`,
-		d.QuoteString(targetKind), d.QuoteString(string(ruleID))))
+	progenitorExpr := `'\x0000000000000001'::bytea || decode(SUBSTRING(src."id" FROM 8), 'hex')`
+	idHashExpr := d.SyntheticEntityID(targetKind, string(ruleID), `src."lineage_id"`, progenitorExpr, `src."_ml_discriminator"`)
 
 	var whereFilter string
 	if decl.Selector.GroupBy != nil {
@@ -283,7 +300,7 @@ FROM %s s %s`, discExpr, guardExpr, prevSourceTable, whereClause)
     TRUE AS "is_active"%s,
     %s AS "updated_by_rule"
 FROM %s src
-%s`, idHashExpr, assignmentsSQL.String(), d.QuoteString(string(ruleID)), selectCTEName, whereFilter)
+%s`, idHashExpr, newEntitiesAssignmentsSQL.String(), d.QuoteString(string(ruleID)), selectCTEName, whereFilter)
 	ctes = append(ctes, NamedCTE{Name: newEntitiesCTEName, Query: newEntitiesQuery})
 
 	// 3. Union with previous target entity table
@@ -612,8 +629,8 @@ FROM %s s %s`, groupKeyExpr, discExpr, guardExpr, prevSourceTable, whereClause)
 		fmt.Fprintf(&assignmentsSQL, ",\n    (%s) AS %s", valExpr, col)
 	}
 
-	idHashExpr := d.DigestSHA256(fmt.Sprintf(`'maiden-lane.synthetic-entity.v1\x00' || COALESCE(MAX(grp."lineage_id"), '') || ':' || %s || ':' || %s || ':' || STRING_AGG(grp."id", ',' ORDER BY grp."id") || ':' || COALESCE(MAX(grp."_ml_discriminator"::text), '')`,
-		d.QuoteString(targetKind), d.QuoteString(string(ruleID))))
+	progenitorExpr := `decode(LPAD(TO_HEX(COUNT(*)), 16, '0'), 'hex') || STRING_AGG(decode(SUBSTRING(grp."id" FROM 8), 'hex'), '' ORDER BY grp."id")`
+	idHashExpr := d.SyntheticEntityID(targetKind, string(ruleID), `MAX(grp."lineage_id")`, progenitorExpr, `MAX(grp."_ml_discriminator"::text)`)
 
 	mergedQuery := fmt.Sprintf(`SELECT 
     %s AS "id",
@@ -736,8 +753,8 @@ FROM %s s %s`, guardExpr, prevSourceTable, whereClause)
 			fmt.Fprintf(&assignmentsSQL, ",\n    (%s) AS %s", valExpr, col)
 		}
 
-		idHashExpr := d.DigestSHA256(fmt.Sprintf(`'maiden-lane.synthetic-entity.v1\x00' || COALESCE(src."lineage_id", '') || ':' || %s || ':' || %s || ':' || src."id" || ':' || COALESCE((%s)::text, '')`,
-			d.QuoteString(targetKind), d.QuoteString(string(ruleID)), discExpr))
+		progenitorExpr := `'\x0000000000000001'::bytea || decode(SUBSTRING(src."id" FROM 8), 'hex')`
+		idHashExpr := d.SyntheticEntityID(targetKind, string(ruleID), `src."lineage_id"`, progenitorExpr, discExpr)
 
 		pQuery := fmt.Sprintf(`SELECT 
     %s AS "id",
