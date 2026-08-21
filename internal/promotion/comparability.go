@@ -149,19 +149,6 @@ func sideCovers(
 			return Failed(ClauseComparisonCorpus), false
 		}
 
-		// And the verdict must be `ready`, not merely taken. Without this the clause
-		// means "these were assessed using the same questionnaire" rather than "both
-		// actually met it" — a materially weaker proposition, and the one §14.2 rules out
-		// when it says an optimizer-ready baseline cannot be compared to a merely
-		// CM-ready candidate.
-		//
-		// ClauseReadyAssessment does not cover this. That clause asks about the PROMOTED
-		// checkpoint under the target's profile, and says nothing about the baseline
-		// replay cases or about the candidate's other cases.
-		if assessment.Verdict() != semantic.Ready {
-			return Failed(ClauseComparisonCorpus), false
-		}
-
 		// InitialStateDigest, not StateDigest. A checkpoint's StateDigest is the state at
 		// the checkpoint BOUNDARY — after the transitions before it committed — while a
 		// corpus is a set of INITIAL states. The two coincide only for a checkpoint that

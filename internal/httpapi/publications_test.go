@@ -52,33 +52,24 @@ func TestARefusedPublicationIsASuccessCarryingEveryClause(t *testing.T) {
 		t.Fatalf("clauses = %d, want the 9 in HLD §14.1", len(decision.Clauses))
 	}
 
-	// Six pass on this candidate. The three refusals are no longer all the same kind:
-	// the comparison clause is implemented and simply has no evidence here, while the
-	// other two name concepts this build does not have. Distinguishing them on the wire
-	// is the whole reason the unevaluated reason is a separate field.
-	passed, unsupported, absent := 0, 0, 0
+	// Six pass on this candidate. Three refuse for want of evidence (comparison corpus,
+	// no metric regression, and certified backend).
+	passed, absent := 0, 0
 	for _, clause := range decision.Clauses {
 		switch clause.Verdict {
 		case openapiv1.GateVerdictPass:
 			passed++
 		case openapiv1.GateVerdictNotEvaluated:
 			switch clause.UnevaluatedReason {
-			case openapiv1.GateUnevaluatedReasonUnsupportedByBuild:
-				unsupported++
 			case openapiv1.GateUnevaluatedReasonInformationAbsent:
 				absent++
-				if clause.Clause != openapiv1.GateClauseResultClauseComparisonCorpus {
-					t.Fatalf("clause %s refused for want of evidence; only the comparison "+
-						"clause should", clause.Clause)
-				}
 			default:
 				t.Fatalf("clause %s refused as %s", clause.Clause, clause.UnevaluatedReason)
 			}
 		}
 	}
-	if passed != 6 || unsupported != 2 || absent != 1 {
-		t.Fatalf("passed = %d, unsupported = %d, absent = %d, want 6, 2 and 1",
-			passed, unsupported, absent)
+	if passed != 6 || absent != 3 {
+		t.Fatalf("passed = %d, absent = %d, want 6 and 3", passed, absent)
 	}
 	if decision.PolicyVersion != 1 {
 		t.Fatalf("policyVersion = %d, want the 1 it was judged under", decision.PolicyVersion)

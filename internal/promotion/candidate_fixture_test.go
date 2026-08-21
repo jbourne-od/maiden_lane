@@ -27,6 +27,7 @@ type sealedFixture struct {
 	// parts, and executor identity is excluded from checkpoint identity entirely.
 	plan         semantic.Plan
 	executionID  semantic.ExecutionID
+	executor     semantic.ExecutorIdentity
 	initialState semantic.State
 	world        semantic.World
 }
@@ -35,7 +36,20 @@ type sealedFixture struct {
 // sealed checkpoint in plan order with the assessments taken against it.
 func sealTeamHOS(t *testing.T) []sealedFixture {
 	t.Helper()
-	sealed, rejected := sealTeamHOSVariant(t, teamhos.Passing)
+	inputs, err := teamhos.New(teamhos.Passing)
+	if err != nil {
+		t.Fatalf("teamhos.New: %v", err)
+	}
+	sealed, rejected := sealTeamHOSVariantWithExecutor(t, teamhos.Passing, inputs.ExecutorIdentity)
+	if rejected {
+		t.Fatal("the passing golden fixture was rejected")
+	}
+	return sealed
+}
+
+func sealTeamHOSWithExecutor(t *testing.T, exec semantic.ExecutorIdentity) []sealedFixture {
+	t.Helper()
+	sealed, rejected := sealTeamHOSVariantWithExecutor(t, teamhos.Passing, exec)
 	if rejected {
 		t.Fatal("the passing golden fixture was rejected")
 	}
@@ -50,6 +64,15 @@ func sealTeamHOS(t *testing.T) []sealedFixture {
 // this package: a test import in the other direction would become a build cycle
 // the moment the application wires the gate in.
 func sealTeamHOSVariant(t *testing.T, variant teamhos.Variant) ([]sealedFixture, bool) {
+	t.Helper()
+	inputs, err := teamhos.New(variant)
+	if err != nil {
+		t.Fatalf("teamhos.New: %v", err)
+	}
+	return sealTeamHOSVariantWithExecutor(t, variant, inputs.ExecutorIdentity)
+}
+
+func sealTeamHOSVariantWithExecutor(t *testing.T, variant teamhos.Variant, exec semantic.ExecutorIdentity) ([]sealedFixture, bool) {
 	t.Helper()
 
 	inputs, err := teamhos.New(variant)
@@ -71,7 +94,7 @@ func sealTeamHOSVariant(t *testing.T, variant teamhos.Variant) ([]sealedFixture,
 		Plan:             plan,
 		InitialState:     inputs.InitialState,
 		World:            inputs.World,
-		ExecutorIdentity: inputs.ExecutorIdentity,
+		ExecutorIdentity: exec,
 		Policy:           inputs.Policy,
 	})
 	if err != nil {
@@ -144,6 +167,7 @@ func sealTeamHOSVariant(t *testing.T, variant teamhos.Variant) ([]sealedFixture,
 			sealed = append(sealed, sealedFixture{
 				artifact: artifact, assessments: assessments,
 				plan: plan, executionID: binding.ExecutionID(),
+				executor:     exec,
 				initialState: inputs.InitialState, world: inputs.World,
 			})
 		}
@@ -175,6 +199,7 @@ func candidateFrom(sealed sealedFixture) Candidate {
 		Assessment:               sealed.assessments[0],
 		RetainedInvariantWitness: sealed.artifact.InvariantResultCanonicalBytes(),
 		ExecutionID:              sealed.executionID,
+		Executor:                 sealed.executor,
 	}
 }
 

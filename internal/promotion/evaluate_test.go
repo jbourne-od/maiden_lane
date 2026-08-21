@@ -3,6 +3,7 @@ package promotion
 import (
 	"bytes"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/optimaldynamics/maiden-lane/internal/fixtures/teamhos"
@@ -10,15 +11,13 @@ import (
 	"github.com/optimaldynamics/maiden-lane/internal/semantic"
 )
 
-// A candidate carrying everything the six implemented clauses need must have exactly
-// those six evaluated, and must still refuse: three clauses this build cannot answer
-// remain, and a nine-clause gate that authorized on six would be a nine-clause gate in
-// name only.
-func TestTheImplementedClausesPassAndTheGateStillRefuses(t *testing.T) {
+// A candidate carrying everything all nine clauses need must have all nine evaluated,
+// and must authorize publication: all nine clauses are implemented in this build.
+func TestAllNineClausesPassAndTheGateAuthorizes(t *testing.T) {
 	sealed := sealTeamHOS(t)
 	candidate := candidateFrom(sealed[0])
-	// Comparison evidence for the checkpoint being promoted, so clause 6 answers about
-	// this candidate rather than about its own missing evidence.
+	// Comparison evidence for the checkpoint being promoted, so clauses 6 and 7 answer about
+	// this candidate rather than about missing evidence.
 	candidate.Comparison = comparisonEvidenceFor(t, sealed[0])
 	// The second checkpoint is assessed ready under the CM profile; the first is only
 	// ready under CM too, so either serves. Bind the policy to the profile the
@@ -27,12 +26,12 @@ func TestTheImplementedClausesPassAndTheGateStillRefuses(t *testing.T) {
 	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
 
 	decision := Evaluate(policy, candidate)
-	if decision.Authorized() {
-		t.Fatal("publication was authorized while three clauses are unanswerable")
+	if !decision.Authorized() {
+		t.Fatalf("publication was refused: refusals = %v", decision.Refusals())
 	}
 
 	byClause := clauseIndex(decision)
-	for _, clause := range implementedClauses {
+	for _, clause := range requiredClauses {
 		result := byClause[clause]
 		if result.Verdict() != Pass {
 			t.Fatalf("clause %v = %v/%v, want Pass", clause, result.Verdict(), result.Unevaluated())
@@ -41,65 +40,41 @@ func TestTheImplementedClausesPassAndTheGateStillRefuses(t *testing.T) {
 			t.Fatalf("passing clause %v carried reason %v", clause, result.Unevaluated())
 		}
 	}
-	for _, clause := range unsupportedClauses {
-		result := byClause[clause]
-		if result.Verdict() != NotEvaluated {
-			t.Fatalf("clause %v = %v, want NotEvaluated", clause, result.Verdict())
-		}
-		// UnsupportedByBuild rather than InformationAbsent: no candidate satisfies
-		// these and no extra evidence would help, so an operator must be told to wait
-		// for engineering rather than sent looking for inputs.
-		if result.Unevaluated() != UnsupportedByBuild {
-			t.Fatalf("clause %v reason = %v, want UnsupportedByBuild", clause, result.Unevaluated())
-		}
-	}
-	if got := len(decision.Refusals()); got != len(unsupportedClauses) {
-		t.Fatalf("refusals = %d, want the %d unsupported clauses", got, len(unsupportedClauses))
+	if got := len(decision.Refusals()); got != 0 {
+		t.Fatalf("refusals = %d, want 0", got)
 	}
 }
 
-// implementedClauses and unsupportedClauses are the two halves of §14.1 in this build.
-// Together they must be every required clause, which a test below asserts: a clause
-// that fell out of both lists would stop being covered without any test failing.
-var implementedClauses = []Clause{
+// allClauses are every required clause under HLD §14.1.
+var allClauses = []Clause{
 	ClauseStaticValidation,
 	ClauseSealedWithProvenance,
 	ClauseProtectedInvariants,
 	ClauseReadyAssessment,
 	ClausePinnedIdentities,
 	ClauseComparisonCorpus,
-	ClauseDigestConsistency,
-}
-
-// The two that name a concept this codebase does not have: a protected-metric regression
-// policy, and executor certification against a reference implementation. Each is a
-// programme, not a task. The replay corpus was the third and is now implemented.
-var unsupportedClauses = []Clause{
 	ClauseNoMetricRegression,
+	ClauseDigestConsistency,
 	ClauseCertifiedBackend,
 }
 
-// Production break caught by construction: if a clause were dropped from both lists,
-// every test above would still pass while nothing asserted anything about it.
-func TestTheTwoClauseListsCoverEveryRequiredClause(t *testing.T) {
+// Production break caught by construction: verify allClauses covers requiredClauses.
+func TestAllClausesListCoversEveryRequiredClause(t *testing.T) {
 	covered := map[Clause]int{}
-	for _, clause := range implementedClauses {
-		covered[clause]++
-	}
-	for _, clause := range unsupportedClauses {
+	for _, clause := range allClauses {
 		covered[clause]++
 	}
 	for _, clause := range requiredClauses {
 		switch covered[clause] {
 		case 0:
-			t.Errorf("clause %v is in neither list, so no test covers it", clause)
+			t.Errorf("clause %v is missing from list", clause)
 		case 1:
 		default:
-			t.Errorf("clause %v is in both lists", clause)
+			t.Errorf("clause %v appears multiple times", clause)
 		}
 	}
-	if got := len(implementedClauses) + len(unsupportedClauses); got != len(requiredClauses) {
-		t.Fatalf("the lists hold %d clauses, want %d", got, len(requiredClauses))
+	if got := len(allClauses); got != len(requiredClauses) {
+		t.Fatalf("the list holds %d clauses, want %d", got, len(requiredClauses))
 	}
 }
 
@@ -304,7 +279,7 @@ func TestEvaluateDispositionsEveryRequiredClause(t *testing.T) {
 		// Only an implemented clause may report InformationAbsent, and only because its
 		// evidence is genuinely absent from this empty candidate. An unsupported clause
 		// reporting it would send an operator looking for evidence nothing reads.
-		if result.Unevaluated() == InformationAbsent && !slices.Contains(implementedClauses, clause) {
+		if result.Unevaluated() == InformationAbsent && !slices.Contains(allClauses, clause) {
 			t.Fatalf("clause %v reports InformationAbsent, so Evaluate does not "+
 				"disposition it and an operator is sent looking for evidence "+
 				"nothing reads", clause)
@@ -764,7 +739,7 @@ func TestReplayEvidenceMustBeReadyAndNotMerelyAssessed(t *testing.T) {
 	candidate.Comparison = evidence
 
 	result := clauseIndex(Evaluate(
-		policyRequiring(needsInput.ProfileID()), candidate))[ClauseComparisonCorpus]
+		policyRequiring(needsInput.ProfileID()), candidate))[ClauseNoMetricRegression]
 	if result.Verdict() != Fail {
 		t.Fatalf("= %v, want Fail: replay evidence that was assessed and found "+
 			"incomplete cannot support a comparison", result.Verdict())
@@ -871,5 +846,198 @@ func TestTheWorldIsCheckedOnTheArtifactRatherThanTheComparison(t *testing.T) {
 	if result.Verdict() != Fail {
 		t.Fatalf("= %v, want Fail: the evidence did not run under the world this "+
 			"comparison names", result.Verdict())
+	}
+}
+
+func TestNoMetricRegressionPassesOnNonRegressingCorpus(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	candidate := candidateFrom(sealed[0])
+	candidate.Comparison = comparisonEvidenceFor(t, sealed[0])
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+
+	decision := Evaluate(policy, candidate)
+	result := clauseIndex(decision)[ClauseNoMetricRegression]
+	if result.Verdict() != Pass {
+		t.Fatalf("ClauseNoMetricRegression = %v/%v, want Pass", result.Verdict(), result.Unevaluated())
+	}
+}
+
+func TestNoMetricRegressionFailsWhenCandidateReadinessRegresses(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	candidate := candidateFrom(sealed[0])
+	evidence := comparisonEvidenceFor(t, sealed[0])
+
+	// Force candidate case to have NeedsInput assessment while baseline is Ready
+	needsInputAssessment := assessmentWithVerdict(t, sealed[0], semantic.NeedsInput)
+	evidence.Candidate[0].Assessment = needsInputAssessment
+	candidate.Comparison = evidence
+
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+	decision := Evaluate(policy, candidate)
+	result := clauseIndex(decision)[ClauseNoMetricRegression]
+	if result.Verdict() != Fail {
+		t.Fatalf("ClauseNoMetricRegression = %v, want Fail on readiness regression", result.Verdict())
+	}
+}
+
+func TestNoMetricRegressionFailsOnCorpusCountMismatch(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	candidate := candidateFrom(sealed[0])
+	evidence := comparisonEvidenceFor(t, sealed[0])
+
+	// Mismatched candidate cases count
+	evidence.Candidate = append(evidence.Candidate, evidence.Candidate[0])
+	candidate.Comparison = evidence
+
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+	decision := Evaluate(policy, candidate)
+	result := clauseIndex(decision)[ClauseNoMetricRegression]
+	if result.Verdict() != Fail {
+		t.Fatalf("ClauseNoMetricRegression = %v, want Fail on corpus count mismatch", result.Verdict())
+	}
+}
+
+func TestNoMetricRegressionUnestablishedWhenEvidenceMissing(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	candidate := candidateFrom(sealed[0])
+	candidate.Comparison = nil
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+
+	decision := Evaluate(policy, candidate)
+	result := clauseIndex(decision)[ClauseNoMetricRegression]
+	if result.Verdict() != NotEvaluated || result.Unevaluated() != InformationAbsent {
+		t.Fatalf("ClauseNoMetricRegression = %v/%v, want NotEvaluated/InformationAbsent",
+			result.Verdict(), result.Unevaluated())
+	}
+}
+
+func TestCertifiedBackendPassesForGoBackend(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	candidate := candidateFrom(sealed[0])
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+
+	decision := Evaluate(policy, candidate)
+	result := clauseIndex(decision)[ClauseCertifiedBackend]
+	if result.Verdict() != Pass {
+		t.Fatalf("ClauseCertifiedBackend = %v/%v, want Pass", result.Verdict(), result.Unevaluated())
+	}
+}
+
+func TestCertifiedBackendFailsOnExecutionIDMismatch(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	candidate := candidateFrom(sealed[0])
+	// Replace candidate.Executor with a different digest that does not match candidate.ExecutionID
+	otherExec, err := semantic.NewExecutorIdentity("go", semantic.Digest("sha256:"+strings.Repeat("f", 64)))
+	if err != nil {
+		t.Fatalf("NewExecutorIdentity: %v", err)
+	}
+	candidate.Executor = otherExec
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+
+	decision := Evaluate(policy, candidate)
+	result := clauseIndex(decision)[ClauseCertifiedBackend]
+	if result.Verdict() != Fail {
+		t.Fatalf("ClauseCertifiedBackend = %v, want Fail for mismatched execution identity", result.Verdict())
+	}
+}
+
+func TestCertifiedBackendFailsForUnknownBackend(t *testing.T) {
+	untrustedExec, err := semantic.NewExecutorIdentity("untrusted-engine", semantic.Digest("sha256:"+strings.Repeat("a", 64)))
+	if err != nil {
+		t.Fatalf("NewExecutorIdentity: %v", err)
+	}
+	sealed := sealTeamHOSWithExecutor(t, untrustedExec)
+	candidate := candidateFrom(sealed[0])
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+
+	decision := Evaluate(policy, candidate)
+	result := clauseIndex(decision)[ClauseCertifiedBackend]
+	if result.Verdict() != Fail {
+		t.Fatalf("ClauseCertifiedBackend = %v, want Fail for uncertified backend engine", result.Verdict())
+	}
+}
+
+func TestCertifiedBackendUnestablishedWhenMissing(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	candidate := candidateFrom(sealed[0])
+	candidate.Executor = semantic.ExecutorIdentity{}
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+
+	decision := Evaluate(policy, candidate)
+	result := clauseIndex(decision)[ClauseCertifiedBackend]
+	if result.Verdict() != NotEvaluated || result.Unevaluated() != InformationAbsent {
+		t.Fatalf("ClauseCertifiedBackend = %v/%v, want NotEvaluated/InformationAbsent",
+			result.Verdict(), result.Unevaluated())
+	}
+}
+
+func TestNoMetricRegressionFailsOnProfileMismatch(t *testing.T) {
+	sealed := sealTeamHOS(t)
+	candidate := candidateFrom(sealed[0])
+	evidence := comparisonEvidenceFor(t, sealed[0])
+
+	// Change comparison profile to another profile
+	otherProf := otherProfileAssessment(t, sealed[0], evidence.Comparison.Profile()).ProfileID()
+	evidence.Comparison = restateComparison(t, evidence.Comparison, otherProf)
+	candidate.Comparison = evidence
+
+	policy := policyRequiring(sealed[0].assessments[0].ProfileID())
+	decision := Evaluate(policy, candidate)
+	result := clauseIndex(decision)[ClauseNoMetricRegression]
+	if result.Verdict() != NotEvaluated || result.Unevaluated() != InformationAbsent {
+		t.Fatalf("ClauseNoMetricRegression = %v/%v, want NotEvaluated/InformationAbsent on profile mismatch",
+			result.Verdict(), result.Unevaluated())
+	}
+}
+
+func TestNoMetricRegressionUnalignedCorporaOrder(t *testing.T) {
+	sealedA, _ := sealTeamHOSVariant(t, teamhos.Passing)
+	sealedB, _ := sealTeamHOSVariant(t, teamhos.AnchorMismatch)
+	candidate := candidateFrom(sealedA[0])
+
+	profile := sealedA[0].assessments[0].ProfileID()
+	caseA := comparedCase(t, sealedA[0], profile)
+	caseB := comparedCase(t, sealedB[0], profile)
+
+	corpus, err := semantic.NewCorpus([]semantic.State{sealedA[0].initialState, sealedB[0].initialState})
+	if err != nil {
+		t.Fatalf("NewCorpus: %v", err)
+	}
+
+	policy, err := semantic.NewComparisonPolicy(sealedA[0].plan, sealedA[0].plan,
+		[]semantic.CheckpointPair{{
+			Baseline:  sealedA[0].artifact.Checkpoint().Key,
+			Candidate: sealedA[0].artifact.Checkpoint().Key,
+		}})
+	if err != nil {
+		t.Fatalf("NewComparisonPolicy: %v", err)
+	}
+
+	comparison, err := semantic.NewComparison(semantic.ComparisonRequest{
+		Baseline:  sealedA[0].artifact.CheckpointID(),
+		Candidate: sealedA[0].artifact.CheckpointID(),
+		Profile:   profile,
+		World:     sealedA[0].world.ID(),
+		Corpus:    corpus.ID(),
+		Policy:    policy,
+	})
+	if err != nil {
+		t.Fatalf("NewComparison: %v", err)
+	}
+
+	// Baseline is ordered [caseA, caseB], Candidate is ordered [caseB, caseA] (permuted)
+	evidence := &ComparisonEvidence{
+		Comparison: comparison,
+		Baseline:   []ComparedCase{caseA, caseB},
+		Candidate:  []ComparedCase{caseB, caseA},
+	}
+	candidate.Comparison = evidence
+
+	targetPolicy := policyRequiring(profile)
+	decision := Evaluate(targetPolicy, candidate)
+	result := clauseIndex(decision)[ClauseNoMetricRegression]
+	if result.Verdict() != Pass {
+		t.Fatalf("ClauseNoMetricRegression = %v/%v, want Pass for aligned permuted corpus",
+			result.Verdict(), result.Unevaluated())
 	}
 }

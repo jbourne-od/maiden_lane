@@ -89,10 +89,8 @@ func TestARefusalNamesEveryClauseAndItsReason(t *testing.T) {
 		}
 	}
 
-	// Three refusals, and they are no longer all the same kind of refusal. The
-	// comparison clause is implemented now, so this candidate refuses it for want of
-	// evidence rather than for want of engineering — which is the progression the two
-	// unevaluated reasons exist to express, and it changes what an operator should do.
+	// Three refusals: comparison corpus, no metric regression, and certified backend
+	// are all implemented in this build and refuse for want of evidence on this candidate.
 	refusals := decision.Refusals()
 	if len(refusals) != 3 {
 		t.Fatalf("refusals = %d, want 3", len(refusals))
@@ -101,18 +99,14 @@ func TestARefusalNamesEveryClauseAndItsReason(t *testing.T) {
 	for _, result := range refusals {
 		reasons[result.Clause()] = result.Unevaluated()
 	}
-	if got := reasons[promotion.ClauseComparisonCorpus]; got != promotion.InformationAbsent {
-		t.Fatalf("comparison clause reason = %v, want InformationAbsent: it is "+
-			"implemented, and this candidate simply carries no comparison", got)
-	}
 	for _, clause := range []promotion.Clause{
-		promotion.ClauseNoMetricRegression, promotion.ClauseCertifiedBackend,
+		promotion.ClauseComparisonCorpus,
+		promotion.ClauseNoMetricRegression,
+		promotion.ClauseCertifiedBackend,
 	} {
-		// These two remain UnsupportedByBuild: no evidence would satisfy them, so an
-		// operator must be told engineering is missing rather than sent looking for
-		// inputs.
-		if got := reasons[clause]; got != promotion.UnsupportedByBuild {
-			t.Fatalf("clause %v reason = %v, want UnsupportedByBuild", clause, got)
+		if got := reasons[clause]; got != promotion.InformationAbsent {
+			t.Fatalf("clause %v reason = %v, want InformationAbsent: it is "+
+				"implemented, and this candidate simply carries no evidence for it", clause, got)
 		}
 	}
 }

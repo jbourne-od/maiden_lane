@@ -97,6 +97,19 @@ func validExecutorIdentity(identity ExecutorIdentity) bool {
 	return err == nil
 }
 
+// VerifyExecutionIdentity reports whether an ExecutionID is cryptographically derived
+// from the supplied SemanticRunID, ExecutorIdentity, and ProvenancePolicyID.
+func VerifyExecutionIdentity(executionID ExecutionID, runID SemanticRunID, executor ExecutorIdentity, policyID ProvenancePolicyID) bool {
+	if executionID == "" || runID == "" || policyID == "" || !validExecutorIdentity(executor) {
+		return false
+	}
+	executionBytes, err := encodeExecutionIdentity(runID, executor, policyID)
+	if err != nil {
+		return false
+	}
+	return executionID == ExecutionID(canonicalDigest(executionBytes))
+}
+
 func verifyPlan(plan Plan) error {
 	if len(plan.canonical) == 0 {
 		return fmt.Errorf("plan is not initialized")
